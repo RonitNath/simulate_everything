@@ -1,6 +1,8 @@
-import { Component, createSignal, createEffect, onCleanup, Show, For } from "solid-js";
-import type { V2Replay } from "./v2types";
+import { Component, createSignal, createEffect, createMemo, onCleanup, Show, For } from "solid-js";
+import type { V2Replay, V2ReplayFrame, BoardStaticData, BoardFrameData, V2ScoreSnapshot } from "./v2types";
+import { normalizeReplayStatic, normalizeReplayFrame } from "./v2types";
 import HexBoard from "./HexBoard";
+import type { RenderLayer } from "./HexBoard";
 import Nav from "./Nav";
 import * as styles from "./styles/app.css";
 
@@ -9,6 +11,8 @@ const PLAYER_COLORS = [
   "#c04aff", "#4affd0", "#ff4aff", "#d0ff4a",
 ];
 
+const ALL_LAYERS: RenderLayer[] = ["territory", "roads", "depots", "settlements", "convoys", "destinations"];
+
 const V2SimApp: Component = () => {
   const [replay, setReplay] = createSignal<V2Replay | null>(null);
   const [loading, setLoading] = createSignal(false);
@@ -16,6 +20,9 @@ const V2SimApp: Component = () => {
   const [playing, setPlaying] = createSignal(false);
   const [speed, setSpeed] = createSignal(10);
   const [showNumbers, setShowStrength] = createSignal(false);
+  const [layers, setLayers] = createSignal<Set<RenderLayer>>(
+    new Set(["territory", "roads", "depots", "settlements", "convoys"])
+  );
 
   // Config
   const [seed, setSeed] = createSignal("");
@@ -28,7 +35,7 @@ const V2SimApp: Component = () => {
     const r = replay();
     return r ? r.frames.length - 1 : 0;
   };
-  const frame = () => replay()?.frames[frameIdx()];
+  const frame = (): V2ReplayFrame | undefined => replay()?.frames[frameIdx()];
 
   const fetchGame = async () => {
     setLoading(true);
@@ -99,18 +106,53 @@ const V2SimApp: Component = () => {
     onCleanup(() => window.removeEventListener("keydown", onKey));
   });
 
+  const staticData = createMemo((): BoardStaticData | null => {
+    const r = replay();
+    return r ? normalizeReplayStatic(r) : null;
+  });
+
+  const currentFrameData = createMemo((): BoardFrameData | null => {
+    const f = frame();
+    return f ? normalizeReplayFrame(f) : null;
+  });
+
   // Per-player stats from current frame
   const playerStats = () => {
     const f = frame();
     const r = replay();
     if (!f || !r) return [];
-    return Array.from({ length: r.num_players }, (_, i) => ({
-      id: i,
-      units: f.units.filter((u) => u.owner === i).length,
-      food: f.player_food[i] ?? 0,
-      material: f.player_material[i] ?? 0,
-      alive: f.alive[i] ?? false,
-    }));
+    return Array.from({ length: r.num_players }, (_, i) => {
+      const pops = f.population.filter(p => p.owner === i);
+      const totalPop = pops.reduce((s, p) => s + p.count, 0);
+      const farmers = pops.filter(p => p.role === "Farmer").reduce((s, p) => s + p.count, 0);
+      const workers = pops.filter(p => p.role === "Worker").reduce((s, p) => s + p.count, 0);
+      const soldiers = pops.filter(p => p.role === "Soldier").reduce((s, p) => s + p.count, 0);
+      const territoryCount = (f.cells ?? []).filter(c => c.stockpile_owner === i).length;
+      const hexPops = new Map<string, number>();
+      for (const p of pops) {
+        const key = `${p.q},${p.r}`;
+        hexPops.set(key, (hexPops.get(key) ?? 0) + p.count);
+      }
+      const settlements = [...hexPops.values()].filter(c => c >= 10).length;
+      const convoyCount = (f.convoys ?? []).filter(c => c.owner === i).length;
+      const score: V2ScoreSnapshot | undefined = (f.scores ?? []).find(s => s.player_id === i);
+      return {
+        id: i,
+        units: f.units.filter((u) => u.owner === i).length,
+        food: f.player_food[i] ?? 0,
+        material: f.player_material[i] ?? 0,
+        alive: f.alive[i] ?? false,
+        totalPop, farmers, workers, soldiers,
+        territoryCount, settlements, convoyCount,
+        score,
+      };
+    });
+  };
+
+  const toggleLayer = (l: RenderLayer) => {
+    const s = new Set(layers());
+    if (s.has(l)) s.delete(l); else s.add(l);
+    setLayers(s);
   };
 
   return (
@@ -186,7 +228,7 @@ const V2SimApp: Component = () => {
         </Show>
       </div>
 
-      <Show when={replay() && frame()} fallback={
+      <Show when={replay() && frame() && staticData() && currentFrameData()} fallback={
         <div style={{ display: "flex", "align-items": "center", "justify-content": "center", flex: 1, color: "#8888a0" }}>
           {loading() ? "Generating game..." : "No game loaded"}
         </div>
@@ -231,16 +273,27 @@ const V2SimApp: Component = () => {
           >
             {showNumbers() ? "#" : "#\u0338"}
           </button>
+          <For each={ALL_LAYERS}>
+            {(l) => (
+              <button
+                class={styles.btn}
+                style={{ "font-size": "10px", padding: "2px 6px", "font-weight": layers().has(l) ? "bold" : "normal" }}
+                onClick={() => toggleLayer(l)}
+              >
+                {l[0].toUpperCase()}
+              </button>
+            )}
+          </For>
         </div>
 
         <div class={styles.main}>
           <div class={styles.boardContainer}>
             <HexBoard
-              terrain={replay()!.terrain}
-              units={frame()!.units}
-              width={replay()!.width}
-              height={replay()!.height}
+              staticData={staticData()!}
+              frameData={currentFrameData()!}
+              numPlayers={replay()!.num_players}
               showNumbers={showNumbers()}
+              layers={layers()}
             />
           </div>
 
@@ -248,12 +301,30 @@ const V2SimApp: Component = () => {
             <div class={styles.statsPanel}>
               <For each={playerStats()}>
                 {(stat) => (
-                  <div class={`${styles.playerStat} ${!stat.alive ? styles.eliminated : ""}`}>
-                    <div class={styles.playerDot} style={{ background: PLAYER_COLORS[stat.id % PLAYER_COLORS.length] }} />
-                    <span>{replay()!.agent_names[stat.id]}</span>
-                    <span class={styles.statValue}>
-                      {stat.units} units &middot; {stat.food.toFixed(1)} food / {stat.material.toFixed(1)} mat
-                    </span>
+                  <div class={`${styles.playerPanel} ${!stat.alive ? styles.eliminated : ""}`}>
+                    <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+                      <div class={styles.playerDot} style={{ background: PLAYER_COLORS[stat.id % PLAYER_COLORS.length] }} />
+                      <span>{replay()!.agent_names[stat.id]}</span>
+                    </div>
+                    <Show when={stat.score}>
+                      {(sc) => (
+                        <div class={styles.scoreBar}>
+                          <div style={{ flex: sc().population * 4, background: "#4ac0c0" }} />
+                          <div style={{ flex: sc().territory * 3, background: "#4a80ff" }} />
+                          <div style={{ flex: sc().military * 2, background: "#ff4a6a" }} />
+                          <div style={{ flex: sc().stockpiles * 1, background: "#ffa04a" }} />
+                        </div>
+                      )}
+                    </Show>
+                    <div class={styles.statRow}>
+                      <span class={styles.statValue}>{stat.units} units &middot; {stat.food.toFixed(0)} food / {stat.material.toFixed(0)} mat</span>
+                    </div>
+                    <div class={styles.statRow}>
+                      <span class={styles.statValue}>{stat.totalPop} pop &middot; {stat.farmers}F {stat.workers}W {stat.soldiers}S</span>
+                    </div>
+                    <div class={styles.statRow}>
+                      <span class={styles.statValue}>{stat.territoryCount} hexes &middot; {stat.settlements} settlements &middot; {stat.convoyCount} convoys</span>
+                    </div>
                   </div>
                 )}
               </For>

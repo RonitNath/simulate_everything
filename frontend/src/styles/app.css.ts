@@ -52,7 +52,7 @@ export const boardContainer = style({
 });
 
 export const sidebar = style({
-  width: "280px",
+  width: "320px",
   borderLeft: `1px solid ${vars.color.border}`,
   background: vars.color.surface,
   display: "flex",
@@ -209,6 +209,30 @@ export const configInput = style({
   borderRadius: vars.radius.sm,
   fontFamily: vars.font.mono,
   fontSize: vars.font.size.sm,
+});
+
+export const playerPanel = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: "2px",
+  padding: `${vars.space.sm} 0`,
+  borderBottom: `1px solid ${vars.color.border}`,
+  fontSize: vars.font.size.sm,
+});
+
+export const scoreBar = style({
+  display: "flex",
+  height: "6px",
+  borderRadius: "3px",
+  overflow: "hidden",
+  background: vars.color.bg,
+  marginTop: "2px",
+});
+
+export const statRow = style({
+  fontSize: vars.font.size.xs,
+  color: vars.color.textMuted,
+  paddingLeft: "18px",
 });
 
 export const btnPrimary = style({
