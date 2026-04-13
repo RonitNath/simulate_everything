@@ -91,11 +91,18 @@ function applyHexChanges(
   };
 }
 
+/** Max frames to keep in memory. Older frames beyond this are compacted. */
+const MAX_FRAMES = 600;
+/** When compacting, keep every Nth old frame to allow coarse scrubbing. */
+const COMPACT_KEEP_EVERY = 5;
+
 const V2App: Component = () => {
   const [phase, setPhase] = createSignal<Phase>({ kind: "connecting" });
   const [frames, setFrames] = createSignal<V2Frame[]>([]);
   const [viewIdx, setViewIdx] = createSignal(0);
   const [following, setFollowing] = createSignal(true);
+  const [playing, setPlaying] = createSignal(true);
+  const [serverPaused, setServerPaused] = createSignal(false);
   const [tickMs, setTickMs] = createSignal(250);
   const [showNumbers, setShowStrength] = createSignal(false);
   const [gameNumber, setGameNumber] = createSignal(0);
@@ -107,9 +114,21 @@ const V2App: Component = () => {
 
   const sendSpeed = (ms: number) => {
     setTickMs(ms);
-    if (wsRef && wsRef.readyState === WebSocket.OPEN) {
-      wsRef.send(JSON.stringify({ type: "set_speed", tick_ms: ms }));
-    }
+    fetch("/api/v2/rr/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tick_ms: ms }),
+    });
+  };
+
+  const toggleServerPause = () => {
+    const endpoint = serverPaused() ? "/api/v2/rr/resume" : "/api/v2/rr/pause";
+    fetch(endpoint, { method: "POST" }).then(() => setServerPaused((p) => !p));
+  };
+
+  const restartGame = () => {
+    fetch("/api/v2/rr/reset", { method: "POST" });
+    setServerPaused(false);
   };
 
   createEffect(() => {
@@ -166,9 +185,22 @@ const V2App: Component = () => {
               const patched = applyHexChanges(base, msg.hex_changes ?? [], game.width);
               const territory = patched.territory;
               const roads = patched.roads;
+
+              // Compute dead units (were in prev frame, not in this one).
+              const prevUnits = prev.length > 0 ? prev[prev.length - 1].units : [];
+              const newUnitIds = new Set((msg.units ?? []).map((u: V2UnitSnapshot) => u.id));
+              const deadUnits: V2UnitSnapshot[] = prevUnits
+                .filter((u: V2UnitSnapshot) => !newUnitIds.has(u.id) && !(u as any)._dead)
+                .map((u: V2UnitSnapshot) => ({ ...u, _dead: true, _deadTick: msg.tick } as any));
+
+              // Carry forward existing ghosts, age them out after 8 ticks.
+              const prevGhosts = prevUnits
+                .filter((u: any) => u._dead && msg.tick - u._deadTick < 8)
+                .map((u: any) => ({ ...u }));
+
               const next: V2Frame = {
                 tick: msg.tick,
-                units: msg.units ?? [],
+                units: [...(msg.units ?? []), ...deadUnits, ...prevGhosts],
                 convoys: msg.convoys ?? [],
                 territory,
                 roads,
@@ -180,7 +212,26 @@ const V2App: Component = () => {
                 settlements: msg.full_state ? (msg.settlements ?? []) : patched.settlements,
                 players: (msg.players ?? []) as V2SpectatorPlayer[],
               };
-              return [...prev, next];
+
+              const updated = [...prev, next];
+              // Compact old frames to avoid memory leaks on long games.
+              if (updated.length > MAX_FRAMES) {
+                const excess = updated.length - MAX_FRAMES;
+                // Keep every COMPACT_KEEP_EVERY-th frame from the old section.
+                const oldSection = updated.slice(0, excess);
+                const kept = oldSection.filter((_, i) => i % COMPACT_KEEP_EVERY === 0);
+                const recentSection = updated.slice(excess);
+                const compacted = [...kept, ...recentSection];
+                // Adjust viewIdx so the user stays at roughly the same frame.
+                const vi = viewIdx();
+                if (vi < excess) {
+                  setViewIdx(Math.floor(vi / COMPACT_KEEP_EVERY));
+                } else {
+                  setViewIdx(vi - excess + kept.length);
+                }
+                return compacted;
+              }
+              return updated;
             });
             break;
           }
@@ -240,16 +291,31 @@ const V2App: Component = () => {
     });
   });
 
+  // Playback: advance one frame per tick interval when playing.
+  // "Following" means jump straight to live; "playing" means advance at server speed.
   createEffect(() => {
-    if (!following()) return;
+    if (!playing() && !following()) return;
+    const interval = following() ? 33 : Math.max(tickMs(), 16);
     const id = setInterval(() => {
       const max = frames().length - 1;
-      if (max >= 0 && viewIdx() < max) {
-        const behind = max - viewIdx();
-        const step = behind > 20 ? Math.ceil(behind / 10) : 1;
-        setViewIdx((t) => Math.min(t + step, max));
+      if (max < 0) return;
+      if (following()) {
+        // Live mode: catch up quickly.
+        if (viewIdx() < max) {
+          const behind = max - viewIdx();
+          const step = behind > 20 ? Math.ceil(behind / 10) : 1;
+          setViewIdx((t) => Math.min(t + step, max));
+        }
+      } else if (playing()) {
+        // Playback mode: advance one frame at server speed.
+        if (viewIdx() < max) {
+          setViewIdx((t) => t + 1);
+        } else {
+          // Reached the end of buffered frames, stop playing.
+          setPlaying(false);
+        }
       }
-    }, 33);
+    }, interval);
     onCleanup(() => clearInterval(id));
   });
 
@@ -324,13 +390,25 @@ const V2App: Component = () => {
       <Show when={(phase().kind === "playing" || phase().kind === "game_over") && currentFrame() && gameInfo() && staticData() && currentFrameData()}>
         <div class={styles.controls}>
           <span class={styles.turnLabel}>Tick {currentFrame()!.tick}</span>
-          <button class={styles.btn} onClick={() => { setFollowing(false); setViewIdx(0); }}>&#x23EE;</button>
-          <button class={styles.btn} onClick={() => { setFollowing(false); setViewIdx((t) => Math.max(t - 1, 0)); }}>&#x23F4;</button>
-          <button class={styles.btn} onClick={() => setFollowing((f) => !f)}>
-            {following() ? "\u23F8" : "\u25B6"}
+          <button class={styles.btn} onClick={() => { setFollowing(false); setPlaying(false); setViewIdx(0); }}>&#x23EE;</button>
+          <button class={styles.btn} onClick={() => { setFollowing(false); setPlaying(false); setViewIdx((t) => Math.max(t - 1, 0)); }}>&#x23F4;</button>
+          <button class={styles.btn} onClick={() => {
+            if (following()) {
+              // Currently live — pause playback.
+              setFollowing(false);
+              setPlaying(false);
+            } else if (playing()) {
+              // Currently playing at speed — pause.
+              setPlaying(false);
+            } else {
+              // Paused — resume playing at server speed.
+              setPlaying(true);
+            }
+          }}>
+            {(following() || playing()) ? "\u23F8" : "\u25B6"}
           </button>
-          <button class={styles.btn} onClick={() => { setFollowing(false); setViewIdx((t) => Math.min(t + 1, maxIdx())); }}>&#x23F5;</button>
-          <button class={styles.btn} onClick={() => { setFollowing(true); setViewIdx(maxIdx()); }}>&#x23ED;</button>
+          <button class={styles.btn} onClick={() => { setFollowing(false); setPlaying(false); setViewIdx((t) => Math.min(t + 1, maxIdx())); }}>&#x23F5;</button>
+          <button class={styles.btn} onClick={() => { setFollowing(true); setPlaying(false); setViewIdx(maxIdx()); }}>&#x23ED;</button>
           <input
             type="range"
             class={styles.slider}
@@ -358,6 +436,13 @@ const V2App: Component = () => {
               </button>
             )}
           </For>
+          <button
+            class={styles.btn}
+            style={{ "font-size": "10px", padding: "2px 6px" }}
+            onClick={restartGame}
+          >
+            Restart
+          </button>
           <span style={{ "margin-left": "auto" }} />
           <button
             class={styles.btn}
