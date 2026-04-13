@@ -204,7 +204,7 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | Time | Discrete turns | Continuous ticks (10 ticks/second target) |
 | Units | Army values per cell | Entity units with individual IDs and strength |
 | Combat | Instant capture on move | Edge-based engagement: units lock and drain each other over ticks |
-| Terrain | Mountains / cities / empty | Continuous food/material productivity per hex influencing economy and movement cost |
+| Terrain | Mountains / cities / empty | Hex terrain carries productivity, stockpiles, roads, height, moisture, rivers, and biome/region data |
 | Map size | Variable | 30×30 default for RR |
 
 **Constants (from `crates/engine/src/v2/mod.rs`):**
@@ -213,16 +213,18 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 |----------|-------|---------|
 | `FOOD_RATE` | 0.1 / tick | Food income per stationary, unengaged unit |
 | `MATERIAL_RATE` | 0.05 / tick | Material income per stationary, unengaged unit |
+| `FARMER_RATE` / `WORKER_RATE` | 0.04 / 0.03 | Population cohort production rates |
 | `UNIT_FOOD_COST` | 8.0 | Food cost to produce one unit |
 | `UNIT_MATERIAL_COST` | 5.0 | Material cost to produce one unit |
 | `UPKEEP_PER_UNIT` | 0.02 / tick | Food upkeep per unit |
 | `STARVATION_DAMAGE` | 0.5 | Strength lost per tick when upkeep cannot be paid |
+| `SOLDIERS_PER_UNIT` | 5 | Trained population consumed per produced unit |
 | `INITIAL_STRENGTH` | 100.0 | Starting strength for a new unit |
 | `DAMAGE_RATE` | 0.05 | Fraction of strength dealt per tick in combat |
 | `DISENGAGE_PENALTY` | 0.3 | Strength loss on breaking engagement |
 | `BASE_MOVE_COOLDOWN` | 2 ticks | Minimum ticks between moves |
 | `TERRAIN_MOVE_PENALTY` | 0.5 | Additional cooldown scaling per terrain point |
-| `VISION_RADIUS` | 3 hexes | Fog-of-war visibility range |
+| `VISION_RADIUS` | 5 hexes | Base fog-of-war visibility range before height bonus |
 | `INITIAL_UNITS` | 5 | Units each player starts with |
 | `TICKS_PER_SECOND` | 10 | Simulation rate |
 | `AGENT_POLL_INTERVAL` | 5 ticks | How often agents are queried for directives |
@@ -231,13 +233,13 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 
 | Module | Role |
 |--------|------|
-| `state` | `GameState`, `Unit`, `Player`, `HexCell` |
-| `sim` | Tick loop: food/material accrual, upkeep/starvation, movement, combat resolution, win condition |
+| `state` | `GameState`, `Unit`, `Player`, `Population`, `Convoy`, terrain/region data |
+| `sim` | Tick loop: stockpile accrual, population growth/training, upkeep/starvation, convoy/unit movement, combat, win condition |
 | `combat` | Edge-based engagement: lock, damage, disengage |
 | `hex` | Axial coordinate math, neighbor enumeration, distance |
-| `mapgen` | Perlin terrain + player general placement |
-| `observation` | Fog-of-war filtered `Observation` per player |
-| `directive` | `Directive` enum: `Produce`, `Move`, `Engage` |
+| `mapgen` | Terrain pipeline: productivity, height, moisture, rivers, biomes, regions, initial populations |
+| `observation` | Fog-of-war filtered observation including population, stockpiles, roads, convoys |
+| `directive` | Directives for movement, combat, production, role assignment, convoys, depots, and roads |
 | `agent` | `Agent` trait + `SpreadAgent` |
 | `pathfinding` | Hex A* for movement |
 | `vision` | Visibility computation |
@@ -268,7 +270,7 @@ All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crate
 
 | `type` | Fields | Description |
 |--------|--------|-------------|
-| `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. `terrain` and `material_map` are flat arrays of per-hex productivity values (length = width × height). |
+| `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. Terrain arrays currently expose the food/material productivity layers used by the UI. |
 | `v2_frame` | `tick: u64`, `units: Vec<UnitSnapshot>`, `player_food: Vec<f32>`, `player_material: Vec<f32>`, `alive: Vec<bool>` | Sent every tick. Full unit list with positions, strength, engagement state, and per-player economy. |
 | `v2_game_end` | `winner: Option<u8>`, `tick: u64` | Sent when the game ends. `winner` is `null` on timeout. |
 | `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
@@ -305,10 +307,9 @@ Directives are accumulated and applied to the game state by `directive::apply_di
 
 **SpreadAgent** — current placeholder:
 
-- Early game: fans out from spawn toward map center in angular sectors (one sector per unit by index).
-- Late game: advances in 2–3 lanes toward the estimated enemy position.
-- Produces units continuously whenever both food and material allow.
-- Engages adjacent enemies when it has numerical advantage or ≥ 50% of the enemy's strength.
-- General moves toward map center once 10+ escorts are available.
+- Balances general-hex population between farmers, workers, and soldier training.
+- Builds a depot and basic roads around the general, then opportunistically launches convoys from owned stockpile hexes.
+- Produces units from trained soldiers when the general hex has enough local food/material stockpile.
+- Moves non-general units with the original spread/lanes heuristic and engages opportunistically.
 
 SpreadAgent is a structural placeholder. The target architecture is **Centurion** (see `docs/v2-agent-spec.md`): a hierarchy of specialized sub-agents (economic, tactical, strategic) with shared state and coordinated directives.

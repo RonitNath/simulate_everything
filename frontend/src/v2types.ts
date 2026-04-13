@@ -11,7 +11,8 @@ export interface V2UnitSnapshot {
 export interface V2Frame {
   tick: number;
   units: V2UnitSnapshot[];
-  player_resources: number[];
+  player_food: number[];
+  player_material: number[];
   alive: boolean[];
 }
 
@@ -19,6 +20,7 @@ export interface V2GameInfo {
   width: number;
   height: number;
   terrain: number[];
+  material_map: number[];
   num_players: number;
   agent_names: string[];
 }
@@ -27,6 +29,7 @@ export interface V2Replay {
   width: number;
   height: number;
   terrain: number[];
+  material_map: number[];
   num_players: number;
   agent_names: string[];
   frames: V2Frame[];

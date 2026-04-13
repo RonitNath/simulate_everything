@@ -4,22 +4,26 @@ This plan covers the designed-but-unbuilt V2 systems. These run on **Track B** (
 
 ## Current State
 
-The V2 engine now has Phase 1 complete plus the earlier core systems:
+Implementation status: all planned phases are now landed in a scoped working form.
+
+The V2 engine now includes:
 - Hex grid (axial coords, flat-top, even-r offset)
 - Continuous tick sim (10hz, movement cooldowns)
 - Entity units (strength 100→0, edge-based engagement, 1/sqrt(N) effectiveness)
 - Two-resource economy (stationary units generate food + material, units consume food upkeep, starvation damages strength)
-- 3-octave Perlin noise terrain (terrain_value 0.0-3.0)
-- Fog of war (3-hex vision radius)
-- SpreadAgent (placeholder heuristic)
+- Population roles and soldier training at the general hex
+- Stockpiles, depots, convoys, and road levels
+- Terrain pipeline with height, moisture, rivers, biomes, regions, and height-aware vision/combat/movement
+- Fog of war with height bonus
+- SpreadAgent updated for role assignment, training, depots, roads, and convoy loading
 - Web integration (round-robin, WebSocket spectator, replay)
 
 Key files:
-- `crates/engine/src/v2/state.rs` — Cell (food + material productivity), Unit, Player (food/material pools), GameState
-- `crates/engine/src/v2/sim.rs` — tick loop: generate_resources → consume_upkeep → resolve_combat → move_units → decrement_cooldowns → cleanup
-- `crates/engine/src/v2/directive.rs` — Move, Engage, DisengageEdge, DisengageAll, Produce, Pass
-- `crates/engine/src/v2/observation.rs` — Observation, UnitInfo
-- `crates/engine/src/v2/mapgen.rs` — Perlin noise, strategic value placement
+- `crates/engine/src/v2/state.rs` — terrain, stockpiles, roads, regions, units, population, convoys
+- `crates/engine/src/v2/sim.rs` — stockpile economy, population growth/training, convoy + unit movement, cleanup
+- `crates/engine/src/v2/directive.rs` — movement/combat plus production, role assignment, convoys, depot/road building
+- `crates/engine/src/v2/observation.rs` — Observation, UnitInfo, PopulationInfo, ConvoyInfo
+- `crates/engine/src/v2/mapgen.rs` — terrain pipeline, region synthesis, general placement, initial population seeding
 - `crates/engine/src/v2/mod.rs` — all tuning constants
 
 ## Guiding Principles

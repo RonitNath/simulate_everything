@@ -3,7 +3,9 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use super::hex::{axial_to_offset, distance, offset_to_axial, within_radius};
-use super::state::{Cell, GameState, Player, Unit};
+use super::state::{
+    Biome, Cell, GameState, Player, Population, Region, RegionArchetype, Role, Unit,
+};
 use super::{INITIAL_STRENGTH, INITIAL_UNITS};
 
 pub struct MapConfig {
@@ -26,43 +28,90 @@ impl Default for MapConfig {
 
 pub fn generate(config: &MapConfig) -> GameState {
     let mut rng = StdRng::seed_from_u64(config.seed);
-    let perlin = Perlin::new(config.seed as u32);
+    let height_noise = Perlin::new(config.seed as u32);
+    let moisture_noise = Perlin::new((config.seed as u32).wrapping_add(1));
+    let river_noise = Perlin::new((config.seed as u32).wrapping_add(2));
 
     let total = config.width * config.height;
     let mut grid = Vec::with_capacity(total);
+    let region_cols = ((config.width / 15).max(1)).min(6);
+    let region_rows = ((config.height / 15).max(1)).min(6);
+    let region_count = region_cols * region_rows;
+    let mut region_hexes: Vec<Vec<super::hex::Axial>> = vec![Vec::new(); region_count];
+    let mut region_fertility = vec![0.0f32; region_count];
+    let mut region_minerals = vec![0.0f32; region_count];
+    let mut region_heights = vec![0.0f32; region_count];
 
-    // Terrain generation: 3 octaves of Perlin noise
     for row in 0..config.height {
         for col in 0..config.width {
             let wx = col as f64 + 0.5 * (row & 1) as f64;
             let wy = row as f64 * 0.866;
 
-            let v1 = perlin.get([wx * 0.04, wy * 0.04]);
-            let v2 = perlin.get([wx * 0.1, wy * 0.1]) * 0.5;
-            let v3 = perlin.get([wx * 0.3, wy * 0.3]) * 0.25;
-            let sum = v1 + v2 + v3;
+            let h1 = height_noise.get([wx * 0.02, wy * 0.02]);
+            let h2 = height_noise.get([wx * 0.05, wy * 0.05]) * 0.5;
+            let h3 = height_noise.get([wx * 0.12, wy * 0.12]) * 0.25;
+            let height = (((h1 + h2 + h3) / 1.75) * 0.5 + 0.5) as f32;
 
-            let terrain_value = (((sum / 1.75) * 0.5 + 0.5) * 3.0) as f32;
-            let terrain_value = terrain_value.clamp(0.0, 3.0);
-            let material_value = ((3.0 - terrain_value) * 0.6).clamp(0.0, 2.0);
+            let m1 = moisture_noise.get([wx * 0.025, wy * 0.025]);
+            let m2 = moisture_noise.get([wx * 0.08, wy * 0.08]) * 0.4;
+            let moisture = ((((m1 + m2) / 1.4) * 0.5) + 0.5) as f32;
+
+            let river = river_noise.get([wx * 0.035, wy * 0.035]) as f32;
+            let is_river = river.abs() < 0.035 && height > 0.25 && height < 0.72;
+            let water_access = (moisture * 0.7 + if is_river { 0.3 } else { 0.0 }).clamp(0.0, 1.0);
+
+            let biome = classify_biome(height, moisture, is_river);
+            let terrain_value = fertility_for_biome(biome, moisture, water_access);
+            let material_value = mineral_value(height, biome);
+
+            let region_id = compute_region_id(
+                row,
+                col,
+                config.width,
+                config.height,
+                region_cols,
+                region_rows,
+            );
+            let axial = offset_to_axial(row as i32, col as i32);
+            region_hexes[region_id as usize].push(axial);
+            region_fertility[region_id as usize] += terrain_value;
+            region_minerals[region_id as usize] += material_value;
+            region_heights[region_id as usize] += height;
+
             grid.push(Cell {
                 terrain_value,
                 material_value,
+                food_stockpile: 0.0,
+                material_stockpile: 0.0,
+                has_depot: false,
+                road_level: 0,
+                height,
+                moisture,
+                biome,
+                is_river,
+                water_access,
+                region_id,
+                stockpile_owner: None,
             });
         }
     }
 
-    // Strategic value heatmap: sum terrain_value within hex radius 10
-    let strategic_values = compute_strategic_values(&grid, config.width, config.height);
+    let regions = build_regions(
+        region_hexes,
+        region_fertility,
+        region_minerals,
+        region_heights,
+    );
 
-    // General placement
+    let strategic_values = compute_strategic_values(&grid, config.width, config.height);
     let margin = (config.width.max(config.height) / 8).max(5);
     let general_positions = place_generals(config, &grid, &strategic_values, margin, &mut rng);
 
-    // Build units and players
     let mut units: Vec<Unit> = Vec::new();
     let mut players: Vec<Player> = Vec::new();
+    let mut population: Vec<Population> = Vec::new();
     let mut next_id: u32 = 0;
+    let mut next_pop_id: u32 = 0;
 
     for (player_idx, &gen_pos) in general_positions.iter().enumerate() {
         let owner = player_idx as u8;
@@ -120,22 +169,176 @@ pub fn generate(config: &MapConfig) -> GameState {
             general_id,
             alive: true,
         });
+
+        let mut push_pop = |count: u16, role: Role| {
+            population.push(Population {
+                id: next_pop_id,
+                hex: gen_pos,
+                owner,
+                count,
+                role,
+                training: if role == Role::Soldier { 1.0 } else { 0.0 },
+            });
+            next_pop_id += 1;
+        };
+        push_pop(20, Role::Idle);
+        push_pop(5, Role::Farmer);
+        push_pop(3, Role::Worker);
+
+        if let Some(cell) = grid_at_mut(&mut grid, config.width, gen_pos) {
+            cell.stockpile_owner = Some(owner);
+            cell.food_stockpile = 40.0;
+            cell.material_stockpile = 25.0;
+        }
     }
 
-    GameState {
+    let mut state = GameState {
         width: config.width,
         height: config.height,
         grid,
         units,
         players,
+        population,
+        convoys: Vec::new(),
+        regions,
         tick: 0,
         next_unit_id: next_id,
-    }
+        next_pop_id,
+        next_convoy_id: 0,
+    };
+    recompute_player_totals(&mut state);
+
+    state
 }
 
 fn is_in_bounds(ax: super::hex::Axial, width: usize, height: usize) -> bool {
     let (row, col) = axial_to_offset(ax);
     row >= 0 && col >= 0 && (row as usize) < height && (col as usize) < width
+}
+
+fn grid_at_mut(grid: &mut [Cell], width: usize, ax: super::hex::Axial) -> Option<&mut Cell> {
+    let (row, col) = axial_to_offset(ax);
+    if row < 0 || col < 0 {
+        return None;
+    }
+    let idx = row as usize * width + col as usize;
+    grid.get_mut(idx)
+}
+
+fn classify_biome(height: f32, moisture: f32, is_river: bool) -> Biome {
+    if height > 0.82 {
+        Biome::Mountain
+    } else if height < 0.18 {
+        Biome::Desert
+    } else if moisture < 0.2 {
+        Biome::Desert
+    } else if moisture < 0.35 {
+        Biome::Steppe
+    } else if moisture < 0.6 {
+        if height > 0.65 {
+            Biome::Tundra
+        } else {
+            Biome::Grassland
+        }
+    } else if moisture < 0.8 {
+        Biome::Forest
+    } else if is_river || height < 0.45 {
+        Biome::Jungle
+    } else {
+        Biome::Forest
+    }
+}
+
+fn fertility_for_biome(biome: Biome, moisture: f32, water_access: f32) -> f32 {
+    let base = match biome {
+        Biome::Desert => 0.2,
+        Biome::Steppe => 0.9,
+        Biome::Grassland => 1.5,
+        Biome::Forest => 1.3,
+        Biome::Jungle => 1.7,
+        Biome::Tundra => 0.6,
+        Biome::Mountain => 0.4,
+    };
+    (base + moisture * 0.8 + water_access * 0.6).clamp(0.0, 3.0)
+}
+
+fn mineral_value(height: f32, biome: Biome) -> f32 {
+    let rugged_bonus = (height * 1.5).clamp(0.0, 1.5);
+    let biome_bonus = match biome {
+        Biome::Mountain => 0.8,
+        Biome::Forest => 0.4,
+        Biome::Steppe => 0.2,
+        _ => 0.1,
+    };
+    (rugged_bonus + biome_bonus).clamp(0.0, 2.0)
+}
+
+fn compute_region_id(
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
+    region_cols: usize,
+    region_rows: usize,
+) -> u16 {
+    let region_w = ((width as f32 / region_cols as f32).ceil() as usize).max(1);
+    let region_h = ((height as f32 / region_rows as f32).ceil() as usize).max(1);
+    let rx = (col / region_w).min(region_cols - 1);
+    let ry = (row / region_h).min(region_rows - 1);
+    (ry * region_cols + rx) as u16
+}
+
+fn build_regions(
+    region_hexes: Vec<Vec<super::hex::Axial>>,
+    fertility: Vec<f32>,
+    minerals: Vec<f32>,
+    heights: Vec<f32>,
+) -> Vec<Region> {
+    region_hexes
+        .into_iter()
+        .enumerate()
+        .map(|(idx, hexes)| {
+            let count = hexes.len().max(1) as f32;
+            let avg_fertility = fertility[idx] / count;
+            let avg_minerals = minerals[idx] / count;
+            let avg_height = heights[idx] / count;
+            let archetype = if avg_height > 0.75 {
+                RegionArchetype::MountainRange
+            } else if avg_minerals > 1.25 {
+                RegionArchetype::Highland
+            } else if avg_fertility > 2.0 {
+                RegionArchetype::RiverValley
+            } else if avg_fertility < 0.8 {
+                RegionArchetype::Desert
+            } else {
+                RegionArchetype::Steppe
+            };
+            Region {
+                id: idx as u16,
+                name: format!("{:?} {}", archetype, idx + 1),
+                archetype,
+                hexes,
+                avg_fertility,
+                avg_minerals,
+                defensibility: (avg_height + avg_minerals * 0.5).clamp(0.0, 2.0),
+            }
+        })
+        .collect()
+}
+
+fn recompute_player_totals(state: &mut GameState) {
+    for player in &mut state.players {
+        player.food = 0.0;
+        player.material = 0.0;
+    }
+    for cell in &state.grid {
+        if let Some(owner) = cell.stockpile_owner {
+            if let Some(player) = state.players.iter_mut().find(|p| p.id == owner) {
+                player.food += cell.food_stockpile;
+                player.material += cell.material_stockpile;
+            }
+        }
+    }
 }
 
 fn compute_strategic_values(grid: &[Cell], width: usize, height: usize) -> Vec<f32> {
