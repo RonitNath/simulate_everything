@@ -561,6 +561,22 @@ async fn api_rr_status(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 // V2 Round-Robin
 // ============================================================
 
+#[derive(Template)]
+#[template(path = "v2rr.html")]
+struct V2RrTemplate {
+    build_ver: String,
+}
+
+async fn v2_rr_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Html(
+        V2RrTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
 async fn ws_v2_rr(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -716,6 +732,7 @@ async fn main() {
         .route("/api/rr/reset", axum::routing::post(api_rr_reset))
         .route("/api/rr/status", get(api_rr_status))
         .route("/api/live/config", axum::routing::post(api_live_config))
+        .route("/v2/rr", get(v2_rr_page))
         .route("/ws/v2/rr", get(ws_v2_rr))
         .route("/api/v2/rr/config", axum::routing::post(api_v2_rr_config))
         .route("/api/v2/rr/pause", axum::routing::post(api_v2_rr_pause))
