@@ -123,6 +123,9 @@ interface CellRender {
   settlPts?: string;
   // Optional unit
   entry?: CellStack;
+  // Unit status icon + color
+  statusIcon?: string;
+  statusColor?: string;
   // Engagements for edge highlights
   engagements: Array<{ edge: number; x1: number; y1: number; x2: number; y2: number }>;
 }
@@ -291,11 +294,30 @@ const HexBoard: Component<HexBoardProps> = (props) => {
         }
 
         // Engagement edge highlights
+        // Engine edge indices assume flat-top orientation but we render pointy-top.
+        // The visual segment for engine edge e is (e + 5) % 6 (one CW rotation).
         const engagements: CellRender["engagements"] = [];
         if (entry) {
           for (const eng of entry.unit.engagements ?? []) {
-            const [[x1, y1], [x2, y2]] = hexEdgeVertices(cx, cy, s * 0.96, eng.edge);
-            engagements.push({ edge: eng.edge, x1, y1, x2, y2 });
+            const visualEdge = (eng.edge + 5) % 6;
+            const [[x1, y1], [x2, y2]] = hexEdgeVertices(cx, cy, s * 0.96, visualEdge);
+            engagements.push({ edge: visualEdge, x1, y1, x2, y2 });
+          }
+        }
+
+        // Unit status icon
+        let statusIcon: string | undefined;
+        let statusColor: string | undefined;
+        if (entry) {
+          const u = entry.unit;
+          if (u.engaged) {
+            statusIcon = "⚔"; statusColor = "#ff6644";  // in combat
+          } else if (u.destination && u.move_cooldown === 0) {
+            statusIcon = "→"; statusColor = "#88cc88";   // moving
+          } else if (u.move_cooldown > 0) {
+            statusIcon = "◷"; statusColor = "#aaa";      // cooldown
+          } else {
+            statusIcon = "·"; statusColor = "#666";      // idle
           }
         }
 
@@ -307,7 +329,7 @@ const HexBoard: Component<HexBoardProps> = (props) => {
           hasDepot: ls.has("depots") ? (depots[idx] ?? false) : false,
           depotSide: Math.max(3, s * 0.22),
           settlOwner, settlPts,
-          entry,
+          entry, statusIcon, statusColor,
           engagements,
         });
       }
@@ -424,6 +446,18 @@ const HexBoard: Component<HexBoardProps> = (props) => {
                 font-size={`${Math.max(7, s * 0.35)}`} font-weight="bold" fill="#fff"
                 style={{ "pointer-events": "none" }}
               >{c.entry.count}</text>
+            )}
+
+            {/* Unit status icon */}
+            {c.entry && s > 6 && c.statusIcon && c.statusIcon !== "·" && (
+              <text
+                x={c.cx + s * 0.38}
+                y={c.cy - s * 0.32}
+                text-anchor="middle" dominant-baseline="middle"
+                font-size={`${Math.max(6, s * 0.28)}`}
+                fill={c.statusColor ?? "#888"}
+                style={{ "pointer-events": "none" }}
+              >{c.statusIcon}</text>
             )}
 
             {/* Engagement edge highlights */}
