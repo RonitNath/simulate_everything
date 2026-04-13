@@ -19,7 +19,7 @@ const V2SimApp: Component = () => {
   const [frameIdx, setFrameIdx] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
   const [speed, setSpeed] = createSignal(10);
-  const [showNumbers, setShowStrength] = createSignal(false);
+  const [showNumbers, setShowStrength] = createSignal(true);
   const [layers, setLayers] = createSignal<Set<RenderLayer>>(
     new Set(["territory", "roads", "depots", "settlements", "convoys"])
   );
@@ -282,6 +282,29 @@ const V2SimApp: Component = () => {
               >
                 {l[0].toUpperCase()}
               </button>
+            )}
+          </For>
+        </div>
+
+        {/* Compact score strip above the board */}
+        <div class={styles.scoreStrip}>
+          <For each={playerStats()}>
+            {(stat) => (
+              <div class={styles.scoreStripPlayer} style={{ opacity: stat.alive ? 1 : 0.4 }}>
+                <div class={styles.playerDot} style={{ background: PLAYER_COLORS[stat.id % PLAYER_COLORS.length], width: "8px", height: "8px" }} />
+                <span>{replay()!.agent_names[stat.id]}</span>
+                <span>{stat.units}u {stat.totalPop}p {stat.territoryCount}h</span>
+                <Show when={stat.score}>
+                  {(sc) => (
+                    <div class={styles.scoreStripBar}>
+                      <div style={{ flex: sc().population * 4, background: "#4ac0c0" }} />
+                      <div style={{ flex: sc().territory * 3, background: "#4a80ff" }} />
+                      <div style={{ flex: sc().military * 2, background: "#ff4a6a" }} />
+                      <div style={{ flex: sc().stockpiles * 1, background: "#ffa04a" }} />
+                    </div>
+                  )}
+                </Show>
+              </div>
             )}
           </For>
         </div>

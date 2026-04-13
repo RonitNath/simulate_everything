@@ -258,6 +258,34 @@ export const legendGrid = style({
   alignItems: "center",
 });
 
+export const scoreStrip = style({
+  display: "flex",
+  gap: vars.space.sm,
+  padding: `${vars.space.xs} ${vars.space.md}`,
+  borderBottom: `1px solid ${vars.color.border}`,
+  background: vars.color.surface,
+  overflowX: "auto",
+  flexShrink: 0,
+});
+
+export const scoreStripPlayer = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space.xs,
+  fontSize: vars.font.size.xs,
+  color: vars.color.textMuted,
+  whiteSpace: "nowrap",
+});
+
+export const scoreStripBar = style({
+  display: "flex",
+  height: "4px",
+  width: "80px",
+  borderRadius: "2px",
+  overflow: "hidden",
+  background: vars.color.bg,
+});
+
 export const btnPrimary = style({
   background: vars.color.players.p0,
   border: "none",

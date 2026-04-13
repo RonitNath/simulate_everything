@@ -104,7 +104,7 @@ const V2App: Component = () => {
   const [playing, setPlaying] = createSignal(true);
   const [serverPaused, setServerPaused] = createSignal(false);
   const [tickMs, setTickMs] = createSignal(250);
-  const [showNumbers, setShowStrength] = createSignal(false);
+  const [showNumbers, setShowStrength] = createSignal(true);
   const [gameNumber, setGameNumber] = createSignal(0);
   const [layers, setLayers] = createSignal<Set<RenderLayer>>(
     new Set(["territory", "roads", "settlements", "convoys"]),

@@ -55,8 +55,8 @@ function playerRgba(owner: number, alpha: number): string {
 }
 
 function stackBrightness(totalStrength: number, maxStrength: number): number {
-  if (totalStrength <= 0) return 0.3;
-  return 0.3 + 0.7 * Math.log1p(totalStrength) / Math.log1p(Math.max(maxStrength, 1));
+  if (totalStrength <= 0) return 0.5;
+  return 0.5 + 0.5 * Math.log1p(totalStrength) / Math.log1p(Math.max(maxStrength, 1));
 }
 
 function hexPoints(cx: number, cy: number, size: number): string {
@@ -308,12 +308,11 @@ const HexBoard: Component<HexBoardProps> = (props) => {
 
         let terrPts: string | undefined;
         let terrFill: string | undefined;
-        const hasSettlement = settlementMap.has(idx);
-        if (!entry && !hasSettlement && ls.has("territory")) {
+        if (!entry && ls.has("territory")) {
           const owner = terrMap.get(idx);
           if (owner !== undefined) {
             terrPts = hexPoints(cx, cy, s * 0.88);
-            terrFill = playerRgba(owner, 0.25);
+            terrFill = playerRgba(owner, 0.35);
           }
         }
 
@@ -327,12 +326,12 @@ const HexBoard: Component<HexBoardProps> = (props) => {
             settlOwner = info.owner;
             settlType = info.type;
             if (info.type === "Farm") {
-              // Farm: small circle rendered as SVG circle, store radius
-              settlRadius = s * 0.12;
+              // Farm: circle, 2x larger with background plate
+              settlRadius = s * 0.25;
             } else if (info.type === "City") {
-              // City: crenellated tower shape
-              const w = s * 0.25;
-              const h = s * 0.3;
+              // City: crenellated tower shape, ~1.6x larger
+              const w = s * 0.4;
+              const h = s * 0.45;
               settlPath = [
                 `M${cx - w},${cy + h}`,
                 `L${cx - w},${cy - h}`,
@@ -349,8 +348,8 @@ const HexBoard: Component<HexBoardProps> = (props) => {
                 "Z",
               ].join(" ");
             } else {
-              // Village: house/pentagon shape
-              const hs = s * 0.25;
+              // Village: house/pentagon shape, ~1.8x larger
+              const hs = s * 0.45;
               const bx = cx - hs;
               const by = cy - hs * 0.1;
               const bw = hs * 2;
@@ -590,33 +589,43 @@ const HexBoard: Component<HexBoardProps> = (props) => {
             )}
 
             {cell.settlOwner !== undefined && cell.settlType === "Farm" && cell.settlRadius !== undefined && (
-              <circle
-                cx={cell.cx}
-                cy={cell.cy}
-                r={cell.settlRadius}
-                fill={playerRgba(cell.settlOwner, 0.8)}
-                stroke="none"
-              />
+              <>
+                <circle cx={cell.cx} cy={cell.cy} r={s * 0.3} fill={playerRgba(cell.settlOwner, 0.3)} stroke="none" />
+                <circle
+                  cx={cell.cx}
+                  cy={cell.cy}
+                  r={cell.settlRadius}
+                  fill={playerRgba(cell.settlOwner, 0.8)}
+                  stroke="#fff"
+                  stroke-width={0.5}
+                />
+              </>
             )}
 
             {cell.settlPath !== undefined && cell.settlOwner !== undefined && cell.settlType === "Village" && (
-              <path
-                d={cell.settlPath}
-                fill={playerRgba(cell.settlOwner, 0.9)}
-                stroke="#fff"
-                stroke-width={0.5}
-                stroke-linejoin="miter"
-              />
+              <>
+                <circle cx={cell.cx} cy={cell.cy} r={s * 0.45} fill={playerRgba(cell.settlOwner, 0.3)} stroke="none" />
+                <path
+                  d={cell.settlPath}
+                  fill={playerRgba(cell.settlOwner, 0.9)}
+                  stroke="#fff"
+                  stroke-width={0.5}
+                  stroke-linejoin="miter"
+                />
+              </>
             )}
 
             {cell.settlPath !== undefined && cell.settlOwner !== undefined && cell.settlType === "City" && (
-              <path
-                d={cell.settlPath}
-                fill={playerRgba(cell.settlOwner, 0.95)}
-                stroke="#fff"
-                stroke-width={1}
-                stroke-linejoin="miter"
-              />
+              <>
+                <circle cx={cell.cx} cy={cell.cy} r={s * 0.55} fill={playerRgba(cell.settlOwner, 0.35)} stroke="none" />
+                <path
+                  d={cell.settlPath}
+                  fill={playerRgba(cell.settlOwner, 0.95)}
+                  stroke="#fff"
+                  stroke-width={1}
+                  stroke-linejoin="miter"
+                />
+              </>
             )}
 
             {cell.entry && showNums && s > 8 && (
