@@ -1,6 +1,8 @@
 mod lobby;
 mod protocol;
 mod roundrobin;
+mod v2_protocol;
+mod v2_roundrobin;
 
 use askama::Template;
 use axum::{
@@ -25,9 +27,10 @@ use protocol::{AgentToServer, ServerToAgent, SpectatorToServer};
 use rand::{SeedableRng, rngs::StdRng};
 use roundrobin::RoundRobin;
 use serde::Deserialize;
+use v2_roundrobin::V2RoundRobin;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
@@ -38,6 +41,7 @@ use tracing::{info, warn};
 struct AppState {
     lobby: Arc<Lobby>,
     rr: Arc<RoundRobin>,
+    v2_rr: Arc<V2RoundRobin>,
     scoreboard: Arc<Mutex<Scoreboard>>,
     build_ver: String,
 }
@@ -554,6 +558,85 @@ async fn api_rr_status(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 }
 
 // ============================================================
+// V2 Round-Robin
+// ============================================================
+
+async fn ws_v2_rr(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let rx = state.v2_rr.spectator_subscribe();
+    let catchup = state.v2_rr.spectator_catchup().await;
+    ws.on_upgrade(move |socket| handle_v2_spectator(socket, rx, catchup))
+}
+
+async fn handle_v2_spectator(
+    mut socket: WebSocket,
+    mut rx: broadcast::Receiver<v2_protocol::V2ServerToSpectator>,
+    catchup: Vec<v2_protocol::V2ServerToSpectator>,
+) {
+    for msg in catchup {
+        let text = serde_json::to_string(&msg).unwrap();
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                let text = serde_json::to_string(&msg).unwrap();
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                warn!("V2 spectator lagged, dropped {} messages", n);
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct V2RrConfigUpdate {
+    tick_ms: Option<u64>,
+}
+
+async fn api_v2_rr_config(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V2RrConfigUpdate>,
+) -> impl IntoResponse {
+    if let Some(ms) = body.tick_ms {
+        state.v2_rr.set_tick_ms(ms);
+    }
+    let _ = state.v2_rr.broadcast_config(body.tick_ms).await;
+    Json(serde_json::json!({"ok": true}))
+}
+
+async fn api_v2_rr_pause(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v2_rr.pause();
+    Json(serde_json::json!({"ok": true, "paused": true}))
+}
+
+async fn api_v2_rr_resume(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v2_rr.resume();
+    Json(serde_json::json!({"ok": true, "paused": false}))
+}
+
+async fn api_v2_rr_reset(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v2_rr.reset();
+    Json(serde_json::json!({"ok": true, "reset": true}))
+}
+
+async fn api_v2_rr_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "paused": state.v2_rr.is_paused(),
+        "tick_ms": state.v2_rr.get_tick_ms(),
+    }))
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -593,6 +676,12 @@ async fn main() {
         rr_loop.run_loop().await;
     });
 
+    let v2_rr = Arc::new(V2RoundRobin::new(tick_ms));
+    let v2_rr_loop = v2_rr.clone();
+    tokio::spawn(async move {
+        v2_rr_loop.run_loop().await;
+    });
+
     let build_ver = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -601,6 +690,7 @@ async fn main() {
     let state = Arc::new(AppState {
         lobby,
         rr,
+        v2_rr,
         scoreboard,
         build_ver,
     });
@@ -626,6 +716,12 @@ async fn main() {
         .route("/api/rr/reset", axum::routing::post(api_rr_reset))
         .route("/api/rr/status", get(api_rr_status))
         .route("/api/live/config", axum::routing::post(api_live_config))
+        .route("/ws/v2/rr", get(ws_v2_rr))
+        .route("/api/v2/rr/config", axum::routing::post(api_v2_rr_config))
+        .route("/api/v2/rr/pause", axum::routing::post(api_v2_rr_pause))
+        .route("/api/v2/rr/resume", axum::routing::post(api_v2_rr_resume))
+        .route("/api/v2/rr/reset", axum::routing::post(api_v2_rr_reset))
+        .route("/api/v2/rr/status", get(api_v2_rr_status))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 
