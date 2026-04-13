@@ -546,21 +546,21 @@ V1 continues to work (the TV keeps showing games). V2 is developed alongside and
 
 ### Implementation phases
 
-**Phase 1: Hex + Terrain + State** — hex coordinate system, Perlin noise terrain generation on hex grid, new Cell/Unit/Player/GameState structs, balanced placement algorithm. Testable via ASCII output of generated hex maps.
+**Phase 1: Hex + Terrain + State** — hex coordinate system, Perlin noise terrain generation on hex grid, new Cell/Unit/Player/GameState structs, balanced placement algorithm. Testable via ASCII output of generated hex maps. **[COMPLETE]**
 
-**Phase 2: Simulation loop** — tick-based game loop with hex movement, cooldowns, hex pathfinding. No combat yet. Units move around the hex map. Testable by spawning units and watching them pathfind.
+**Phase 2: Simulation loop** — tick-based game loop with hex movement, cooldowns, hex pathfinding. No combat yet. Units move around the hex map. Testable by spawning units and watching them pathfind. **[COMPLETE]**
 
-**Phase 3: Combat** — engagement, damage, disengagement, death on hex grid. Testable by placing two units on adjacent hexes and watching combat resolve.
+**Phase 3: Combat** — engagement, damage, disengagement, death on hex grid. Testable by placing two units on adjacent hexes and watching combat resolve. **[COMPLETE]**
 
-**Phase 4: Economy** — resource generation from occupied hexes, unit production at general. Testable by watching resources accumulate and new units spawn.
+**Phase 4: Economy** — resource generation from occupied hexes, unit production at general. Testable by watching resources accumulate and new units spawn. **[COMPLETE]**
 
-**Phase 5: Vision + Observation** — 3-hex vision, fog of war, observation struct for agents. Testable via ASCII fog-of-war views.
+**Phase 5: Vision + Observation** — 3-hex vision, fog of war, observation struct for agents. Testable via ASCII fog-of-war views. **[COMPLETE]**
 
-**Phase 6: Basic agent** — a simple agent that works with the V2 hex directive system. Probably a "spread and conquer" heuristic: produce units, send them toward high-value terrain, engage enemies when advantageous.
+**Phase 6: Basic agent** — a simple agent that works with the V2 hex directive system. Probably a "spread and conquer" heuristic: produce units, send them toward high-value terrain, engage enemies when advantageous. **[COMPLETE]**
 
-**Phase 7: Web integration** — V2 endpoints on the web server, spectator WebSocket stream, hex frontend rendering of terrain/units/vision.
+**Phase 7: Web integration** — V2 endpoints on the web server, spectator WebSocket stream, hex frontend rendering of terrain/units/vision. **[COMPLETE]**
 
-**Phase 8: ASCII + analysis** — rich hex ASCII representation for AI analysis, region summaries, multi-layer views.
+**Phase 8: ASCII + analysis** — rich hex ASCII representation for AI analysis, region summaries, multi-layer views. **[IN PROGRESS — basic ASCII exists, rich analysis TBD]**
 
 ---
 
@@ -573,9 +573,9 @@ These will need playtesting and adjustment:
 | `RESOURCE_RATE` | 0.1 | Resources per tick per terrain_value unit. A unit on terrain 2.0 generates 0.2/tick. |
 | `UNIT_COST` | 10.0 | Resources to produce one unit. |
 | `INITIAL_STRENGTH` | 100.0 | Starting strength of a new unit. |
-| `DAMAGE_RATE` | 0.01 | Damage per tick = opponent_strength * this. Two 100-strength units each deal 1.0/tick. |
-| `DISENGAGE_PENALTY` | 0.5 | Fraction of current strength lost on disengage. |
-| `BASE_MOVE_COOLDOWN` | 3 | Ticks between moves on basic terrain. |
+| `DAMAGE_RATE` | 0.05 | Damage per tick = opponent_strength * this. Two 100-strength units each deal 5.0/tick. |
+| `DISENGAGE_PENALTY` | 0.3 | Fraction of current strength lost on disengage. |
+| `BASE_MOVE_COOLDOWN` | 2 | Ticks between moves on basic terrain. |
 | `TERRAIN_MOVE_PENALTY` | 0.5 | Additional cooldown per terrain_value unit. |
 | `VISION_RADIUS` | 3 | Hex distance. 37 hexes visible per unit. |
 | `INITIAL_UNITS` | 5 | Units spawned near general at game start. |
