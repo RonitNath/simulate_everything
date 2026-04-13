@@ -298,10 +298,12 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `POST /api/v2/rr/resume` | HTTP | Resume V2 RR loop |
 | `POST /api/v2/rr/reset` | HTTP | Reset current game and start a new one |
 | `POST /api/v2/rr/flags` | HTTP | Flag a viewed RR tick for capture (`{"game_number": N, "tick": N}`) |
+| `POST /api/v2/rr/capture/start` | HTTP | Start a segment capture at the viewed RR tick (`{"game_number": N, "tick": N}`) |
+| `POST /api/v2/rr/capture/stop` | HTTP | Stop and persist the active segment capture at the viewed RR tick (`{"game_number": N, "tick": N}`) |
 | `GET /api/v2/rr/reviews` | HTTP | List pending and saved RR review bundles |
 | `GET /api/v2/rr/reviews/{id}` | HTTP | Load one saved RR review bundle |
 | `DELETE /api/v2/rr/reviews/{id}` | HTTP | Delete one saved RR review bundle |
-| `GET /api/v2/rr/status` | HTTP | RR state including current tick and capturable review range |
+| `GET /api/v2/rr/status` | HTTP | RR state including current tick, capturable review range, and any active segment capture |
 
 ### V2 WebSocket Protocol
 
@@ -332,7 +334,7 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 - Supports pause / resume / reset without process restart.
 - Spectators receive a broadcast from a `tokio::broadcast::Sender<V2ServerToSpectator>` (capacity 512).
 - The RR loop maintains a full current snapshot for reconnect catchup even though live traffic is delta-based.
-- RR also keeps a rolling server-side review buffer (600 ticks by default) plus lightweight diagnostic logs for the active game. Only flagged windows are persisted to disk under `GENERALS_V2_RR_REVIEW_DIR`.
+- RR also keeps a rolling server-side review buffer (600 ticks by default) plus lightweight diagnostic logs for the active game. Review capture supports one-shot point flags and one active start/stop segment capture per game. Saved review bundles record `kind`, `start_tick`, `stop_tick`, `flagged_ticks`, `range_start`, `range_end`, and `complete`; unfinished segment captures are persisted as partial bundles if the game resets or ends before stop.
 
 ### V2 Agents
 

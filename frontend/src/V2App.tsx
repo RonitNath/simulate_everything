@@ -4,6 +4,7 @@ import type { RenderLayer } from "./HexBoard";
 import Nav from "./Nav";
 import type {
   BoardFrameData,
+  BoardHexHover,
   BoardStaticData,
   V2Frame,
   V2GameInfo,
@@ -11,6 +12,7 @@ import type {
   V2ReviewBundle,
   V2ReviewBundleSummary,
   V2ReviewListResponse,
+  V2ReviewStatus,
   V2Settlement,
   V2SpectatorPlayer,
   V2UnitSnapshot,
@@ -71,7 +73,7 @@ function applyHexChanges(
 ): { territory: (number | null)[]; roads: number[]; settlements: V2Settlement[] } {
   const territory = (frame.territory ?? frame.hex_ownership ?? []).slice();
   const roads = (frame.roads ?? frame.road_levels ?? []).slice();
-  const settlementMap = new Map((frame.settlements ?? []).map((s) => [`${s.q},${s.r}`, s] as const));
+  const settlementMap = new Map<string, V2Settlement>((frame.settlements ?? []).map((s) => [`${s.q},${s.r}`, s] as const));
 
   for (const hex of hexChanges) {
     territory[hex.index] = hex.owner;
@@ -113,12 +115,14 @@ const V2App: Component = () => {
   const [liveTick, setLiveTick] = createSignal<number | null>(null);
   const [capturableStartTick, setCapturableStartTick] = createSignal<number | null>(null);
   const [capturableEndTick, setCapturableEndTick] = createSignal<number | null>(null);
+  const [activeCapture, setActiveCapture] = createSignal<V2ReviewBundleSummary | null>(null);
   const [pendingReviews, setPendingReviews] = createSignal<V2ReviewBundleSummary[]>([]);
   const [savedReviews, setSavedReviews] = createSignal<V2ReviewBundleSummary[]>([]);
   const [reviewBundle, setReviewBundle] = createSignal<V2ReviewBundle | null>(null);
   const [reviewFrameIdx, setReviewFrameIdx] = createSignal(0);
   const [reviewLoading, setReviewLoading] = createSignal(false);
   const [flagError, setFlagError] = createSignal<string | null>(null);
+  const [hoveredHex, setHoveredHex] = createSignal<BoardHexHover | null>(null);
   const [layers, setLayers] = createSignal<Set<RenderLayer>>(
     new Set(["territory", "roads", "settlements", "convoys"]),
   );
@@ -146,12 +150,13 @@ const V2App: Component = () => {
 
   const refreshStatus = async () => {
     const res = await fetch("/api/v2/rr/status");
-    const data = await res.json();
+    const data: V2ReviewStatus = await res.json();
     setServerPaused(!!data.paused);
     if (data.tick_ms != null) setTickMs(data.tick_ms);
     setLiveTick(data.current_tick ?? null);
     setCapturableStartTick(data.capturable_start_tick ?? null);
     setCapturableEndTick(data.capturable_end_tick ?? null);
+    setActiveCapture(data.active_capture ?? null);
   };
 
   const refreshReviews = async () => {
@@ -208,6 +213,40 @@ const V2App: Component = () => {
   const leaveReview = () => {
     setReviewBundle(null);
     setReviewFrameIdx(0);
+  };
+
+  const startCapture = async () => {
+    const frame = currentLiveFrame();
+    if (!frame) return;
+    setFlagError(null);
+    const res = await fetch("/api/v2/rr/capture/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_number: gameNumber(), tick: frame.tick }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setFlagError(data.error ?? "Failed to start capture");
+      return;
+    }
+    await Promise.all([refreshStatus(), refreshReviews()]);
+  };
+
+  const stopCapture = async () => {
+    const frame = currentLiveFrame();
+    if (!frame) return;
+    setFlagError(null);
+    const res = await fetch("/api/v2/rr/capture/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_number: gameNumber(), tick: frame.tick }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setFlagError(data.error ?? "Failed to stop capture");
+      return;
+    }
+    await Promise.all([refreshStatus(), refreshReviews()]);
   };
 
   createEffect(() => {
@@ -499,6 +538,77 @@ const V2App: Component = () => {
     return frame.tick >= start && frame.tick <= end;
   });
 
+  const scrubberOverlayData = createMemo(() => {
+    if (reviewBundle()) return null;
+    const liveFrames = frames();
+    if (liveFrames.length === 0) return null;
+    const minTick = liveFrames[0].tick;
+    const maxTick = liveFrames[liveFrames.length - 1].tick;
+    if (maxTick <= minTick) return null;
+    const position = (tick: number) => ((Math.min(maxTick, Math.max(minTick, tick)) - minTick) / (maxTick - minTick)) * 100;
+    const toBand = (startTick: number, endTick: number, kind: string, opacity: number) => ({
+      left: position(startTick),
+      width: Math.max(0.6, position(endTick) - position(startTick)),
+      kind,
+      opacity,
+    });
+    const savedBands = savedReviews().map((review) => toBand(review.range_start, review.range_end, review.kind, 0.42));
+    const active = activeCapture();
+    const pendingBands = pendingReviews()
+      .filter((review) => review.id !== active?.id)
+      .map((review) => toBand(review.range_start, review.range_end, `pending-${review.kind}`, 0.28));
+    const markers = [...savedReviews(), ...pendingReviews()]
+      .filter((review) => review.kind === "point")
+      .flatMap((review) => review.flagged_ticks.map((tick) => ({ left: position(tick), saved: review.saved })));
+    return {
+      capturable: capturableStartTick() != null && capturableEndTick() != null
+        ? toBand(capturableStartTick()!, capturableEndTick()!, "capturable", 0.2)
+        : null,
+      savedBands,
+      pendingBands,
+      activeBand: active ? toBand(active.range_start, active.range_end, "active", 0.55) : null,
+      markers,
+    };
+  });
+
+  const currentReviewAnomalyKeys = createMemo(() => {
+    const review = reviewBundle();
+    const frame = currentReviewFrame();
+    if (!review || !frame) return new Set<string>();
+    return new Set(
+      review.anomalies
+        .filter((anomaly) => anomaly.tick === frame.tick)
+        .map((anomaly) => `${anomaly.q},${anomaly.r}`),
+    );
+  });
+
+  const hoverInspector = createMemo(() => {
+    const hover = hoveredHex();
+    const frame = currentFrameData();
+    const board = staticData();
+    if (!hover || !frame || !board) return null;
+    const settlement = frame.settlements.find((entry) => entry.q === hover.q && entry.r === hover.r) ?? null;
+    const units = currentFrame()!.units.filter((unit) => unit.q === hover.q && unit.r === hover.r);
+    const anomaly = reviewBundle() ? currentReviewAnomalyKeys().has(`${hover.q},${hover.r}`) : false;
+    return {
+      offset: { col: hover.col, row: hover.row },
+      axial: { q: hover.q, r: hover.r },
+      biome: board.biomes[hover.index] ?? "grassland",
+      terrain: board.terrain[hover.index] ?? 0,
+      material: board.materialMap[hover.index] ?? 0,
+      height: board.heights[hover.index] ?? 0,
+      moisture: board.moistures[hover.index] ?? 0,
+      river: board.rivers[hover.index] ?? false,
+      territoryOwner: frame.territory[hover.index] ?? null,
+      stockpileOwner: frame.stockpileOwners[hover.index] ?? null,
+      roadLevel: frame.roads[hover.index] ?? 0,
+      depot: frame.depots[hover.index] ?? false,
+      settlement,
+      units,
+      anomaly,
+    };
+  });
+
   const levelLabel = (level: number) => ["starving", "low", "ok", "surplus"][level] ?? "unknown";
 
   const toggleLayer = (layer: RenderLayer) => {
@@ -601,22 +711,93 @@ const V2App: Component = () => {
           >
             &#x23ED;
           </button>
-          <input
-            type="range"
-            class={styles.slider}
-            min={0}
-            max={maxIdx()}
-            value={reviewBundle() ? reviewFrameIdx() : viewIdx()}
-            onInput={(e) => {
-              const next = parseInt(e.currentTarget.value);
-              setPlaying(false);
-              if (reviewBundle()) setReviewFrameIdx(next);
-              else {
-                setFollowing(false);
-                setViewIdx(next);
-              }
-            }}
-          />
+          <div class={styles.scrubberWrap}>
+            <Show when={scrubberOverlayData()}>
+              {(overlay) => (
+                <div class={styles.scrubberOverlay}>
+                  <Show when={overlay().capturable}>
+                    {(band) => (
+                      <div
+                        class={styles.scrubberBand}
+                        style={{
+                          left: `${band().left}%`,
+                          width: `${band().width}%`,
+                          background: "rgba(255,255,255,0.12)",
+                        }}
+                      />
+                    )}
+                  </Show>
+                  <For each={overlay().savedBands}>
+                    {(band) => (
+                      <div
+                        class={styles.scrubberBand}
+                        style={{
+                          left: `${band.left}%`,
+                          width: `${band.width}%`,
+                          background: band.kind === "segment" ? "rgba(74,158,255,0.32)" : "rgba(255,180,90,0.3)",
+                          opacity: `${band.opacity}`,
+                        }}
+                      />
+                    )}
+                  </For>
+                  <For each={overlay().pendingBands}>
+                    {(band) => (
+                      <div
+                        class={styles.scrubberBand}
+                        style={{
+                          left: `${band.left}%`,
+                          width: `${band.width}%`,
+                          background: band.kind.includes("segment") ? "rgba(74,158,255,0.2)" : "rgba(255,180,90,0.2)",
+                          opacity: `${band.opacity}`,
+                          border: "1px dashed rgba(255,255,255,0.3)",
+                        }}
+                      />
+                    )}
+                  </For>
+                  <Show when={overlay().activeBand}>
+                    {(band) => (
+                      <div
+                        class={styles.scrubberBand}
+                        style={{
+                          left: `${band().left}%`,
+                          width: `${band().width}%`,
+                          background: "rgba(80,255,180,0.45)",
+                          "box-shadow": "0 0 10px rgba(80,255,180,0.25)",
+                        }}
+                      />
+                    )}
+                  </Show>
+                  <For each={overlay().markers}>
+                    {(marker) => (
+                      <div
+                        class={styles.scrubberMarker}
+                        style={{
+                          left: `${marker.left}%`,
+                          background: marker.saved ? "rgba(255,220,120,0.9)" : "rgba(255,255,255,0.85)",
+                        }}
+                      />
+                    )}
+                  </For>
+                </div>
+              )}
+            </Show>
+            <input
+              type="range"
+              class={styles.slider}
+              min={0}
+              max={maxIdx()}
+              value={reviewBundle() ? reviewFrameIdx() : viewIdx()}
+              onInput={(e) => {
+                const next = parseInt(e.currentTarget.value);
+                setPlaying(false);
+                if (reviewBundle()) setReviewFrameIdx(next);
+                else {
+                  setFollowing(false);
+                  setViewIdx(next);
+                }
+              }}
+            />
+          </div>
         </div>
 
         <div class={styles.speedControls}>
@@ -629,6 +810,24 @@ const V2App: Component = () => {
               title={viewedTickCapturable() ? "Flag the currently viewed tick" : "Viewed tick is outside the server capture window"}
             >
               Flag Tick
+            </button>
+            <button
+              class={styles.btnPrimary}
+              style={{ padding: "2px 8px", "font-size": "10px", background: "rgba(80,255,180,0.85)" }}
+              disabled={!viewedTickCapturable() || activeCapture() !== null}
+              onClick={() => void startCapture()}
+              title={activeCapture() ? "A segment capture is already active" : "Start segment capture at the currently viewed tick"}
+            >
+              Start Capture
+            </button>
+            <button
+              class={styles.btnPrimary}
+              style={{ padding: "2px 8px", "font-size": "10px", background: "rgba(255,150,80,0.85)" }}
+              disabled={!viewedTickCapturable() || activeCapture() == null}
+              onClick={() => void stopCapture()}
+              title={activeCapture() ? "Stop the active segment capture at the currently viewed tick" : "No active capture"}
+            >
+              Stop Capture
             </button>
           </Show>
           <Show when={reviewBundle()}>
@@ -713,6 +912,9 @@ const V2App: Component = () => {
               <span>Capturable: {capturableStartTick() ?? "?"}..{capturableEndTick() ?? "?"}</span>
               <span>Viewed: {currentLiveFrame()?.tick ?? "?"}</span>
               <span>{viewedTickCapturable() ? "capturable" : "not capturable"}</span>
+              <Show when={activeCapture()}>
+                {(capture) => <span>Active capture: {capture().start_tick}..{capture().range_end}</span>}
+              </Show>
               <Show when={flagError()}>
                 {(err) => <span style={{ color: "#ff8080", "margin-left": "auto" }}>{err()}</span>}
               </Show>
@@ -728,6 +930,8 @@ const V2App: Component = () => {
               numPlayers={gameInfo()!.num_players}
               showNumbers={showNumbers()}
               layers={layers()}
+              hoveredHex={hoveredHex()}
+              onHoverHex={setHoveredHex}
             />
           </div>
 
@@ -744,7 +948,7 @@ const V2App: Component = () => {
                 <For each={pendingReviews()}>
                   {(review) => (
                     <div class={styles.statRow}>
-                      Pending {review.range_start}-{review.range_end} ({review.flagged_ticks.join(",")})
+                      Pending {review.kind} {review.range_start}-{review.range_end}
                     </div>
                   )}
                 </For>
@@ -752,7 +956,7 @@ const V2App: Component = () => {
                   {(review) => (
                     <div class={styles.statRow} style={{ display: "flex", gap: "6px", "align-items": "center" }}>
                       <span style={{ flex: 1, overflow: "hidden", "text-overflow": "ellipsis" }}>
-                        {review.range_start}-{review.range_end} ({review.flagged_ticks.join(",")})
+                        {review.kind} {review.range_start}-{review.range_end}
                       </span>
                       <button class={styles.btn} style={{ padding: "1px 4px", "font-size": "10px" }} onClick={() => void openReview(review.id)}>
                         Open
@@ -783,6 +987,29 @@ const V2App: Component = () => {
                   </div>
                 )}
               </For>
+              <div class={styles.playerPanel}>
+                <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+                  <span>Hover Inspector</span>
+                  <span class={styles.statValue}>{hoverInspector() ? `${hoverInspector()!.offset.col},${hoverInspector()!.offset.row}` : "none"}</span>
+                </div>
+                <Show
+                  when={hoverInspector()}
+                  fallback={<div class={styles.statRow}>Hover a hex to inspect it.</div>}
+                >
+                  {(info) => (
+                    <>
+                      <div class={styles.statRow}>Offset ({info().offset.col},{info().offset.row}) | Axial ({info().axial.q},{info().axial.r})</div>
+                      <div class={styles.statRow}>{info().biome} | h {info().height.toFixed(2)} | m {info().moisture.toFixed(2)} | river {info().river ? "yes" : "no"}</div>
+                      <div class={styles.statRow}>Terrain {info().terrain.toFixed(2)} | Material {info().material.toFixed(2)} | Road {info().roadLevel} | Depot {info().depot ? "yes" : "no"}</div>
+                      <div class={styles.statRow}>Territory {info().territoryOwner ?? "none"} | Stockpile {info().stockpileOwner ?? "none"} | Settlement {info().settlement ? `${info().settlement?.settlement_type ?? "Village"} p${info().settlement?.owner ?? "?"}` : "none"}</div>
+                      <div class={styles.statRow}>Units: {info().units.length === 0 ? "none" : info().units.map((unit) => `#${unit.id}/p${unit.owner}/${unit.strength.toFixed(1)}${unit.engaged ? " engaged" : ""}`).join(" | ")}</div>
+                      <Show when={reviewBundle()}>
+                        <div class={styles.statRow}>Review anomaly: {info().anomaly ? "yes" : "no"}</div>
+                      </Show>
+                    </>
+                  )}
+                </Show>
+              </div>
             </div>
 
             <div class={styles.legend}>

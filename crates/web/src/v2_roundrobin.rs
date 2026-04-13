@@ -139,6 +139,33 @@ impl V2RoundRobin {
         self.review.lock().await.flag_tick(game_number, tick)
     }
 
+    pub async fn start_capture(
+        &self,
+        game_number: u64,
+        tick: u64,
+    ) -> Result<FlagResponse, String> {
+        self.review.lock().await.start_capture(game_number, tick)
+    }
+
+    pub async fn stop_capture(
+        &self,
+        game_number: u64,
+        tick: u64,
+    ) -> Result<FlagResponse, String> {
+        let bundle = self.review.lock().await.stop_capture(game_number, tick)?;
+        let summary = bundle.summary.clone();
+        self.review_store
+            .save_bundle(bundle)
+            .await
+            .map_err(|err| err.to_string())?;
+        let status = self.review_status().await;
+        Ok(FlagResponse {
+            summary,
+            capturable_start_tick: status.capturable_start_tick.unwrap_or(tick),
+            capturable_end_tick: status.capturable_end_tick.unwrap_or(tick),
+        })
+    }
+
     pub async fn list_reviews(&self) -> std::io::Result<ReviewListResponse> {
         let pending = self.review.lock().await.pending_summaries();
         let saved = self.review_store.list_summaries().await?;

@@ -1,5 +1,5 @@
 import { Component, createMemo } from "solid-js";
-import type { BoardFrameData, BoardStaticData, BiomeName, V2UnitSnapshot } from "./v2types";
+import type { BoardFrameData, BoardHexHover, BoardStaticData, BiomeName, V2UnitSnapshot } from "./v2types";
 
 export type RenderLayer =
   | "territory" | "roads" | "depots" | "settlements"
@@ -111,6 +111,11 @@ interface RoadSegment {
 }
 
 interface CellRender {
+  index: number;
+  q: number;
+  r: number;
+  row: number;
+  col: number;
   cx: number;
   cy: number;
   basePts: string;
@@ -176,6 +181,8 @@ interface HexBoardProps {
   numPlayers: number;
   showNumbers?: boolean;
   layers?: Set<RenderLayer>;
+  hoveredHex?: BoardHexHover | null;
+  onHoverHex?: (hex: BoardHexHover | null) => void;
 }
 
 const HexBoard: Component<HexBoardProps> = (props) => {
@@ -414,6 +421,11 @@ const HexBoard: Component<HexBoardProps> = (props) => {
         }
 
         cells.push({
+          index: idx,
+          q: col - Math.floor((row - (row & 1)) / 2),
+          r: row,
+          row,
+          col,
           cx,
           cy,
           basePts,
@@ -512,7 +524,38 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       height={svgHeight()}
       viewBox={`${-hexSize()} ${-hexSize()} ${svgWidth()} ${svgHeight()}`}
       style={{ "max-width": "100%", "max-height": "100%" }}
+      onMouseLeave={() => props.onHoverHex?.(null)}
     >
+      {Array.from({ length: props.staticData.width }, (_, col) => {
+        const [cx] = hexCenter(0, col, renderData().s);
+        return (
+          <text
+            x={cx}
+            y={-renderData().s * 0.45}
+            text-anchor="middle"
+            font-size={`${Math.max(8, renderData().s * 0.3)}`}
+            fill="rgba(255,255,255,0.55)"
+            style={{ "pointer-events": "none" }}
+          >
+            {col}
+          </text>
+        );
+      })}
+      {Array.from({ length: props.staticData.height }, (_, row) => {
+        const [, cy] = hexCenter(row, 0, renderData().s);
+        return (
+          <text
+            x={-renderData().s * 0.7}
+            y={cy + renderData().s * 0.1}
+            text-anchor="middle"
+            font-size={`${Math.max(8, renderData().s * 0.3)}`}
+            fill="rgba(255,255,255,0.55)"
+            style={{ "pointer-events": "none" }}
+          >
+            {row}
+          </text>
+        );
+      })}
       {renderData().ghostRenders.map((ghost) => (
         <g opacity={ghost.opacity}>
           <polygon
@@ -540,6 +583,7 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       {renderData().cells.map((cell) => {
         const s = renderData().s;
         const showNums = props.showNumbers;
+        const hovered = props.hoveredHex?.index === cell.index;
         return (
           <>
             <polygon
@@ -676,6 +720,31 @@ const HexBoard: Component<HexBoardProps> = (props) => {
                 stroke-linecap="round"
               />
             ))}
+            {hovered && (
+              <polygon
+                points={cell.basePts}
+                fill="none"
+                stroke="rgba(255,255,255,0.9)"
+                stroke-width={Math.max(1.5, s * 0.08)}
+                style={{ "pointer-events": "none" }}
+              />
+            )}
+            <polygon
+              points={cell.basePts}
+              fill="rgba(0,0,0,0)"
+              stroke="none"
+              onMouseEnter={() =>
+                props.onHoverHex?.({
+                  index: cell.index,
+                  q: cell.q,
+                  r: cell.r,
+                  row: cell.row,
+                  col: cell.col,
+                  centerX: cell.cx,
+                  centerY: cell.cy,
+                })
+              }
+            />
           </>
         );
       })}
