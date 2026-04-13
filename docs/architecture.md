@@ -130,6 +130,44 @@ generals bench --profile --seeds 202 --agents pressure,swarm
 generals bench --converge --agents pressure,swarm --ci 0.02 --max-seeds 10000
 ```
 
+## Replay Binary (`simulate_everything_replay`)
+
+Separate binary for generating and serving publishable game replays. No WebSocket handlers, no live game state, no agent subprocess spawning — minimal attack surface.
+
+### Export mode (default)
+```bash
+simulate_everything_replay --seeds 100-110 --agents pressure,swarm --out ./replays
+```
+Generates self-contained HTML files with embedded vanilla JS viewer (no build toolchain needed). Each file includes the full replay data and a complete playback UI matching the main frontend's look and feel.
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--seeds` | `42` | Seed range or comma-separated list |
+| `--agents a,b` | `pressure,swarm` | Agent names |
+| `--turns N` | 500 | Max turns per game |
+| `--size WxH` | auto | Board dimensions |
+| `--out DIR` | `./replays` | Output directory |
+| `--format json\|html` | `html` | Output format |
+| `--title TEXT` | `simulate_everything Replay` | Title for HTML pages |
+
+Multiple seeds produce an `index.html` linking to each replay.
+
+### Serve mode
+```bash
+simulate_everything_replay serve --dir ./replays --port 8080
+```
+Minimal static file server (Axum + tower-http ServeDir). No dynamic routes. Requires `serve` feature (enabled by default).
+
+### Integration with bench harness
+The bench harness identifies interesting games by score. Export those specific seeds:
+```bash
+# Bench finds seed 202 is interesting (upset, comeback)
+generals bench --seeds 100-249 --agents pressure,swarm --top 5
+# Export that replay for publishing
+simulate_everything_replay --seeds 202 --agents pressure,swarm --out ./replays
+```
+
 ## Frontend
 
 SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on deploy.

@@ -22,7 +22,8 @@ New agents must be added to the appropriate pool(s).
 ```
 crates/engine/   — game rules, state, agents, mapgen, replay, scoreboard
 crates/web/      — Axum server: routes, WebSocket handlers, lobby, round-robin loop
-crates/cli/      — CLI runner
+crates/cli/      — CLI runner (sim + bench harness)
+crates/replay/   — standalone replay exporter + static file server (no WS, no live state)
 frontend/        — SolidJS + Vite frontend
 docs/            — detailed documentation
 ```
@@ -41,6 +42,7 @@ docs/            — detailed documentation
 | Live lobby + game loop | `crates/web/src/lobby.rs` |
 | All HTTP routes | `crates/web/src/main.rs` |
 | WS protocol types | `crates/web/src/protocol.rs` |
+| Replay exporter + viewer | `crates/replay/src/main.rs` |
 | Systemd service | `simulate_everything.service` |
 | Python agent example | `examples/agent.py` |
 
