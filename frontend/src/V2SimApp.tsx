@@ -15,7 +15,7 @@ const V2SimApp: Component = () => {
   const [frameIdx, setFrameIdx] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
   const [speed, setSpeed] = createSignal(10);
-  const [showStrength, setShowStrength] = createSignal(false);
+  const [showNumbers, setShowStrength] = createSignal(false);
 
   // Config
   const [seed, setSeed] = createSignal("");
@@ -225,10 +225,10 @@ const V2SimApp: Component = () => {
           <span style={{ "margin-left": "auto" }} />
           <button
             class={styles.btn}
-            style={{ "font-size": "10px", padding: "2px 6px", "font-weight": showStrength() ? "bold" : "normal" }}
+            style={{ "font-size": "10px", padding: "2px 6px", "font-weight": showNumbers() ? "bold" : "normal" }}
             onClick={() => setShowStrength((s) => !s)}
           >
-            {showStrength() ? "#" : "#\u0338"}
+            {showNumbers() ? "#" : "#\u0338"}
           </button>
         </div>
 
@@ -239,7 +239,7 @@ const V2SimApp: Component = () => {
               units={frame()!.units}
               width={replay()!.width}
               height={replay()!.height}
-              showStrength={showStrength()}
+              showNumbers={showNumbers()}
             />
           </div>
 

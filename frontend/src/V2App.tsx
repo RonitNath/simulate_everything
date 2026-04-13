@@ -29,7 +29,7 @@ const V2App: Component = () => {
   const [viewIdx, setViewIdx] = createSignal(0);
   const [following, setFollowing] = createSignal(true);
   const [tickMs, setTickMs] = createSignal(250);
-  const [showStrength, setShowStrength] = createSignal(false);
+  const [showNumbers, setShowStrength] = createSignal(false);
 
   let wsRef: WebSocket | null = null;
 
@@ -218,10 +218,10 @@ const V2App: Component = () => {
           <span style={{ "margin-left": "auto" }} />
           <button
             class={styles.btn}
-            style={{ "font-size": "10px", padding: "2px 6px", "font-weight": showStrength() ? "bold" : "normal" }}
+            style={{ "font-size": "10px", padding: "2px 6px", "font-weight": showNumbers() ? "bold" : "normal" }}
             onClick={() => setShowStrength((s) => !s)}
           >
-            {showStrength() ? "#" : "#\u0338"}
+            {showNumbers() ? "#" : "#\u0338"}
           </button>
         </div>
 
@@ -232,7 +232,7 @@ const V2App: Component = () => {
               units={currentFrame()!.units}
               width={gameInfo()!.width}
               height={gameInfo()!.height}
-              showStrength={showStrength()}
+              showNumbers={showNumbers()}
             />
           </div>
 
