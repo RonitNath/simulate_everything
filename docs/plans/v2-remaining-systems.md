@@ -313,7 +313,7 @@ The agent sees total food/material as aggregates in the observation, but they're
 
 ### Convoy raiding
 
-Convoys are non-combat entities. If an enemy unit moves to a convoy's hex, the convoy is captured (cargo transferred to enemy hex stockpile, convoy removed). No engagement needed — convoys can't fight.
+Convoys are non-combat entities. If an enemy unit ends on the convoy's hex, or is on an adjacent hex when the convoy moves through, the convoy is captured (cargo transferred to the raiding unit's hex stockpile, convoy removed). No engagement needed — convoys can't fight.
 
 This creates a natural raiding mechanic: fast units sent behind enemy lines to intercept supply convoys.
 

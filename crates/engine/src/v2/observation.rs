@@ -85,7 +85,13 @@ pub fn observe(state: &GameState, player_id: u8) -> Observation {
         .grid
         .iter()
         .zip(visible.iter())
-        .map(|(cell, &is_visible)| if is_visible { cell.material_stockpile } else { 0.0 })
+        .map(|(cell, &is_visible)| {
+            if is_visible {
+                cell.material_stockpile
+            } else {
+                0.0
+            }
+        })
         .collect();
     let stockpile_owner: Vec<Option<u8>> = state
         .grid
@@ -266,26 +272,21 @@ mod tests {
     }
 
     #[test]
-    fn observe_hides_unseen_enemy_stockpiles() {
+    fn observe_hides_stockpiles_outside_vision() {
         let mut state = test_state();
-        let enemy_hex = state
-            .units
+        let visible = vision::visible_cells(&state, 0);
+        let hidden_idx = visible
             .iter()
-            .find(|u| u.owner == 1 && u.is_general)
-            .unwrap()
-            .pos;
-        let cell = state.cell_at_mut(enemy_hex).unwrap();
-        cell.stockpile_owner = Some(1);
-        cell.food_stockpile = 12.0;
-        cell.material_stockpile = 9.0;
+            .position(|cell_visible| !cell_visible)
+            .expect("expected at least one hidden cell");
+
+        state.grid[hidden_idx].food_stockpile = 12.0;
+        state.grid[hidden_idx].material_stockpile = 7.0;
+        state.grid[hidden_idx].stockpile_owner = Some(1);
 
         let obs = observe(&state, 0);
-        let (row, col) = axial_to_offset(enemy_hex);
-        let idx = row as usize * state.width + col as usize;
-
-        assert!(!obs.visible[idx]);
-        assert_eq!(obs.food_stockpiles[idx], 0.0);
-        assert_eq!(obs.material_stockpiles[idx], 0.0);
-        assert_eq!(obs.stockpile_owner[idx], None);
+        assert_eq!(obs.food_stockpiles[hidden_idx], 0.0);
+        assert_eq!(obs.material_stockpiles[hidden_idx], 0.0);
+        assert_eq!(obs.stockpile_owner[hidden_idx], None);
     }
 }

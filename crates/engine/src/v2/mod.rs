@@ -12,6 +12,9 @@ pub mod sim;
 pub mod state;
 pub mod vision;
 
+#[cfg(test)]
+mod integration_tests;
+
 pub const FOOD_RATE: f32 = 0.1;
 pub const MATERIAL_RATE: f32 = 0.05;
 pub const UNIT_FOOD_COST: f32 = 8.0;

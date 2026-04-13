@@ -533,7 +533,7 @@ crates/engine/src/
         ascii.rs        — V2 hex ASCII representation
         pathfinding.rs  — BFS/A* on hex grid
         runner.rs       — game runner with agent polling loop
-        replay.rs       — frame capture and game recording
+        replay.rs       — frame capture and state-faithful replay reconstruction
 ```
 
 V1 continues to work (the TV keeps showing games). V2 is developed alongside and gets its own web endpoints and frontend mode when ready.

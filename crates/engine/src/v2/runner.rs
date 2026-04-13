@@ -5,6 +5,28 @@ use super::observation;
 use super::sim;
 use super::state::GameState;
 
+pub(crate) fn advance_game_tick(state: &mut GameState, agents: &mut [Box<dyn Agent>]) {
+    if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+        for (player_id, agent) in agents.iter_mut().enumerate() {
+            let pid = player_id as u8;
+            if !state.players.iter().any(|p| p.id == pid && p.alive) {
+                continue;
+            }
+            let obs = observation::observe(state, pid);
+            let directives = agent.act(&obs);
+            tracing::trace!(
+                tick = state.tick,
+                player = pid,
+                directives = directives.len(),
+                "agent polled"
+            );
+            directive::apply_directives(state, pid, &directives);
+        }
+    }
+
+    sim::tick(state);
+}
+
 pub fn run_loop<F>(
     state: &mut GameState,
     agents: &mut [Box<dyn Agent>],
@@ -57,7 +79,6 @@ pub fn run_game(
     );
 
     run_loop(state, agents, tick_limit, |state| {
-        // Periodic summary at debug level
         if state.tick % 50 == 0 {
             for p in &state.players {
                 if !p.alive {
@@ -131,7 +152,6 @@ mod tests {
         });
         let mut agents: Vec<Box<dyn Agent>> =
             vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
-        // Either a winner or a draw — no panics either way
         let _result = run_game(&mut state, &mut agents, 5000);
     }
 
