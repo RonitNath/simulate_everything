@@ -1,5 +1,6 @@
 use serde::Serialize;
-use simulate_everything_engine::v2::replay::UnitSnapshot;
+use simulate_everything_engine::v2::replay::{ConvoySnapshot, PopulationSnapshot, UnitSnapshot};
+use simulate_everything_engine::v2::sim::ScoreBreakdown;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -12,6 +13,11 @@ pub enum V2ServerToSpectator {
         material_map: Vec<f32>,
         num_players: u8,
         agent_names: Vec<String>,
+        heights: Vec<f32>,
+        moistures: Vec<f32>,
+        biomes: Vec<String>,
+        rivers: Vec<bool>,
+        game_number: u64,
     },
     #[serde(rename = "v2_frame")]
     Frame {
@@ -20,6 +26,12 @@ pub enum V2ServerToSpectator {
         player_food: Vec<f32>,
         player_material: Vec<f32>,
         alive: Vec<bool>,
+        territory: Vec<Option<u8>>,
+        roads: Vec<u8>,
+        depots: Vec<bool>,
+        population: Vec<PopulationSnapshot>,
+        convoys: Vec<ConvoySnapshot>,
+        scores: Vec<ScoreBreakdown>,
     },
     #[serde(rename = "v2_game_end")]
     GameEnd {

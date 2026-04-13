@@ -4,9 +4,9 @@ use simulate_everything_engine::v2::{
     directive,
     mapgen::{self, MapConfig},
     observation,
-    replay::UnitSnapshot,
+    replay::{ConvoySnapshot, PopulationSnapshot, UnitSnapshot},
     sim,
-    state::GameState,
+    state::{Biome, GameState},
     TIMEOUT_TICKS,
 };
 use std::sync::Arc;
@@ -146,15 +146,24 @@ impl V2RoundRobin {
 
             let mut agents: Vec<Box<dyn Agent>> =
                 vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
-            let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
+            let agent_names: Vec<String> = agents
+                .iter()
+                .enumerate()
+                .map(|(i, a)| format!("{} #{}", a.name(), i + 1))
+                .collect();
 
             let mut state = mapgen::generate(&config);
             let terrain: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
             let material_map: Vec<f32> = state.grid.iter().map(|c| c.material_value).collect();
+            let heights: Vec<f32> = state.grid.iter().map(|c| c.height).collect();
+            let moistures: Vec<f32> = state.grid.iter().map(|c| c.moisture).collect();
+            let biomes: Vec<String> = state.grid.iter().map(|c| biome_to_str(c.biome)).collect();
+            let rivers: Vec<bool> = state.grid.iter().map(|c| c.is_river).collect();
+            let game_number = seed - 999;
 
             info!(
                 "V2 RR game #{}: {} (seed={})",
-                seed - 999,
+                game_number,
                 agent_names.join(", "),
                 seed
             );
@@ -166,6 +175,11 @@ impl V2RoundRobin {
                 material_map: material_map.clone(),
                 num_players: config.num_players,
                 agent_names: agent_names.clone(),
+                heights,
+                moistures,
+                biomes,
+                rivers,
+                game_number,
             })
             .await;
 
@@ -232,6 +246,19 @@ impl V2RoundRobin {
     }
 }
 
+fn biome_to_str(b: Biome) -> String {
+    match b {
+        Biome::Desert => "desert",
+        Biome::Steppe => "steppe",
+        Biome::Grassland => "grassland",
+        Biome::Forest => "forest",
+        Biome::Jungle => "jungle",
+        Biome::Tundra => "tundra",
+        Biome::Mountain => "mountain",
+    }
+    .to_string()
+}
+
 fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
     state
         .units
@@ -251,6 +278,43 @@ fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
         .collect()
 }
 
+fn snapshot_population(state: &GameState) -> Vec<PopulationSnapshot> {
+    state
+        .population
+        .iter()
+        .map(|p| PopulationSnapshot {
+            id: p.id,
+            owner: p.owner,
+            q: p.hex.q,
+            r: p.hex.r,
+            count: p.count,
+            role: p.role,
+            training: p.training,
+        })
+        .collect()
+}
+
+fn snapshot_convoys(state: &GameState) -> Vec<ConvoySnapshot> {
+    state
+        .convoys
+        .iter()
+        .map(|c| ConvoySnapshot {
+            id: c.id,
+            owner: c.owner,
+            q: c.pos.q,
+            r: c.pos.r,
+            origin: c.origin,
+            destination: c.destination,
+            cargo_type: c.cargo_type,
+            cargo_amount: c.cargo_amount,
+            capacity: c.capacity,
+            speed: c.speed,
+            move_cooldown: c.move_cooldown,
+            returning: c.returning,
+        })
+        .collect()
+}
+
 fn make_frame(state: &GameState) -> V2ServerToSpectator {
     V2ServerToSpectator::Frame {
         tick: state.tick,
@@ -258,5 +322,11 @@ fn make_frame(state: &GameState) -> V2ServerToSpectator {
         player_food: state.players.iter().map(|p| p.food).collect(),
         player_material: state.players.iter().map(|p| p.material).collect(),
         alive: state.players.iter().map(|p| p.alive).collect(),
+        territory: state.grid.iter().map(|c| c.stockpile_owner).collect(),
+        roads: state.grid.iter().map(|c| c.road_level).collect(),
+        depots: state.grid.iter().map(|c| c.has_depot).collect(),
+        population: snapshot_population(state),
+        convoys: snapshot_convoys(state),
+        scores: sim::score_players(state),
     }
 }
