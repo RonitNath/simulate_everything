@@ -107,10 +107,17 @@ pub fn main(args: &[String]) {
     })
     .expect("failed to set Ctrl+C handler");
 
-    if ascii_mode {
+    // --snapshots 0,25,50,100,200,500 dumps ASCII at those ticks
+    let snapshot_ticks: Option<Vec<u64>> = flag_value(args, "--snapshots").map(|s| {
+        s.split(',')
+            .map(|x| x.trim().parse::<u64>().expect("bad snapshot tick"))
+            .collect()
+    });
+
+    if ascii_mode || snapshot_ticks.is_some() {
         let matchup = &matchups[0];
         let seed = seeds[0];
-        run_ascii_game(seed, matchup, max_ticks, (w, h), num_players);
+        run_ascii_game(seed, matchup, max_ticks, (w, h), num_players, snapshot_ticks.as_deref());
         return;
     }
 
@@ -461,6 +468,7 @@ fn run_ascii_game(
     max_ticks: u64,
     (w, h): (usize, usize),
     num_players: u8,
+    snapshot_ticks: Option<&[u64]>,
 ) {
     use simulate_everything_engine::v2::ascii;
 
@@ -477,6 +485,25 @@ fn run_ascii_game(
         .collect();
 
     while state.tick < max_ticks && !sim::is_over(&state) {
+        // Render snapshot before this tick's agent poll.
+        if let Some(ticks) = snapshot_ticks {
+            if ticks.contains(&state.tick) {
+                println!("{}", ascii::render_state(&state));
+                // Also print per-player unit details.
+                for u in &state.units {
+                    let engaged = if u.engagements.is_empty() { "" } else { " ENGAGED" };
+                    let dest = u.destination.map(|d| format!(" -> ({},{})", d.q, d.r)).unwrap_or_default();
+                    eprintln!(
+                        "  P{} unit {} str={:.0} at ({},{}){}{}{}",
+                        u.owner, u.id, u.strength, u.pos.q, u.pos.r,
+                        if u.is_general { " [GEN]" } else { "" },
+                        dest, engaged,
+                    );
+                }
+                eprintln!();
+            }
+        }
+
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let p = pid as u8;
@@ -491,6 +518,7 @@ fn run_ascii_game(
         sim::tick(&mut state);
     }
 
+    // Always render final state.
     println!("{}", ascii::render_state(&state));
 
     let winner = sim::winner(&state);
