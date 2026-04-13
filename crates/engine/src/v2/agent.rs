@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use super::directive::Directive;
 use super::hex::{self, Axial};
 use super::observation::{
-    InitialObservation, Observation, ObservationDelta, UnitInfo, apply_delta_to_observation,
-    materialize_observation,
+    InitialObservation, NewScoutedHex, Observation, ObservationDelta, UnitInfo,
+    apply_delta_to_observation, materialize_observation,
 };
 use super::state::{CargoType, Role, UnitKey};
 use super::{
@@ -20,9 +20,41 @@ pub trait Agent: Send {
     fn reset(&mut self) {}
 }
 
+fn seed_observation(obs: &InitialObservation) -> Observation {
+    materialize_observation(
+        obs,
+        &ObservationDelta {
+            tick: 0,
+            player: obs.player,
+            newly_scouted: obs
+                .scouted
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| **s)
+                .map(|(index, _)| NewScoutedHex {
+                    index,
+                    terrain: obs.terrain[index],
+                    material: obs.material_map[index],
+                    height: obs.height_map[index],
+                })
+                .collect(),
+            hex_changes: Vec::new(),
+            own_units: Vec::new(),
+            visible_enemies: Vec::new(),
+            own_population: Vec::new(),
+            visible_enemy_population: Vec::new(),
+            own_convoys: Vec::new(),
+            visible_enemy_convoys: Vec::new(),
+            visible: vec![false; obs.width * obs.height],
+            total_food: 0.0,
+            total_material: 0.0,
+        },
+    )
+}
+
 /// All known V2 agent names.
 pub fn builtin_agent_names() -> &'static [&'static str] {
-    &["spread", "striker"]
+    &["spread", "striker", "turtle"]
 }
 
 /// Create a V2 agent by name. Returns None for unknown names.
@@ -30,6 +62,7 @@ pub fn agent_by_name(name: &str) -> Option<Box<dyn Agent>> {
     match name {
         "spread" => Some(Box::new(SpreadAgent::new())),
         "striker" => Some(Box::new(StrikerAgent::new())),
+        "turtle" => Some(Box::new(TurtleAgent::new())),
         _ => None,
     }
 }
@@ -46,7 +79,7 @@ impl SpreadAgent {
             cached_observation: None,
         }
     }
-
+    
     fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
         let mut directives = Vec::new();
         let general = obs.own_units.iter().find(|u| u.is_general);
@@ -154,35 +187,7 @@ impl Agent for SpreadAgent {
     }
 
     fn init(&mut self, obs: &InitialObservation) {
-        self.cached_observation = Some(materialize_observation(
-            obs,
-            &ObservationDelta {
-                tick: 0,
-                player: obs.player,
-                newly_scouted: obs
-                    .scouted
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| **s)
-                    .map(|(index, _)| super::observation::NewScoutedHex {
-                        index,
-                        terrain: obs.terrain[index],
-                        material: obs.material_map[index],
-                        height: obs.height_map[index],
-                    })
-                    .collect(),
-                hex_changes: Vec::new(),
-                own_units: Vec::new(),
-                visible_enemies: Vec::new(),
-                own_population: Vec::new(),
-                visible_enemy_population: Vec::new(),
-                own_convoys: Vec::new(),
-                visible_enemy_convoys: Vec::new(),
-                visible: vec![false; obs.width * obs.height],
-                total_food: 0.0,
-                total_material: 0.0,
-            },
-        ));
+        self.cached_observation = Some(seed_observation(obs));
     }
 
     fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive> {
@@ -202,12 +207,19 @@ impl Agent for SpreadAgent {
 }
 
 // ---------------------------------------------------------------------------
-// StrikerAgent: economy-first, then decisive general assassination
+// StrikerAgent: economy-first, scout, rally, then decisive general kill
 // ---------------------------------------------------------------------------
+
+const STRIKER_RALLY_DISTANCE: i32 = 6;
+const STRIKER_MIN_RALLY_SIZE: usize = 4;
+const STRIKER_EXPAND_THRESHOLD: usize = 15;
+const STRIKER_RETREAT_THRESHOLD: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum StrikerMode {
     Expand,
+    Scout,
+    Rally,
     Strike,
 }
 
@@ -215,6 +227,7 @@ pub struct StrikerAgent {
     mode: StrikerMode,
     last_known_enemy_general: Option<Axial>,
     pending_settlement: Option<Axial>,
+    rally_point: Option<Axial>,
     cached_observation: Option<Observation>,
 }
 
@@ -224,37 +237,116 @@ impl StrikerAgent {
             mode: StrikerMode::Expand,
             last_known_enemy_general: None,
             pending_settlement: None,
+            rally_point: None,
             cached_observation: None,
         }
     }
-    
+
+    fn strike_target(&self, obs: &Observation) -> Option<Axial> {
+        if let Some(eg) = obs.visible_enemies.iter().find(|e| e.is_general) {
+            return Some(Axial::new(eg.q, eg.r));
+        }
+        if let Some(lk) = self.last_known_enemy_general {
+            return Some(lk);
+        }
+        enemy_direction(obs)
+    }
+
+    fn compute_rally_point(&self, obs: &Observation, target: Axial) -> Option<Axial> {
+        let own_gen = obs.own_units.iter().find(|u| u.is_general)?;
+        let gen_pos = Axial::new(own_gen.q, own_gen.r);
+        let (gr, gc) = hex::axial_to_offset(gen_pos);
+        let (tr, tc) = hex::axial_to_offset(target);
+        // Rally point: RALLY_DISTANCE hexes from target, toward own general.
+        let dist = hex::distance(gen_pos, target) as f32;
+        if dist < 1.0 {
+            return Some(gen_pos);
+        }
+        let ratio = STRIKER_RALLY_DISTANCE as f32 / dist;
+        let rr = tr + ((gr - tr) as f32 * ratio) as i32;
+        let rc = tc + ((gc - tc) as f32 * ratio) as i32;
+        Some(hex::offset_to_axial(
+            rr.clamp(1, obs.height as i32 - 2),
+            rc.clamp(1, obs.width as i32 - 2),
+        ))
+    }
+
+    fn count_units_near(&self, obs: &Observation, point: Axial, radius: i32) -> usize {
+        obs.own_units
+            .iter()
+            .filter(|u| !u.is_general && u.engagements.is_empty())
+            .filter(|u| hex::distance(Axial::new(u.q, u.r), point) <= radius)
+            .count()
+    }
+
     fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
         let mut directives = Vec::new();
         let general = obs.own_units.iter().find(|u| u.is_general);
         let general_hex = general.map(|u| Axial::new(u.q, u.r));
         let settlements = settlement_hexes(obs);
 
-        // Update intel: track enemy general.
+        // Update intel.
         if let Some(eg) = obs.visible_enemies.iter().find(|e| e.is_general) {
             self.last_known_enemy_general = Some(Axial::new(eg.q, eg.r));
         }
 
-        // Mode transitions.
         let non_general_count = obs.own_units.iter().filter(|u| !u.is_general).count();
+        let enemy_general_known = self.last_known_enemy_general.is_some();
+        let strike_target = self.strike_target(obs);
+
+        // Mode transitions.
         match self.mode {
             StrikerMode::Expand => {
-                if non_general_count > 12 || self.last_known_enemy_general.is_some() {
-                    self.mode = StrikerMode::Strike;
+                if non_general_count >= STRIKER_EXPAND_THRESHOLD {
+                    if enemy_general_known {
+                        // We know where they are — rally then strike.
+                        self.mode = StrikerMode::Rally;
+                        self.rally_point = strike_target
+                            .and_then(|t| self.compute_rally_point(obs, t));
+                    } else {
+                        // Need to find enemy general first.
+                        self.mode = StrikerMode::Scout;
+                    }
+                }
+            }
+            StrikerMode::Scout => {
+                if enemy_general_known {
+                    self.mode = StrikerMode::Rally;
+                    self.rally_point = strike_target
+                        .and_then(|t| self.compute_rally_point(obs, t));
+                }
+                if non_general_count < STRIKER_RETREAT_THRESHOLD {
+                    self.mode = StrikerMode::Expand;
+                }
+            }
+            StrikerMode::Rally => {
+                // Check if enough units gathered at rally point.
+                if let Some(rp) = self.rally_point {
+                    let gathered = self.count_units_near(obs, rp, 3);
+                    if gathered >= STRIKER_MIN_RALLY_SIZE {
+                        self.mode = StrikerMode::Strike;
+                    }
+                }
+                // Lost too many units, retreat.
+                if non_general_count < STRIKER_RETREAT_THRESHOLD {
+                    self.mode = StrikerMode::Expand;
+                    self.rally_point = None;
                 }
             }
             StrikerMode::Strike => {
-                if non_general_count < 6 {
+                // Adaptive: if strike force is getting destroyed, pull back.
+                if non_general_count < STRIKER_RETREAT_THRESHOLD {
                     self.mode = StrikerMode::Expand;
+                    self.rally_point = None;
+                }
+                // Update rally point to follow moving target.
+                if let Some(t) = strike_target {
+                    self.rally_point = self.compute_rally_point(obs, t);
                 }
             }
         }
 
-        // Pending settlement convoy dispatch (same as SpreadAgent).
+        // Pending settlement convoy dispatch.
         if let Some(target) = self.pending_settlement {
             if settlement_hexes(obs).contains(&target) {
                 self.pending_settlement = None;
@@ -271,7 +363,7 @@ impl StrikerAgent {
             }
         }
 
-        // Economy: identical to SpreadAgent.
+        // Economy (shared with SpreadAgent).
         if let Some(hex) = general_hex {
             manage_settlement_infrastructure(obs, hex, &mut directives);
             manage_settlement_population(obs, hex, &mut directives);
@@ -288,7 +380,7 @@ impl StrikerAgent {
             }
         }
 
-        // Unit movement: mode-dependent.
+        // Unit movement.
         let enemy_by_pos: HashMap<(i32, i32), &UnitInfo> = obs
             .visible_enemies
             .iter()
@@ -298,9 +390,7 @@ impl StrikerAgent {
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
         let enemy_target = enemy_direction(obs);
 
-        // Classify units in Strike mode.
-        let strike_target = self.strike_target(obs);
-        let guard_ids = if self.mode == StrikerMode::Strike {
+        let guard_ids = if self.mode != StrikerMode::Expand {
             if let Some(g) = general {
                 assign_guards(obs, g, 2)
             } else {
@@ -315,21 +405,19 @@ impl StrikerAgent {
                 continue;
             }
 
-            // General behavior.
+            // General: flee from threats, otherwise stay put in combat modes.
             if unit.is_general {
-                if self.mode == StrikerMode::Strike {
-                    // Flee from nearby enemies.
-                    let gen_pos = Axial::new(unit.q, unit.r);
+                let gen_pos = Axial::new(unit.q, unit.r);
+                if self.mode != StrikerMode::Expand {
                     let threat = obs
                         .visible_enemies
                         .iter()
                         .filter(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)) <= 3)
                         .min_by_key(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)));
                     if let Some(enemy) = threat {
-                        let enemy_pos = Axial::new(enemy.q, enemy.r);
-                        // Flee: move opposite direction from enemy.
+                        let ep = Axial::new(enemy.q, enemy.r);
                         let (gr, gc) = hex::axial_to_offset(gen_pos);
-                        let (er, ec) = hex::axial_to_offset(enemy_pos);
+                        let (er, ec) = hex::axial_to_offset(ep);
                         let flee_r = (gr + (gr - er)).clamp(1, obs.height as i32 - 2);
                         let flee_c = (gc + (gc - ec)).clamp(1, obs.width as i32 - 2);
                         directives.push(Directive::Move {
@@ -338,24 +426,17 @@ impl StrikerAgent {
                             r: hex::offset_to_axial(flee_r, flee_c).r,
                         });
                     }
-                    // Otherwise: stay put.
-                } else {
-                    // Expand mode: same as SpreadAgent.
-                    if obs.own_units.len() > 10 {
-                        let gen_pos = Axial::new(unit.q, unit.r);
-                        if hex::distance(gen_pos, map_center) > 5 {
-                            directives.push(Directive::Move {
-                                unit_id: unit.id,
-                                q: map_center.q,
-                                r: map_center.r,
-                            });
-                        }
-                    }
+                } else if obs.own_units.len() > 10 && hex::distance(gen_pos, map_center) > 5 {
+                    directives.push(Directive::Move {
+                        unit_id: unit.id,
+                        q: map_center.q,
+                        r: map_center.r,
+                    });
                 }
                 continue;
             }
 
-            // Try to engage adjacent enemies (all modes).
+            // Engage adjacent enemies.
             if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy) {
                 directives.push(Directive::Engage {
                     unit_id: unit.id,
@@ -364,24 +445,44 @@ impl StrikerAgent {
                 continue;
             }
 
-            // Movement by role.
-            let dest = if self.mode == StrikerMode::Strike {
-                if guard_ids.contains(&unit.id) {
-                    // Guard: path to general.
-                    general_hex
-                } else if is_strike_unit(unit.id) {
-                    // Strike force: path to enemy general.
-                    strike_target
-                } else {
-                    // Defense: spread behavior.
-                    pick_lane_destination(unit, obs, enemy_target)
+            // Movement by mode and role.
+            let dest = match self.mode {
+                StrikerMode::Expand => {
+                    if obs.own_units.len() <= 8 {
+                        pick_sector_destination(unit, idx, obs, map_center)
+                    } else {
+                        pick_lane_destination(unit, obs, enemy_target)
+                    }
                 }
-            } else {
-                // Expand mode: same as SpreadAgent.
-                if obs.own_units.len() <= 8 {
-                    pick_sector_destination(unit, idx, obs, map_center)
-                } else {
-                    pick_lane_destination(unit, obs, enemy_target)
+                StrikerMode::Scout => {
+                    if guard_ids.contains(&unit.id) {
+                        general_hex
+                    } else {
+                        // Send one scout toward inferred enemy direction,
+                        // rest continue expanding.
+                        let is_scout = unit.id.data().as_ffi() % 7 == 0;
+                        if is_scout {
+                            enemy_direction(obs)
+                        } else {
+                            pick_lane_destination(unit, obs, enemy_target)
+                        }
+                    }
+                }
+                StrikerMode::Rally => {
+                    if guard_ids.contains(&unit.id) {
+                        general_hex
+                    } else {
+                        // Everyone rallies to the rally point.
+                        self.rally_point
+                    }
+                }
+                StrikerMode::Strike => {
+                    if guard_ids.contains(&unit.id) {
+                        general_hex
+                    } else {
+                        // All non-guard units go for the kill.
+                        strike_target
+                    }
                 }
             };
 
@@ -413,35 +514,7 @@ impl Agent for StrikerAgent {
     }
 
     fn init(&mut self, obs: &InitialObservation) {
-        self.cached_observation = Some(materialize_observation(
-            obs,
-            &ObservationDelta {
-                tick: 0,
-                player: obs.player,
-                newly_scouted: obs
-                    .scouted
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| **s)
-                    .map(|(index, _)| super::observation::NewScoutedHex {
-                        index,
-                        terrain: obs.terrain[index],
-                        material: obs.material_map[index],
-                        height: obs.height_map[index],
-                    })
-                    .collect(),
-                hex_changes: Vec::new(),
-                own_units: Vec::new(),
-                visible_enemies: Vec::new(),
-                own_population: Vec::new(),
-                visible_enemy_population: Vec::new(),
-                own_convoys: Vec::new(),
-                visible_enemy_convoys: Vec::new(),
-                visible: vec![false; obs.width * obs.height],
-                total_food: 0.0,
-                total_material: 0.0,
-            },
-        ));
+        self.cached_observation = Some(seed_observation(obs));
     }
 
     fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive> {
@@ -458,27 +531,233 @@ impl Agent for StrikerAgent {
         self.mode = StrikerMode::Expand;
         self.last_known_enemy_general = None;
         self.pending_settlement = None;
+        self.rally_point = None;
         self.cached_observation = None;
     }
 }
 
-impl StrikerAgent {
-    fn strike_target(&self, obs: &Observation) -> Option<Axial> {
-        // 1. Visible enemy general.
-        if let Some(eg) = obs.visible_enemies.iter().find(|e| e.is_general) {
-            return Some(Axial::new(eg.q, eg.r));
+// ---------------------------------------------------------------------------
+// TurtleAgent: maximize settlements + population, overwhelm late game
+// ---------------------------------------------------------------------------
+
+pub struct TurtleAgent {
+    pending_settlement: Option<Axial>,
+    cached_observation: Option<Observation>,
+}
+
+impl TurtleAgent {
+    pub fn new() -> Self {
+        Self {
+            pending_settlement: None,
+            cached_observation: None,
         }
-        // 2. Last known position.
-        if let Some(lk) = self.last_known_enemy_general {
-            return Some(lk);
+    }
+
+    fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
+        let mut directives = Vec::new();
+        let general = obs.own_units.iter().find(|u| u.is_general);
+        let general_hex = general.map(|u| Axial::new(u.q, u.r));
+        let settlements = settlement_hexes(obs);
+
+        if let Some(target) = self.pending_settlement {
+            if settlement_hexes(obs).contains(&target) {
+                self.pending_settlement = None;
+            } else if let Some(convoy) = obs
+                .own_convoys
+                .iter()
+                .find(|c| c.cargo_type == CargoType::Settlers)
+            {
+                directives.push(Directive::SendConvoy {
+                    convoy_id: convoy.id,
+                    dest_q: target.q,
+                    dest_r: target.r,
+                });
+            }
         }
-        // 3. Inferred direction.
-        enemy_direction(obs)
+
+        if let Some(hex) = general_hex {
+            manage_settlement_infrastructure(obs, hex, &mut directives);
+            manage_turtle_population(obs, hex, &mut directives);
+            produce_units_at_general(obs, hex, &mut directives);
+
+            let general_population = total_population_on_hex(obs, hex);
+            if self.pending_settlement.is_none()
+                && !obs
+                    .own_convoys
+                    .iter()
+                    .any(|c| c.cargo_type == CargoType::Settlers)
+                && general_population >= SETTLEMENT_THRESHOLD + SETTLER_CONVOY_SIZE
+            {
+                if let Some(target) = pick_settlement_target(obs, &settlements, hex) {
+                    directives.push(Directive::LoadConvoy {
+                        hex_q: hex.q,
+                        hex_r: hex.r,
+                        cargo_type: CargoType::Settlers,
+                        amount: SETTLER_CONVOY_SIZE as f32,
+                    });
+                    self.pending_settlement = Some(target);
+                }
+            }
+
+            load_surplus_convoys(obs, general_hex, &mut directives);
+
+            for &settlement in &settlements {
+                if Some(settlement) == general_hex {
+                    continue;
+                }
+                manage_settlement_infrastructure(obs, settlement, &mut directives);
+                manage_turtle_population(obs, settlement, &mut directives);
+            }
+        }
+
+        let enemy_by_pos: HashMap<(i32, i32), &UnitInfo> = obs
+            .visible_enemies
+            .iter()
+            .map(|e| ((e.q, e.r), e))
+            .collect();
+        let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
+        let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
+        let enemy_target = enemy_direction(obs);
+
+        for (idx, unit) in obs.own_units.iter().enumerate() {
+            if !unit.engagements.is_empty() {
+                continue;
+            }
+
+            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy) {
+                directives.push(Directive::Engage {
+                    unit_id: unit.id,
+                    target_id: target,
+                });
+                continue;
+            }
+
+            if unit.is_general {
+                let gen_pos = Axial::new(unit.q, unit.r);
+                let threat = obs
+                    .visible_enemies
+                    .iter()
+                    .filter(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)) <= 4)
+                    .min_by_key(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)));
+                if let Some(enemy) = threat {
+                    let enemy_pos = Axial::new(enemy.q, enemy.r);
+                    let (gr, gc) = hex::axial_to_offset(gen_pos);
+                    let (er, ec) = hex::axial_to_offset(enemy_pos);
+                    let flee_r = (gr + (gr - er)).clamp(1, obs.height as i32 - 2);
+                    let flee_c = (gc + (gc - ec)).clamp(1, obs.width as i32 - 2);
+                    directives.push(Directive::Move {
+                        unit_id: unit.id,
+                        q: hex::offset_to_axial(flee_r, flee_c).q,
+                        r: hex::offset_to_axial(flee_r, flee_c).r,
+                    });
+                }
+                continue;
+            }
+
+            let dest = if obs.own_units.len() <= 8 {
+                pick_sector_destination(unit, idx, obs, map_center)
+            } else if obs.own_units.len() >= 20 {
+                pick_lane_destination(unit, obs, enemy_target)
+            } else {
+                let unit_pos = Axial::new(unit.q, unit.r);
+                let nearby_threat = obs
+                    .visible_enemies
+                    .iter()
+                    .filter(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)) <= 6)
+                    .min_by_key(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)));
+                if let Some(enemy) = nearby_threat {
+                    Some(Axial::new(enemy.q, enemy.r))
+                } else {
+                    let best_settlement = settlements
+                        .iter()
+                        .min_by_key(|s| hex::distance(unit_pos, **s));
+                    best_settlement.map(|s| {
+                        let angle = (unit.id.data().as_ffi() as f32 * 1.3) % std::f32::consts::TAU;
+                        let (sr, sc) = hex::axial_to_offset(*s);
+                        let pr = sr + (angle.sin() * 3.0) as i32;
+                        let pc = sc + (angle.cos() * 3.0) as i32;
+                        hex::offset_to_axial(
+                            pr.clamp(1, obs.height as i32 - 2),
+                            pc.clamp(1, obs.width as i32 - 2),
+                        )
+                    })
+                }
+            };
+
+            if let Some(d) = dest {
+                directives.push(Directive::Move {
+                    unit_id: unit.id,
+                    q: d.q,
+                    r: d.r,
+                });
+                if let Some(idx) = cell_index(obs, Axial::new(unit.q, unit.r)) {
+                    if obs.stockpile_owner[idx] == Some(obs.player) && obs.road_levels[idx] == 0 {
+                        directives.push(Directive::BuildRoad {
+                            hex_q: unit.q,
+                            hex_r: unit.r,
+                            level: 1,
+                        });
+                    }
+                }
+            }
+        }
+
+        directives
     }
 }
 
-fn is_strike_unit(unit_id: UnitKey) -> bool {
-    (unit_id.data().as_ffi() % 5) < 3 // 60% of units
+impl Agent for TurtleAgent {
+    fn name(&self) -> &str {
+        "turtle"
+    }
+
+    fn init(&mut self, obs: &InitialObservation) {
+        self.cached_observation = Some(seed_observation(obs));
+    }
+
+    fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive> {
+        let Some(mut obs) = self.cached_observation.take() else {
+            return Vec::new();
+        };
+        apply_delta_to_observation(&mut obs, delta);
+        let directives = self.decide(&obs);
+        self.cached_observation = Some(obs);
+        directives
+    }
+
+    fn reset(&mut self) {
+        self.pending_settlement = None;
+        self.cached_observation = None;
+    }
+}
+
+/// Turtle population management: 60% farmers, 15% workers for maximum growth.
+fn manage_turtle_population(obs: &Observation, hex: Axial, directives: &mut Vec<Directive>) {
+    let (idle, farmers, workers, _trained, _untrained) = population_mix(obs, hex);
+    let total = idle + farmers + workers + _trained + _untrained;
+    let target_farmers = (total as f32 * 0.60).ceil() as u16;
+    let target_workers = (total as f32 * 0.15).ceil() as u16;
+
+    if farmers < target_farmers && idle > 0 {
+        directives.push(Directive::AssignRole {
+            hex_q: hex.q,
+            hex_r: hex.r,
+            role: Role::Farmer,
+            count: (target_farmers - farmers).min(5),
+        });
+    } else if workers < target_workers && idle > 0 {
+        directives.push(Directive::AssignRole {
+            hex_q: hex.q,
+            hex_r: hex.r,
+            role: Role::Worker,
+            count: (target_workers - workers).min(2),
+        });
+    } else if idle > 0 {
+        directives.push(Directive::TrainSoldier {
+            hex_q: hex.q,
+            hex_r: hex.r,
+        });
+    }
 }
 
 fn assign_guards(obs: &Observation, general: &UnitInfo, count: usize) -> Vec<UnitKey> {
@@ -676,19 +955,14 @@ fn settlement_hexes(obs: &Observation) -> Vec<Axial> {
     let mut settlements = Vec::new();
     for pop in &obs.own_population {
         let hex = Axial::new(pop.q, pop.r);
-        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex)
-        {
+        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex) {
             settlements.push(hex);
         }
     }
     settlements
 }
 
-fn pick_settlement_target(
-    obs: &Observation,
-    settlements: &[Axial],
-    origin: Axial,
-) -> Option<Axial> {
+fn pick_settlement_target(obs: &Observation, settlements: &[Axial], origin: Axial) -> Option<Axial> {
     let mut best: Option<(Axial, f32)> = None;
     for (idx, owner) in obs.stockpile_owner.iter().enumerate() {
         if *owner != Some(obs.player) {
@@ -861,18 +1135,17 @@ fn enemy_direction(obs: &Observation) -> Option<Axial> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v2::mapgen::{MapConfig, generate};
-    use crate::v2::observation::{ObservationSession, initial_observation, observe_delta};
+    use crate::v2::mapgen::{generate, MapConfig};
+    use crate::v2::observation::{initial_observation, observe_delta, ObservationSession};
 
     #[test]
     fn spread_agent_manages_population() {
-        let state = generate(&MapConfig {
+        let mut state = generate(&MapConfig {
             width: 20,
             height: 20,
             num_players: 2,
             seed: 42,
         });
-        let mut state = state;
         let mut agent = SpreadAgent::new();
         let init = initial_observation(&state, 0);
         agent.init(&init);
@@ -891,13 +1164,12 @@ mod tests {
 
     #[test]
     fn spread_agent_moves_idle_units() {
-        let state = generate(&MapConfig {
+        let mut state = generate(&MapConfig {
             width: 30,
             height: 30,
             num_players: 2,
             seed: 42,
         });
-        let mut state = state;
         let mut agent = SpreadAgent::new();
         let init = initial_observation(&state, 0);
         agent.init(&init);
