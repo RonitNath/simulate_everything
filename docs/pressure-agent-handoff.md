@@ -70,4 +70,4 @@ Pressure leads at midpoint then loses ground in 250+ turn games. The 25% frontie
 - `crates/engine/src/agent.rs` — `Agent` trait, `Observation` struct, expander/swarm for comparison
 - `crates/engine/src/game.rs` — game rules, `grow_armies()` for current growth model
 - `crates/engine/src/action.rs` — `Action`, `Direction` types
-- `CLAUDE.md` — server management, testing via simulator API
+- `docs/architecture.md` — routes, runtime configuration, simulator API, and WebSocket protocol
