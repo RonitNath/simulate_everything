@@ -2,14 +2,18 @@ use super::combat;
 use super::hex::{self, Axial};
 use super::pathfinding;
 use super::state::GameState;
-use super::{BASE_MOVE_COOLDOWN, RESOURCE_RATE, TERRAIN_MOVE_PENALTY};
+use super::{
+    BASE_MOVE_COOLDOWN, FOOD_RATE, MATERIAL_RATE, STARVATION_DAMAGE, TERRAIN_MOVE_PENALTY,
+    UPKEEP_PER_UNIT,
+};
 use std::collections::HashMap;
 
 /// Advance the game state by one tick.
 ///
-/// Order: resource generation → combat resolution → movement → cooldown decrement → cleanup → tick increment.
+/// Order: resource generation → upkeep → combat resolution → movement → cooldown decrement → cleanup → tick increment.
 pub fn tick(state: &mut GameState) {
     generate_resources(state);
+    consume_upkeep(state);
     combat::resolve_combat(state);
     move_units(state);
     decrement_cooldowns(state);
@@ -34,20 +38,60 @@ pub fn winner(state: &GameState) -> Option<u8> {
 }
 
 fn generate_resources(state: &mut GameState) {
-    let incomes: Vec<(u8, f32)> = state
+    let incomes: Vec<(u8, f32, f32)> = state
         .units
         .iter()
         .filter(|u| u.destination.is_none() && u.engagements.is_empty())
         .filter_map(|u| {
-            state
-                .cell_at(u.pos)
-                .map(|cell| (u.owner, cell.terrain_value * RESOURCE_RATE))
+            state.cell_at(u.pos).map(|cell| {
+                (
+                    u.owner,
+                    cell.terrain_value * FOOD_RATE,
+                    cell.material_value * MATERIAL_RATE,
+                )
+            })
         })
         .collect();
 
-    for (owner, income) in incomes {
+    for (owner, food_income, material_income) in incomes {
         if let Some(player) = state.players.iter_mut().find(|p| p.id == owner) {
-            player.resources += income;
+            player.food += food_income;
+            player.material += material_income;
+        }
+    }
+}
+
+fn consume_upkeep(state: &mut GameState) {
+    let unit_counts: HashMap<u8, usize> =
+        state.units.iter().fold(HashMap::new(), |mut counts, unit| {
+            *counts.entry(unit.owner).or_insert(0) += 1;
+            counts
+        });
+
+    let starving_players: Vec<u8> = state
+        .players
+        .iter_mut()
+        .filter(|p| p.alive)
+        .filter_map(|player| {
+            let upkeep = unit_counts.get(&player.id).copied().unwrap_or(0) as f32 * UPKEEP_PER_UNIT;
+            if upkeep <= 0.0 {
+                return None;
+            }
+            if player.food > upkeep {
+                player.food -= upkeep;
+                None
+            } else {
+                player.food = 0.0;
+                Some(player.id)
+            }
+        })
+        .collect();
+
+    for player_id in starving_players {
+        for unit in &mut state.units {
+            if unit.owner == player_id {
+                unit.strength -= STARVATION_DAMAGE;
+            }
         }
     }
 }
@@ -151,11 +195,7 @@ fn cleanup(state: &mut GameState) {
 /// Log stale engagements — units marked as engaged but with no valid adjacent enemy.
 /// This is a diagnostic to detect engagement state bugs.
 fn check_stale_engagements(state: &GameState) {
-    let unit_positions: HashMap<u32, Axial> = state
-        .units
-        .iter()
-        .map(|u| (u.id, u.pos))
-        .collect();
+    let unit_positions: HashMap<u32, Axial> = state.units.iter().map(|u| (u.id, u.pos)).collect();
 
     for u in &state.units {
         for eng in &u.engagements {
@@ -212,13 +252,48 @@ mod tests {
     #[test]
     fn stationary_units_generate_resources() {
         let mut state = test_state();
-        let initial_resources: Vec<f32> = state.players.iter().map(|p| p.resources).collect();
+        let initial_resources: Vec<(f32, f32)> =
+            state.players.iter().map(|p| (p.food, p.material)).collect();
         tick(&mut state);
         for (i, player) in state.players.iter().enumerate() {
             assert!(
-                player.resources > initial_resources[i],
-                "player {} resources didn't increase",
+                player.food > initial_resources[i].0,
+                "player {} food didn't increase",
                 player.id
+            );
+            assert!(
+                player.material > initial_resources[i].1,
+                "player {} material didn't increase",
+                player.id
+            );
+        }
+    }
+
+    #[test]
+    fn starvation_damages_units_when_food_runs_out() {
+        let mut state = test_state();
+        state.players[0].food = 0.0;
+        state.players[0].material = 0.0;
+        for unit in &mut state.units {
+            if unit.owner == 0 {
+                unit.destination = Some(offset_to_axial(0, 0));
+            }
+        }
+
+        let before: Vec<(u32, f32)> = state
+            .units
+            .iter()
+            .filter(|u| u.owner == 0)
+            .map(|u| (u.id, u.strength))
+            .collect();
+
+        tick(&mut state);
+
+        for (unit_id, old_strength) in before {
+            let unit = state.units.iter().find(|u| u.id == unit_id).unwrap();
+            assert!(
+                unit.strength < old_strength,
+                "unit {unit_id} should take starvation damage"
             );
         }
     }

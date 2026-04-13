@@ -4,19 +4,19 @@ This plan covers the designed-but-unbuilt V2 systems. These run on **Track B** (
 
 ## Current State
 
-The V2 engine has phases 1-7 complete:
+The V2 engine now has Phase 1 complete plus the earlier core systems:
 - Hex grid (axial coords, flat-top, even-r offset)
 - Continuous tick sim (10hz, movement cooldowns)
 - Entity units (strength 100→0, edge-based engagement, 1/sqrt(N) effectiveness)
-- Single-resource economy (stationary units generate `terrain_value * 0.1` per tick, 10 resources = 1 new unit)
+- Two-resource economy (stationary units generate food + material, units consume food upkeep, starvation damages strength)
 - 3-octave Perlin noise terrain (terrain_value 0.0-3.0)
 - Fog of war (3-hex vision radius)
 - SpreadAgent (placeholder heuristic)
 - Web integration (round-robin, WebSocket spectator, replay)
 
 Key files:
-- `crates/engine/src/v2/state.rs` — Cell (terrain_value only), Unit, Player (single `resources: f32`), GameState
-- `crates/engine/src/v2/sim.rs` — tick loop: generate_resources → resolve_combat → move_units → decrement_cooldowns → cleanup
+- `crates/engine/src/v2/state.rs` — Cell (food + material productivity), Unit, Player (food/material pools), GameState
+- `crates/engine/src/v2/sim.rs` — tick loop: generate_resources → consume_upkeep → resolve_combat → move_units → decrement_cooldowns → cleanup
 - `crates/engine/src/v2/directive.rs` — Move, Engage, DisengageEdge, DisengageAll, Produce, Pass
 - `crates/engine/src/v2/observation.rs` — Observation, UnitInfo
 - `crates/engine/src/v2/mapgen.rs` — Perlin noise, strategic value placement

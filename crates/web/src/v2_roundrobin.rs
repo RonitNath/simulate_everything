@@ -1,4 +1,5 @@
 use simulate_everything_engine::v2::{
+    AGENT_POLL_INTERVAL,
     agent::{Agent, SpreadAgent},
     directive,
     mapgen::{self, MapConfig},
@@ -6,10 +7,9 @@ use simulate_everything_engine::v2::{
     replay::UnitSnapshot,
     sim,
     state::GameState,
-    AGENT_POLL_INTERVAL,
 };
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, Notify, broadcast};
 use tracing::info;
 
@@ -112,7 +112,8 @@ impl V2RoundRobin {
     }
 
     pub async fn broadcast_config(&self, tick_ms: Option<u64>) {
-        self.broadcast(V2ServerToSpectator::Config { tick_ms }).await;
+        self.broadcast(V2ServerToSpectator::Config { tick_ms })
+            .await;
     }
 
     async fn wait_if_paused(&self) {
@@ -148,6 +149,7 @@ impl V2RoundRobin {
 
             let mut state = mapgen::generate(&config);
             let terrain: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
+            let material_map: Vec<f32> = state.grid.iter().map(|c| c.material_value).collect();
 
             info!(
                 "V2 RR game #{}: {} (seed={})",
@@ -160,6 +162,7 @@ impl V2RoundRobin {
                 width: state.width,
                 height: state.height,
                 terrain: terrain.clone(),
+                material_map: material_map.clone(),
                 num_players: config.num_players,
                 agent_names: agent_names.clone(),
             })
@@ -208,10 +211,7 @@ impl V2RoundRobin {
 
             if !aborted {
                 let winner = sim::winner(&state);
-                info!(
-                    "V2 RR game done: winner={:?}, ticks={}",
-                    winner, state.tick
-                );
+                info!("V2 RR game done: winner={:?}, ticks={}", winner, state.tick);
 
                 self.broadcast(V2ServerToSpectator::GameEnd {
                     winner,
@@ -250,7 +250,8 @@ fn make_frame(state: &GameState) -> V2ServerToSpectator {
     V2ServerToSpectator::Frame {
         tick: state.tick,
         units: snapshot_units(state),
-        player_resources: state.players.iter().map(|p| p.resources).collect(),
+        player_food: state.players.iter().map(|p| p.food).collect(),
+        player_material: state.players.iter().map(|p| p.material).collect(),
         alive: state.players.iter().map(|p| p.alive).collect(),
     }
 }

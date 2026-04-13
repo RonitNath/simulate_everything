@@ -20,9 +20,11 @@ pub struct Observation {
     pub tick: u64,
     pub player: u8,
     pub terrain: Vec<f32>,
+    pub material_map: Vec<f32>,
     pub width: usize,
     pub height: usize,
-    pub resources: f32,
+    pub food: f32,
+    pub material: f32,
     pub own_units: Vec<UnitInfo>,
     pub visible_enemies: Vec<UnitInfo>,
     pub visible: Vec<bool>,
@@ -68,22 +70,25 @@ pub fn observe(state: &GameState, player_id: u8) -> Observation {
         .map(unit_to_info)
         .collect();
 
-    let resources = state
+    let (food, material) = state
         .players
         .iter()
         .find(|p| p.id == player_id)
-        .map(|p| p.resources)
-        .unwrap_or(0.0);
+        .map(|p| (p.food, p.material))
+        .unwrap_or((0.0, 0.0));
 
     let terrain: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
+    let material_map: Vec<f32> = state.grid.iter().map(|c| c.material_value).collect();
 
     Observation {
         tick: state.tick,
         player: player_id,
         terrain,
+        material_map,
         width: state.width,
         height: state.height,
-        resources,
+        food,
+        material,
         own_units,
         visible_enemies,
         visible,
@@ -93,11 +98,16 @@ pub fn observe(state: &GameState, player_id: u8) -> Observation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v2::hex::{axial_to_offset, Axial};
-    use crate::v2::mapgen::{generate, MapConfig};
+    use crate::v2::hex::{Axial, axial_to_offset};
+    use crate::v2::mapgen::{MapConfig, generate};
 
     fn test_state() -> GameState {
-        generate(&MapConfig { width: 30, height: 30, num_players: 2, seed: 42 })
+        generate(&MapConfig {
+            width: 30,
+            height: 30,
+            num_players: 2,
+            seed: 42,
+        })
     }
 
     #[test]
@@ -135,24 +145,28 @@ mod tests {
         let state = test_state();
         let obs = observe(&state, 0);
         assert_eq!(obs.terrain.len(), state.width * state.height);
+        assert_eq!(obs.material_map.len(), state.width * state.height);
     }
 
     #[test]
     fn observe_resources_match() {
         let mut state = test_state();
-        state.players[0].resources = 42.5;
+        state.players[0].food = 42.5;
+        state.players[0].material = 13.25;
         let obs = observe(&state, 0);
-        assert!((obs.resources - 42.5).abs() < 0.01);
+        assert!((obs.food - 42.5).abs() < 0.01);
+        assert!((obs.material - 13.25).abs() < 0.01);
     }
 
     #[test]
     fn observe_does_not_reveal_enemy_resources() {
         // The Observation struct only contains the observing player's resources
         let mut state = test_state();
-        state.players[1].resources = 999.0;
+        state.players[1].food = 999.0;
+        state.players[1].material = 777.0;
         let obs = observe(&state, 0);
-        // obs.resources is player 0's resources, not player 1's
-        assert!((obs.resources - state.players[0].resources).abs() < 0.01);
+        assert!((obs.food - state.players[0].food).abs() < 0.01);
+        assert!((obs.material - state.players[0].material).abs() < 0.01);
     }
 
     #[test]

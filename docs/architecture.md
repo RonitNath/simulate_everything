@@ -204,15 +204,19 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | Time | Discrete turns | Continuous ticks (10 ticks/second target) |
 | Units | Army values per cell | Entity units with individual IDs and strength |
 | Combat | Instant capture on move | Edge-based engagement: units lock and drain each other over ticks |
-| Terrain | Mountains / cities / empty | Continuous terrain value per hex influencing movement cost |
+| Terrain | Mountains / cities / empty | Continuous food/material productivity per hex influencing economy and movement cost |
 | Map size | Variable | 30×30 default for RR |
 
 **Constants (from `crates/engine/src/v2/mod.rs`):**
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `RESOURCE_RATE` | 0.1 / tick | Resource income per player per tick |
-| `UNIT_COST` | 10.0 | Resources to produce one unit |
+| `FOOD_RATE` | 0.1 / tick | Food income per stationary, unengaged unit |
+| `MATERIAL_RATE` | 0.05 / tick | Material income per stationary, unengaged unit |
+| `UNIT_FOOD_COST` | 8.0 | Food cost to produce one unit |
+| `UNIT_MATERIAL_COST` | 5.0 | Material cost to produce one unit |
+| `UPKEEP_PER_UNIT` | 0.02 / tick | Food upkeep per unit |
+| `STARVATION_DAMAGE` | 0.5 | Strength lost per tick when upkeep cannot be paid |
 | `INITIAL_STRENGTH` | 100.0 | Starting strength for a new unit |
 | `DAMAGE_RATE` | 0.05 | Fraction of strength dealt per tick in combat |
 | `DISENGAGE_PENALTY` | 0.3 | Strength loss on breaking engagement |
@@ -228,7 +232,7 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | Module | Role |
 |--------|------|
 | `state` | `GameState`, `Unit`, `Player`, `HexCell` |
-| `sim` | Tick loop: resource accrual, movement, combat resolution, win condition |
+| `sim` | Tick loop: food/material accrual, upkeep/starvation, movement, combat resolution, win condition |
 | `combat` | Edge-based engagement: lock, damage, disengage |
 | `hex` | Axial coordinate math, neighbor enumeration, distance |
 | `mapgen` | Perlin terrain + player general placement |
@@ -264,8 +268,8 @@ All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crate
 
 | `type` | Fields | Description |
 |--------|--------|-------------|
-| `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. `terrain` is a flat array of per-hex terrain values (length = width × height). |
-| `v2_frame` | `tick: u64`, `units: Vec<UnitSnapshot>`, `player_resources: Vec<f32>`, `alive: Vec<bool>` | Sent every tick. Full unit list with positions, strength, and engagement state. |
+| `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. `terrain` and `material_map` are flat arrays of per-hex productivity values (length = width × height). |
+| `v2_frame` | `tick: u64`, `units: Vec<UnitSnapshot>`, `player_food: Vec<f32>`, `player_material: Vec<f32>`, `alive: Vec<bool>` | Sent every tick. Full unit list with positions, strength, engagement state, and per-player economy. |
 | `v2_game_end` | `winner: Option<u8>`, `tick: u64` | Sent when the game ends. `winner` is `null` on timeout. |
 | `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
 
@@ -303,7 +307,7 @@ Directives are accumulated and applied to the game state by `directive::apply_di
 
 - Early game: fans out from spawn toward map center in angular sectors (one sector per unit by index).
 - Late game: advances in 2–3 lanes toward the estimated enemy position.
-- Produces units continuously whenever resources allow (`resources / UNIT_COST` produces per poll).
+- Produces units continuously whenever both food and material allow.
 - Engages adjacent enemies when it has numerical advantage or ≥ 50% of the enemy's strength.
 - General moves toward map center once 10+ escorts are available.
 

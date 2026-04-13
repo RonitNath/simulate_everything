@@ -23,7 +23,8 @@ pub struct UnitSnapshot {
 pub struct Frame {
     pub tick: u64,
     pub units: Vec<UnitSnapshot>,
-    pub player_resources: Vec<f32>,
+    pub player_food: Vec<f32>,
+    pub player_material: Vec<f32>,
     pub alive: Vec<bool>,
 }
 
@@ -32,6 +33,7 @@ pub struct Replay {
     pub width: usize,
     pub height: usize,
     pub terrain: Vec<f32>,
+    pub material_map: Vec<f32>,
     pub num_players: usize,
     pub agent_names: Vec<String>,
     pub frames: Vec<Frame>,
@@ -58,7 +60,8 @@ fn capture_frame(state: &GameState) -> Frame {
     Frame {
         tick: state.tick,
         units: snapshot_units(state),
-        player_resources: state.players.iter().map(|p| p.resources).collect(),
+        player_food: state.players.iter().map(|p| p.food).collect(),
+        player_material: state.players.iter().map(|p| p.material).collect(),
         alive: state.players.iter().map(|p| p.alive).collect(),
     }
 }
@@ -76,6 +79,7 @@ pub fn record_game(
     let mut state = generate(config);
     let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
     let terrain: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
+    let material_map: Vec<f32> = state.grid.iter().map(|c| c.material_value).collect();
 
     let mut frames = vec![capture_frame(&state)];
 
@@ -108,6 +112,7 @@ pub fn record_game(
         width: state.width,
         height: state.height,
         terrain,
+        material_map,
         num_players: config.num_players as usize,
         agent_names,
         frames,
@@ -123,7 +128,11 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
     let grid: Vec<Cell> = replay
         .terrain
         .iter()
-        .map(|&v| Cell { terrain_value: v })
+        .zip(replay.material_map.iter())
+        .map(|(&terrain_value, &material_value)| Cell {
+            terrain_value,
+            material_value,
+        })
         .collect();
 
     let units: Vec<Unit> = frame
@@ -147,7 +156,8 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         .enumerate()
         .map(|(i, &alive)| Player {
             id: i as u8,
-            resources: frame.player_resources.get(i).copied().unwrap_or(0.0),
+            food: frame.player_food.get(i).copied().unwrap_or(0.0),
+            material: frame.player_material.get(i).copied().unwrap_or(0.0),
             general_id: units
                 .iter()
                 .find(|u| u.owner == i as u8 && u.is_general)
@@ -195,6 +205,7 @@ mod tests {
         assert_eq!(replay.height, 20);
         assert_eq!(replay.num_players, 2);
         assert_eq!(replay.terrain.len(), 20 * 20);
+        assert_eq!(replay.material_map.len(), 20 * 20);
     }
 
     #[test]

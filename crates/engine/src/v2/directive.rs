@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::combat;
 use super::hex::{self, Axial};
 use super::state::{GameState, Unit};
-use super::{INITIAL_STRENGTH, UNIT_COST};
+use super::{INITIAL_STRENGTH, UNIT_FOOD_COST, UNIT_MATERIAL_COST};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Directive {
@@ -82,7 +82,7 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
         Some(p) => p,
         None => return,
     };
-    if player.resources < UNIT_COST {
+    if player.food < UNIT_FOOD_COST || player.material < UNIT_MATERIAL_COST {
         return;
     }
     let general_id = player.general_id;
@@ -108,12 +108,13 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
     };
 
     // Deduct resources
-    state
+    let player = state
         .players
         .iter_mut()
         .find(|p| p.id == player_id)
-        .unwrap()
-        .resources -= UNIT_COST;
+        .unwrap();
+    player.food -= UNIT_FOOD_COST;
+    player.material -= UNIT_MATERIAL_COST;
 
     // Spawn unit
     let id = state.next_unit_id;
@@ -152,7 +153,8 @@ mod tests {
             seed: 42,
         });
         // Give player 0 enough resources to produce
-        state.players[0].resources = 50.0;
+        state.players[0].food = 50.0;
+        state.players[0].material = 50.0;
         state
     }
 
@@ -169,20 +171,22 @@ mod tests {
     fn produce_deducts_resources() {
         let mut state = test_state_with_resources();
         apply_directives(&mut state, 0, &[Directive::Produce]);
-        assert!((state.players[0].resources - 40.0).abs() < 0.01);
+        assert!((state.players[0].food - 42.0).abs() < 0.01);
+        assert!((state.players[0].material - 45.0).abs() < 0.01);
     }
 
     #[test]
     fn produce_insufficient_resources_ignored() {
         let mut state = test_state_with_resources();
-        state.players[0].resources = 5.0; // not enough
+        state.players[0].food = 5.0; // not enough
         let initial_units = state.units.iter().filter(|u| u.owner == 0).count();
         apply_directives(&mut state, 0, &[Directive::Produce]);
         assert_eq!(
             state.units.iter().filter(|u| u.owner == 0).count(),
             initial_units
         );
-        assert!((state.players[0].resources - 5.0).abs() < 0.01); // not deducted
+        assert!((state.players[0].food - 5.0).abs() < 0.01); // not deducted
+        assert!((state.players[0].material - 50.0).abs() < 0.01);
     }
 
     #[test]
@@ -213,7 +217,8 @@ mod tests {
     #[test]
     fn produce_unique_ids() {
         let mut state = test_state_with_resources();
-        state.players[0].resources = 100.0;
+        state.players[0].food = 100.0;
+        state.players[0].material = 100.0;
         apply_directives(
             &mut state,
             0,
@@ -272,7 +277,8 @@ mod tests {
     #[test]
     fn multiple_produces_if_resources_allow() {
         let mut state = test_state_with_resources();
-        state.players[0].resources = 25.0; // enough for 2, not 3
+        state.players[0].food = 25.0; // enough for 3 food-wise
+        state.players[0].material = 12.0; // enough for 2 material-wise
         let initial = state.units.iter().filter(|u| u.owner == 0).count();
         apply_directives(
             &mut state,
@@ -281,6 +287,6 @@ mod tests {
         );
         let final_count = state.units.iter().filter(|u| u.owner == 0).count();
         assert_eq!(final_count, initial + 2); // only 2 produced
-        assert!(state.players[0].resources < UNIT_COST); // can't afford a third
+        assert!(state.players[0].material < UNIT_MATERIAL_COST); // can't afford a third
     }
 }

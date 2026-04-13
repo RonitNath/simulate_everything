@@ -44,7 +44,11 @@ pub fn generate(config: &MapConfig) -> GameState {
 
             let terrain_value = (((sum / 1.75) * 0.5 + 0.5) * 3.0) as f32;
             let terrain_value = terrain_value.clamp(0.0, 3.0);
-            grid.push(Cell { terrain_value });
+            let material_value = ((3.0 - terrain_value) * 0.6).clamp(0.0, 2.0);
+            grid.push(Cell {
+                terrain_value,
+                material_value,
+            });
         }
     }
 
@@ -111,7 +115,8 @@ pub fn generate(config: &MapConfig) -> GameState {
 
         players.push(Player {
             id: owner,
-            resources: 0.0,
+            food: 0.0,
+            material: 0.0,
             general_id,
             alive: true,
         });
@@ -321,6 +326,18 @@ mod tests {
     }
 
     #[test]
+    fn material_values_in_range() {
+        let state = default_state();
+        for cell in &state.grid {
+            assert!(
+                cell.material_value >= 0.0 && cell.material_value <= 2.0,
+                "material_value {} out of range",
+                cell.material_value
+            );
+        }
+    }
+
+    #[test]
     fn different_seeds_differ() {
         let s1 = generate(&MapConfig {
             seed: 1,
@@ -351,6 +368,13 @@ mod tests {
         let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
         let std_dev = variance.sqrt();
         assert!(std_dev > 0.1, "std dev {} too low", std_dev);
+    }
+
+    #[test]
+    fn material_available_on_map() {
+        let state = default_state();
+        let total_material: f32 = state.grid.iter().map(|c| c.material_value).sum();
+        assert!(total_material > 0.0, "map should generate material");
     }
 
     #[test]
