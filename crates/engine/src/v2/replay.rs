@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
+use slotmap::SlotMap;
 
 use super::agent::Agent;
 use super::hex::Axial;
 use super::mapgen::{MapConfig, generate};
 use super::runner;
 use super::sim;
+use super::spatial::SpatialIndex;
 use super::state::{
     Biome, CargoType, Cell, Convoy, Engagement, GameState, Player, Population, Role, Unit,
 };
@@ -100,9 +102,9 @@ pub struct Replay {
 fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
     state
         .units
-        .iter()
+        .values()
         .map(|u| UnitSnapshot {
-            id: u.id,
+            id: u.public_id,
             owner: u.owner,
             q: u.pos.q,
             r: u.pos.r,
@@ -119,9 +121,9 @@ fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
 fn snapshot_population(state: &GameState) -> Vec<PopulationSnapshot> {
     state
         .population
-        .iter()
+        .values()
         .map(|p| PopulationSnapshot {
-            id: p.id,
+            id: p.public_id,
             owner: p.owner,
             q: p.hex.q,
             r: p.hex.r,
@@ -135,9 +137,9 @@ fn snapshot_population(state: &GameState) -> Vec<PopulationSnapshot> {
 fn snapshot_convoys(state: &GameState) -> Vec<ConvoySnapshot> {
     state
         .convoys
-        .iter()
+        .values()
         .map(|c| ConvoySnapshot {
-            id: c.id,
+            id: c.public_id,
             owner: c.owner,
             q: c.pos.q,
             r: c.pos.r,
@@ -278,20 +280,25 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         })
         .collect();
 
-    let units: Vec<Unit> = frame
-        .units
-        .iter()
-        .map(|s| Unit {
-            id: s.id,
+    let mut units = SlotMap::with_key();
+    let mut general_keys = vec![None; replay.num_players];
+    let mut next_unit_id = 0;
+    for s in &frame.units {
+        next_unit_id = next_unit_id.max(s.id + 1);
+        let key = units.insert(Unit {
+            public_id: s.id,
             owner: s.owner,
             pos: Axial::new(s.q, s.r),
             strength: s.strength,
             move_cooldown: s.move_cooldown,
-            engagements: s.engagements.clone(),
+            engagements: Vec::new(),
             destination: s.destination,
             is_general: s.is_general,
-        })
-        .collect();
+        });
+        if s.is_general {
+            general_keys[s.owner as usize] = Some(key);
+        }
+    }
 
     let players: Vec<Player> = frame
         .alive
@@ -301,33 +308,31 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
             id: i as u8,
             food: frame.player_food.get(i).copied().unwrap_or(0.0),
             material: frame.player_material.get(i).copied().unwrap_or(0.0),
-            general_id: units
-                .iter()
-                .find(|u| u.owner == i as u8 && u.is_general)
-                .map(|u| u.id)
-                .unwrap_or(0),
+            general_id: general_keys[i].expect("replay frame missing general"),
             alive,
         })
         .collect();
 
-    let population: Vec<Population> = frame
-        .population
-        .iter()
-        .map(|snapshot| Population {
-            id: snapshot.id,
+    let mut population = SlotMap::with_key();
+    let mut next_pop_id = 0;
+    for snapshot in &frame.population {
+        next_pop_id = next_pop_id.max(snapshot.id + 1);
+        population.insert(Population {
+            public_id: snapshot.id,
             hex: Axial::new(snapshot.q, snapshot.r),
             owner: snapshot.owner,
             count: snapshot.count,
             role: snapshot.role,
             training: snapshot.training,
-        })
-        .collect();
+        });
+    }
 
-    let convoys: Vec<Convoy> = frame
-        .convoys
-        .iter()
-        .map(|snapshot| Convoy {
-            id: snapshot.id,
+    let mut convoys = SlotMap::with_key();
+    let mut next_convoy_id = 0;
+    for snapshot in &frame.convoys {
+        next_convoy_id = next_convoy_id.max(snapshot.id + 1);
+        convoys.insert(Convoy {
+            public_id: snapshot.id,
             owner: snapshot.owner,
             pos: Axial::new(snapshot.q, snapshot.r),
             origin: snapshot.origin,
@@ -338,14 +343,10 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
             speed: snapshot.speed,
             move_cooldown: snapshot.move_cooldown,
             returning: snapshot.returning,
-        })
-        .collect();
+        });
+    }
 
-    let next_unit_id = units.iter().map(|u| u.id).max().map_or(0, |id| id + 1);
-    let next_pop_id = population.iter().map(|p| p.id).max().map_or(0, |id| id + 1);
-    let next_convoy_id = convoys.iter().map(|c| c.id).max().map_or(0, |id| id + 1);
-
-    GameState {
+    let mut state = GameState {
         width: replay.width,
         height: replay.height,
         grid,
@@ -358,7 +359,11 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         next_unit_id,
         next_pop_id,
         next_convoy_id,
-    }
+        scouted: vec![vec![true; replay.width * replay.height]; replay.num_players],
+        spatial: SpatialIndex::new(replay.width, replay.height),
+    };
+    state.rebuild_spatial();
+    state
 }
 
 #[cfg(test)]
@@ -443,7 +448,10 @@ mod tests {
         };
         let mut agents = test_agents();
         let replay = record_game(&config, &mut agents, 5000, 10);
-        assert!(replay.frames.len() > 10, "game should progress meaningfully");
+        assert!(
+            replay.frames.len() > 10,
+            "game should progress meaningfully"
+        );
     }
 
     #[test]

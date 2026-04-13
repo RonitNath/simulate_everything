@@ -1,5 +1,5 @@
 use simulate_everything_engine::v2::{
-    AGENT_POLL_INTERVAL,
+    AGENT_POLL_INTERVAL, TIMEOUT_TICKS,
     agent::{Agent, SpreadAgent},
     directive,
     mapgen::{self, MapConfig},
@@ -7,7 +7,6 @@ use simulate_everything_engine::v2::{
     replay::UnitSnapshot,
     sim,
     state::GameState,
-    TIMEOUT_TICKS,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -193,7 +192,7 @@ impl V2RoundRobin {
                         if !state.players.iter().any(|p| p.id == pid && p.alive) {
                             continue;
                         }
-                        let obs = observation::observe(&state, pid);
+                        let obs = observation::observe(&mut state, pid);
                         let directives = agent.act(&obs);
                         directive::apply_directives(&mut state, pid, &directives);
                     }
@@ -235,13 +234,16 @@ impl V2RoundRobin {
 fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
     state
         .units
-        .iter()
+        .values()
         .map(|u| UnitSnapshot {
-            id: u.id,
+            id: u.public_id,
             owner: u.owner,
             q: u.pos.q,
             r: u.pos.r,
             strength: u.strength,
+            engagements: u.engagements.clone(),
+            move_cooldown: u.move_cooldown,
+            destination: u.destination,
             engaged: !u.engagements.is_empty(),
             is_general: u.is_general,
         })

@@ -1,14 +1,14 @@
+use rayon::prelude::*;
+use serde::Serialize;
 use simulate_everything_engine::v2::{
+    AGENT_POLL_INTERVAL,
     agent::{self as v2_agent, Agent as V2Agent},
     directive,
     mapgen::{self as v2_mapgen, MapConfig as V2MapConfig},
     observation, sim,
-    AGENT_POLL_INTERVAL,
 };
-use rayon::prelude::*;
-use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 // ---------------------------------------------------------------------------
@@ -54,10 +54,7 @@ pub fn main(args: &[String]) {
     // Parse matchups.
     let matchups: Vec<Vec<&str>> = if let Some(m) = flag_value(args, "--matchups") {
         if m == "all" {
-            let names: Vec<&str> = v2_agent::builtin_agent_names()
-                .iter()
-                .copied()
-                .collect();
+            let names: Vec<&str> = v2_agent::builtin_agent_names().iter().copied().collect();
             let mut pairs = Vec::new();
             for i in 0..names.len() {
                 for j in (i + 1)..names.len() {
@@ -117,7 +114,14 @@ pub fn main(args: &[String]) {
     if ascii_mode || snapshot_ticks.is_some() {
         let matchup = &matchups[0];
         let seed = seeds[0];
-        run_ascii_game(seed, matchup, max_ticks, (w, h), num_players, snapshot_ticks.as_deref());
+        run_ascii_game(
+            seed,
+            matchup,
+            max_ticks,
+            (w, h),
+            num_players,
+            snapshot_ticks.as_deref(),
+        );
         return;
     }
 
@@ -141,7 +145,15 @@ pub fn main(args: &[String]) {
             &interrupted,
         );
     } else {
-        run_fixed_seeds(&matchups, &seeds, max_ticks, (w, h), num_players, top_n, &interrupted);
+        run_fixed_seeds(
+            &matchups,
+            &seeds,
+            max_ticks,
+            (w, h),
+            num_players,
+            top_n,
+            &interrupted,
+        );
     }
 }
 
@@ -351,10 +363,7 @@ fn run_convergence(
             }
 
             if next_seed >= max_seeds {
-                eprintln!(
-                    "  reached max seeds ({}) without converging",
-                    max_seeds
-                );
+                eprintln!("  reached max seeds ({}) without converging", max_seeds);
                 break;
             }
 
@@ -438,7 +447,7 @@ fn run_profile_game(
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
                     continue;
                 }
-                let obs = observation::observe(&state, p);
+                let obs = observation::observe(&mut state, p);
                 let t0 = Instant::now();
                 let directives = agent.act(&obs);
                 poll_us[pid] = t0.elapsed().as_micros() as u64;
@@ -507,14 +516,26 @@ fn run_ascii_game(
             if ticks.contains(&state.tick) {
                 println!("{}", ascii::render_state(&state));
                 // Also print per-player unit details.
-                for u in &state.units {
-                    let engaged = if u.engagements.is_empty() { "" } else { " ENGAGED" };
-                    let dest = u.destination.map(|d| format!(" -> ({},{})", d.q, d.r)).unwrap_or_default();
+                for u in state.units.values() {
+                    let engaged = if u.engagements.is_empty() {
+                        ""
+                    } else {
+                        " ENGAGED"
+                    };
+                    let dest = u
+                        .destination
+                        .map(|d| format!(" -> ({},{})", d.q, d.r))
+                        .unwrap_or_default();
                     eprintln!(
                         "  P{} unit {} str={:.0} at ({},{}){}{}{}",
-                        u.owner, u.id, u.strength, u.pos.q, u.pos.r,
+                        u.owner,
+                        u.public_id,
+                        u.strength,
+                        u.pos.q,
+                        u.pos.r,
                         if u.is_general { " [GEN]" } else { "" },
-                        dest, engaged,
+                        dest,
+                        engaged,
                     );
                 }
                 eprintln!();
@@ -527,7 +548,7 @@ fn run_ascii_game(
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
                     continue;
                 }
-                let obs = observation::observe(&state, p);
+                let obs = observation::observe(&mut state, p);
                 let directives = agent.act(&obs);
                 directive::apply_directives(&mut state, p, &directives);
             }
@@ -550,15 +571,30 @@ fn run_ascii_game(
     for (i, name) in agent_names.iter().enumerate() {
         let p = i as u8;
         let alive = state.players.iter().any(|pl| pl.id == p && pl.alive);
-        let units = state.units.iter().filter(|u| u.owner == p).count();
-        let strength: f32 = state.units.iter().filter(|u| u.owner == p).map(|u| u.strength).sum();
+        let units = state.units.values().filter(|u| u.owner == p).count();
+        let strength: f32 = state
+            .units
+            .values()
+            .filter(|u| u.owner == p)
+            .map(|u| u.strength)
+            .sum();
         let pl = state.players.iter().find(|pl| pl.id == p);
         let food = pl.map(|pl| pl.food).unwrap_or(0.0);
         let material = pl.map(|pl| pl.material).unwrap_or(0.0);
-        let hexes = state.grid.iter().filter(|c| c.stockpile_owner == Some(p)).count();
+        let hexes = state
+            .grid
+            .iter()
+            .filter(|c| c.stockpile_owner == Some(p))
+            .count();
         eprintln!(
             "  P{} ({}): units={}, str={:.0}, food={:.1}, mat={:.1}, hexes={}{}",
-            i, name, units, strength, food, material, hexes,
+            i,
+            name,
+            units,
+            strength,
+            food,
+            material,
+            hexes,
             if !alive { " [eliminated]" } else { "" },
         );
     }
@@ -610,7 +646,7 @@ fn run_bench_game(
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
                     continue;
                 }
-                let obs = observation::observe(&state, p);
+                let obs = observation::observe(&mut state, p);
                 let t0 = Instant::now();
                 let directives = agent.act(&obs);
                 let elapsed = t0.elapsed().as_micros() as u64;
@@ -699,7 +735,7 @@ fn player_unit_counts(
     num_players: u8,
 ) -> Vec<usize> {
     (0..num_players)
-        .map(|p| state.units.iter().filter(|u| u.owner == p).count())
+        .map(|p| state.units.values().filter(|u| u.owner == p).count())
         .collect()
 }
 
@@ -711,7 +747,7 @@ fn player_total_strength(
         .map(|p| {
             state
                 .units
-                .iter()
+                .values()
                 .filter(|u| u.owner == p)
                 .map(|u| u.strength)
                 .sum()
@@ -774,7 +810,7 @@ fn player_population(
         .map(|p| {
             state
                 .population
-                .iter()
+                .values()
                 .filter(|pop| pop.owner == p)
                 .map(|pop| pop.count)
                 .sum()
@@ -791,7 +827,7 @@ fn player_farmers(
         .map(|p| {
             state
                 .population
-                .iter()
+                .values()
                 .filter(|pop| pop.owner == p && pop.role == Role::Farmer)
                 .map(|pop| pop.count)
                 .sum()
@@ -807,7 +843,7 @@ fn player_settlements(
     (0..num_players)
         .map(|p| {
             let mut seen: Vec<Axial> = Vec::new();
-            for pop in state.population.iter().filter(|pop| pop.owner == p) {
+            for pop in state.population.values().filter(|pop| pop.owner == p) {
                 if !seen.contains(&pop.hex) && state.is_settlement(p, pop.hex) {
                     seen.push(pop.hex);
                 }
@@ -1054,7 +1090,12 @@ fn print_interesting_games(results: &[V2GameResult], top_n: usize) {
             .join("/");
         eprintln!(
             "  {:>6} {:>6} {:>8} {:>12} {:>12} {:>8.1}  {}",
-            r.seed, r.ticks, winner_str, units_str, hexes_str, r.interest_score,
+            r.seed,
+            r.ticks,
+            winner_str,
+            units_str,
+            hexes_str,
+            r.interest_score,
             r.interest_tags.join(", "),
         );
     }

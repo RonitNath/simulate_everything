@@ -84,7 +84,7 @@ pub fn run_game(
                 if !p.alive {
                     continue;
                 }
-                let units: Vec<_> = state.units.iter().filter(|u| u.owner == p.id).collect();
+                let units: Vec<_> = state.units.values().filter(|u| u.owner == p.id).collect();
                 let engaged = units.iter().filter(|u| !u.engagements.is_empty()).count();
                 let moving = units
                     .iter()

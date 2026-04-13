@@ -252,6 +252,12 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `replay` | Fidelity-preserving replay snapshots for units, stockpiles, population, convoys, and final-state reconstruction |
 | `runner` | Synchronous game runner (used by `/api/v2/game`) |
 
+**V2 engine internals:**
+
+- Units, population, and convoys are stored in `SlotMap`s keyed by opaque engine IDs (`UnitKey`, `PopKey`, `ConvoyKey`) so hot paths can do direct lookups instead of scanning vectors.
+- `GameState` maintains a rebuilt-per-tick `SpatialIndex` cache for unit occupancy lookups on a hex and its adjacent ring.
+- Replay and spectator payloads keep stable numeric `id` fields for frontend compatibility even though the engine uses slotmap keys internally.
+
 **V2 economy and settlement rules:**
 
 - Population exists per hex, but only hexes with at least `SETTLEMENT_THRESHOLD` population count as settlements.
@@ -263,6 +269,14 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 - Natural migration is slow adjacent drift from established settlements into owned fertile frontier hexes.
 - Deliberate long-range expansion uses settler convoys carrying `SETTLER_CONVOY_SIZE` population.
 - V2 games end either by elimination or by `TIMEOUT_TICKS`, where the timeout winner is chosen by weighted score: population 40%, territory 30%, military strength 20%, stockpiles 10%.
+- In debug builds, each tick asserts basic economic invariants: finite/non-negative assets and player totals that match owned stockpiles.
+
+**V2 fog-of-war observation model:**
+
+- `visible` is the live per-tick vision mask used for units, population, convoys, stockpiles, and ownership.
+- `scouted` is persistent terrain memory per player. Once a hex has been seen, static fields remain known even after it leaves vision.
+- `terrain`, `material_map`, `road_levels`, and `height_map` are masked by `scouted`.
+- Starting areas are pre-scouted from each player's initial unit vision.
 
 ### V2 Web Routes
 

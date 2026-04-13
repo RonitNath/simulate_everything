@@ -1,6 +1,14 @@
-use super::hex::{Axial, axial_to_offset};
 use super::SETTLEMENT_THRESHOLD;
+use super::hex::{Axial, axial_to_offset};
+use super::spatial::SpatialIndex;
 use serde::{Deserialize, Serialize};
+use slotmap::{SlotMap, new_key_type};
+
+new_key_type! {
+    pub struct UnitKey;
+    pub struct PopKey;
+    pub struct ConvoyKey;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Biome {
@@ -46,13 +54,13 @@ pub struct Cell {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Engagement {
-    pub enemy_id: u32,
+    pub enemy_id: UnitKey,
     pub edge: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Unit {
-    pub id: u32,
+    pub public_id: u32,
     pub owner: u8,
     pub pos: Axial,
     pub strength: f32,
@@ -72,7 +80,7 @@ pub enum Role {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Population {
-    pub id: u32,
+    pub public_id: u32,
     pub hex: Axial,
     pub owner: u8,
     pub count: u16,
@@ -89,7 +97,7 @@ pub enum CargoType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Convoy {
-    pub id: u32,
+    pub public_id: u32,
     pub owner: u8,
     pub pos: Axial,
     pub origin: Axial,
@@ -107,7 +115,7 @@ pub struct Player {
     pub id: u8,
     pub food: f32,
     pub material: f32,
-    pub general_id: u32,
+    pub general_id: UnitKey,
     pub alive: bool,
 }
 
@@ -128,19 +136,26 @@ pub struct GameState {
     pub height: usize,
     /// Row-major grid in offset coordinates.
     pub grid: Vec<Cell>,
-    pub units: Vec<Unit>,
+    pub units: SlotMap<UnitKey, Unit>,
     pub players: Vec<Player>,
-    pub population: Vec<Population>,
-    pub convoys: Vec<Convoy>,
+    pub population: SlotMap<PopKey, Population>,
+    pub convoys: SlotMap<ConvoyKey, Convoy>,
     pub regions: Vec<Region>,
     pub tick: u64,
-    /// Monotonically increasing counter for assigning unique unit IDs.
+    /// Monotonically increasing counters for frontend/replay-facing IDs.
     pub next_unit_id: u32,
     pub next_pop_id: u32,
     pub next_convoy_id: u32,
+    pub scouted: Vec<Vec<bool>>,
+    #[serde(skip)]
+    pub spatial: SpatialIndex,
 }
 
 impl GameState {
+    pub fn rebuild_spatial(&mut self) {
+        self.spatial.rebuild(&self.units);
+    }
+
     pub fn index(&self, row: usize, col: usize) -> usize {
         row * self.width + col
     }
@@ -188,7 +203,7 @@ impl GameState {
 
     pub fn population_on_hex(&self, owner: u8, ax: Axial) -> u16 {
         self.population
-            .iter()
+            .values()
             .filter(|p| p.owner == owner && p.hex == ax)
             .map(|p| p.count)
             .sum()
@@ -196,5 +211,42 @@ impl GameState {
 
     pub fn is_settlement(&self, owner: u8, ax: Axial) -> bool {
         self.population_on_hex(owner, ax) >= SETTLEMENT_THRESHOLD
+    }
+
+    pub fn unit_key_by_public_id(&self, public_id: u32) -> Option<UnitKey> {
+        self.units
+            .iter()
+            .find_map(|(key, unit)| (unit.public_id == public_id).then_some(key))
+    }
+
+    pub fn unit_by_public_id(&self, public_id: u32) -> Option<&Unit> {
+        let key = self.unit_key_by_public_id(public_id)?;
+        self.units.get(key)
+    }
+
+    pub fn unit_by_public_id_mut(&mut self, public_id: u32) -> Option<&mut Unit> {
+        let key = self.unit_key_by_public_id(public_id)?;
+        self.units.get_mut(key)
+    }
+
+    pub fn pop_key_by_public_id(&self, public_id: u32) -> Option<PopKey> {
+        self.population
+            .iter()
+            .find_map(|(key, pop)| (pop.public_id == public_id).then_some(key))
+    }
+
+    pub fn convoy_key_by_public_id(&self, public_id: u32) -> Option<ConvoyKey> {
+        self.convoys
+            .iter()
+            .find_map(|(key, convoy)| (convoy.public_id == public_id).then_some(key))
+    }
+
+    pub fn general_pos(&self, player_id: u8) -> Option<Axial> {
+        let general_id = self.players.iter().find(|p| p.id == player_id)?.general_id;
+        Some(self.units.get(general_id)?.pos)
+    }
+
+    pub fn has_unit_at(&self, ax: Axial) -> bool {
+        self.spatial.has_unit_at(ax)
     }
 }
