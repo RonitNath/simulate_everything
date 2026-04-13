@@ -21,7 +21,7 @@ pub fn tick(state: &mut GameState) {
     decay_frontier_stockpiles(state);
     decrement_cooldowns(state);
     cleanup(state);
-    check_stale_engagements(state);
+    cleanup_stale_engagements(state);
     refresh_player_totals(state);
     state.tick += 1;
 }
@@ -744,35 +744,37 @@ fn refresh_player_totals(state: &mut GameState) {
     }
 }
 
-fn check_stale_engagements(state: &GameState) {
+fn cleanup_stale_engagements(state: &mut GameState) {
     let unit_positions: HashMap<u32, Axial> = state.units.iter().map(|u| (u.id, u.pos)).collect();
 
-    for u in &state.units {
-        for eng in &u.engagements {
-            match unit_positions.get(&eng.enemy_id) {
-                None => {
+    for unit in &mut state.units {
+        unit.engagements.retain(|eng| match unit_positions.get(&eng.enemy_id) {
+            None => {
+                tracing::warn!(
+                    tick = state.tick,
+                    unit_id = unit.id,
+                    enemy_id = eng.enemy_id,
+                    edge = eng.edge,
+                    "removing stale engagement: enemy does not exist"
+                );
+                false
+            }
+            Some(&enemy_pos) => {
+                if hex::shared_edge(unit.pos, enemy_pos).is_none() {
                     tracing::warn!(
                         tick = state.tick,
-                        unit_id = u.id,
+                        unit_id = unit.id,
                         enemy_id = eng.enemy_id,
-                        edge = eng.edge,
-                        "stale engagement: enemy does not exist"
+                        unit_pos = ?unit.pos,
+                        enemy_pos = ?enemy_pos,
+                        "removing stale engagement: units not adjacent"
                     );
-                }
-                Some(&enemy_pos) => {
-                    if hex::shared_edge(u.pos, enemy_pos).is_none() {
-                        tracing::warn!(
-                            tick = state.tick,
-                            unit_id = u.id,
-                            enemy_id = eng.enemy_id,
-                            unit_pos = ?u.pos,
-                            enemy_pos = ?enemy_pos,
-                            "stale engagement: units not adjacent"
-                        );
-                    }
+                    false
+                } else {
+                    true
                 }
             }
-        }
+        });
     }
 }
 
@@ -992,5 +994,42 @@ mod tests {
 
         assert_eq!(winner_at_limit(&state, TIMEOUT_TICKS), Some(0));
         assert!(reached_timeout(&state, TIMEOUT_TICKS));
+    }
+
+    #[test]
+    fn stale_engagements_are_removed() {
+        let mut state = test_state();
+        let a_idx = state
+            .units
+            .iter()
+            .position(|u| u.owner == 0 && !u.is_general)
+            .unwrap();
+        let b_idx = state
+            .units
+            .iter()
+            .position(|u| u.owner == 1 && !u.is_general)
+            .unwrap();
+        let a_id = state.units[a_idx].id;
+        let b_id = state.units[b_idx].id;
+        state.units[a_idx]
+            .engagements
+            .push(crate::v2::state::Engagement {
+                enemy_id: b_id,
+                edge: 0,
+            });
+        state.units[b_idx]
+            .engagements
+            .push(crate::v2::state::Engagement {
+                enemy_id: a_id,
+                edge: 3,
+            });
+        state.units[b_idx].pos = offset_to_axial(19, 19);
+
+        tick(&mut state);
+
+        let a = state.units.iter().find(|u| u.id == a_id).unwrap();
+        let b = state.units.iter().find(|u| u.id == b_id).unwrap();
+        assert!(a.engagements.is_empty());
+        assert!(b.engagements.is_empty());
     }
 }

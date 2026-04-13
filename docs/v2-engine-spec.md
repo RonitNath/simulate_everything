@@ -11,7 +11,7 @@ This spec comes from a design session exploring how to make the game more intere
 - Terrain generated procedurally with varying economic value
 - Engagement-based combat that locks units and punishes careless engagement
 - Economy: units on resource tiles generate income, income buys new units
-- Large, expansive maps with 3-tile vision and fog of war
+- Large, expansive maps with 5-tile vision and fog of war
 - Foundation for future layers: unit types (cavalry, archers, siege), supply logistics, fortifications, technology, commanders
 
 ### What V2 is NOT (yet)
@@ -69,7 +69,7 @@ Hex distance between two cells = `(|dq| + |dr| + |ds|) / 2` in cube coordinates,
 
 ### Implications for existing mechanics
 
-- **Vision radius 3**: all hexes within hex distance 3 (the "ring 3" area = 1 + 6 + 12 + 18 = 37 hexes per unit, including the unit's own hex)
+- **Vision radius 5**: all hexes within hex distance 5. The implementation currently uses broader vision to support economy and convoy management.
 - **Adjacency**: 6 neighbors, not 4 or 8
 - **Engagement**: requires hex-adjacency (sharing a hex edge)
 - **Pathfinding**: BFS/A* over 6 neighbors instead of 4
@@ -289,11 +289,11 @@ This creates powerful incentives:
 
 ### Disengagement
 
-An agent can order a unit to disengage from a **specific edge** (dropping one engagement) or **all edges** (full retreat). Cost per disengagement: **50% of current strength** is lost immediately.
+An agent can order a unit to disengage from a **specific edge** (dropping one engagement) or **all edges** (full retreat). Cost per disengagement: **30% of current strength** is lost immediately.
 
 Rules:
 - Disengaging from one edge frees that edge on both units. If the unit has other engagements, it remains pinned.
-- Disengaging from all edges at once still costs 50% total (not 50% per edge — one brutal rip).
+- Disengaging from all edges at once still costs 30% total (not 30% per edge — one brutal rip).
 - The opponent(s) become free on their respective edges (they can pursue, re-engage, or turn to face another threat).
 
 Disengagement is a serious commitment:
@@ -330,7 +330,7 @@ The edge-based model creates rich tactical scenarios from simple rules:
 
 **Pocket / encirclement**: surround a unit on 4+ edges. It fights at 50% or less per edge. With 4 attackers each at 100%, the surrounded unit takes 4x the damage it deals. Encirclement is decisive — the winning move is to close the ring.
 
-**Escape corridor**: when surrounding, deliberately leaving 1-2 edges open. The trapped unit can disengage (50% strength loss) and retreat through the gap. This is strategically useful when you want to destroy the unit's combat effectiveness without committing to a full encirclement (which requires 6 units).
+**Escape corridor**: when surrounding, deliberately leaving 1-2 edges open. The trapped unit can disengage (30% strength loss) and retreat through the gap. This is strategically useful when you want to destroy the unit's combat effectiveness without committing to a full encirclement (which requires 6 units).
 
 ---
 
@@ -338,7 +338,7 @@ The edge-based model creates rich tactical scenarios from simple rules:
 
 ### Vision radius
 
-Every unit has a vision radius of 3 hexes (hex distance ≤ 3). This covers the unit's hex plus 3 rings: 1 + 6 + 12 + 18 = **37 hexes** per unit.
+Every unit has a vision radius of 5 hexes (hex distance ≤ 5). This covers the unit's hex plus 5 rings: 1 + 6 + 12 + 18 + 24 + 30 = **91 hexes** per unit.
 
 The union of all a player's units' vision is that player's visible area. Everything outside is fog of war.
 
@@ -408,11 +408,11 @@ enum Directive {
     Engage { unit_id: u32, target_id: u32 },
     
     /// Disengage from a specific edge (frees that edge on both units).
-    /// Costs 50% of current strength.
+    /// Costs 30% of current strength.
     DisengageEdge { unit_id: u32, edge: u8 },
     
     /// Disengage from ALL edges at once (full retreat).
-    /// Costs 50% of current strength (not per-edge).
+    /// Costs 30% of current strength (not per-edge).
     DisengageAll { unit_id: u32 },
     
     /// Produce a new unit at the general's location (costs 10 resources).
@@ -577,7 +577,7 @@ These will need playtesting and adjustment:
 | `DISENGAGE_PENALTY` | 0.3 | Fraction of current strength lost on disengage. |
 | `BASE_MOVE_COOLDOWN` | 2 | Ticks between moves on basic terrain. |
 | `TERRAIN_MOVE_PENALTY` | 0.5 | Additional cooldown per terrain_value unit. |
-| `VISION_RADIUS` | 3 | Hex distance. 37 hexes visible per unit. |
+| `VISION_RADIUS` | 5 | Hex distance. 91 hexes visible per unit. |
 | `INITIAL_UNITS` | 5 | Units spawned near general at game start. |
 | `TICKS_PER_SECOND` | 10 | Simulation tick rate. |
 | `AGENT_POLL_INTERVAL` | 5 | Ticks between agent observation/directive cycles. |

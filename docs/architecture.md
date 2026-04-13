@@ -288,7 +288,7 @@ All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crate
 |--------|--------|-------------|
 | `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. Terrain arrays currently expose the food/material productivity layers used by the UI. |
 | `v2_frame` | `tick: u64`, `units: Vec<UnitSnapshot>`, `player_food: Vec<f32>`, `player_material: Vec<f32>`, `alive: Vec<bool>` | Sent every tick. Full unit list with positions, strength, engagement state, and per-player economy. |
-| `v2_game_end` | `winner: Option<u8>`, `tick: u64`, `timed_out: bool` | Sent when the game ends. Timeouts still report the scored winner; `timed_out` distinguishes score wins from elimination wins. |
+| `v2_game_end` | `winner: Option<u8>`, `tick: u64`, `timed_out: bool` | Sent when the game ends. `winner` is the elimination winner or the score winner at timeout; `timed_out` distinguishes those cases. |
 | `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
 
 `UnitSnapshot` fields: `id`, `owner`, `q`, `r`, `strength`, `engaged` (bool), `is_general` (bool).
