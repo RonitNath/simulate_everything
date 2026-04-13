@@ -194,7 +194,7 @@ SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on de
 
 ## V2 Engine
 
-V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine-spec.md`. Centurion agent architecture spec: `docs/v2-agent-spec.md`.
+V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine-spec.md`. Centurion agent architecture spec: `docs/v2-agent-spec.md`. Unit behavior overhaul research and planning notes: `docs/v2-unit-behavior.md`.
 
 **Key differences from V1:**
 
