@@ -193,7 +193,7 @@ mod tests {
     }
 
     fn test_agents() -> Vec<Box<dyn Agent>> {
-        vec![Box::new(SpreadAgent), Box::new(SpreadAgent)]
+        vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())]
     }
 
     #[test]
