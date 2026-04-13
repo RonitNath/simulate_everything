@@ -53,7 +53,7 @@ Frontend: `ScoreboardApp.tsx`, polls every 3s.
 ### Game Rules
 - 2-8 players, fog of war (1-tile radius from owned cells)
 - Capture enemy general = eliminate player, inherit territory
-- Structures (generals, cities): +1 army/turn. Empty owned land: +1 with 10% probability
+- Structures (generals, cities): +1 army/turn. Cities +2 extra on wave turns (total +3), generals +1 extra (total +2). Empty owned land: +1 on wave turns (every 25 turns)
 - Combat: attacker sends army-1 (or army/2 if split). Attacker > defender = capture with remainder
 - Mountains: impassable. Cities: neutral garrison, capturable, then +1/turn
 - Actions: unlimited orders per turn, executed interleaved round-robin across players
@@ -65,10 +65,12 @@ Implement `trait Agent: Send` with `act(&mut self, obs: &Observation, rng: &mut 
 |-------|----|----------|
 | ExpanderAgent | expander-v1 | BFS frontier distance, expand outward, consolidate interior |
 | SwarmAgent | swarm-v2 | BFS toward nearest enemy, directional early expansion |
-| PressureAgent | pressure-v1 | Pressure-field based, FOW memory, player modeling |
+| PressureAgent | pressure-v3 | Role-based single-objective focus, FOW memory, marauder interception |
 | SubprocessAgent | graph-search-v1 | Bridges to Python process via stdin/stdout (env `GENERALS_PYTHON_CLIENT`) |
 
 Two pools: `all_builtin_agents()` (simulator, includes all + Python) and `rr_agents()` (round-robin, curated subset).
+
+Lookup by name: `agent_by_name("pressure")` returns a boxed agent. `builtin_agent_names()` lists all known names. Used by the bench harness.
 
 ### Map Generation
 `MapConfig::for_size(w, h, players)` derives all params from dimensions:
@@ -81,6 +83,52 @@ Two pools: `all_builtin_agents()` (simulator, includes all + Python) and `rr_age
 Cell encoding: `....` empty, `####` mountain, `c 42` neutral city, `a  5` player a, `A 38` general, `a~12` owned city.
 
 `screenshot(width, height, grid, turn, stats) -> String` or `frame.ascii(w, h)` for Display.
+
+## CLI (`generals` binary)
+
+### Simulation mode (default)
+```bash
+generals [seed] [players] [max_turns] [--ascii]
+```
+Runs a single game with shuffled agents. Outputs event JSON to stdout (or ASCII board with `--ascii`).
+
+### Bench mode
+```bash
+generals bench [flags]
+```
+Parallel game runner for agent comparison. All games run on rayon thread pool. Outputs per-game JSON to stdout, summary to stderr.
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agents a,b` | `pressure,swarm` | Single matchup (legacy) |
+| `--matchups all` | — | Round-robin all non-random agent pairs |
+| `--matchups a,b;c,d` | — | Explicit matchup list |
+| `--seeds 100-249` | `100-249` | Seed range or comma-separated list |
+| `--turns N` | 500 | Max turns per game |
+| `--size WxH` | auto | Board dimensions |
+| `--top N` | 10 | Number of interesting games to display |
+| `--profile` | — | Per-turn JSON output for single seed |
+| `--converge` | — | Keep running batches until CI converges |
+| `--ci F` | 0.04 | Target CI width for convergence (e.g., 0.03 = 3%) |
+| `--max-seeds N` | 5000 | Upper bound on seeds in convergence mode |
+| `--batch N` | 100 | Seeds per batch in convergence mode |
+
+**Convergence mode** (`--converge`): runs batches of games, computes Wilson score 95% CI after each batch, stops when CI width < target. Ctrl+C gracefully stops after the current batch and prints partial results. Second Ctrl+C force-quits.
+
+**Game scoring**: each game gets an interestingness score (0-100+) based on late lead changes, comebacks, closeness at 75% mark, game length, and upsets. Top N games displayed in the summary.
+
+**Examples:**
+```bash
+# Quick regression check
+generals bench --seeds 100-249 --agents pressure,swarm
+# Full round-robin with convergence
+generals bench --converge --matchups all --ci 0.03
+# Profile a specific interesting game
+generals bench --profile --seeds 202 --agents pressure,swarm
+# Tight CI for detecting small improvements
+generals bench --converge --agents pressure,swarm --ci 0.02 --max-seeds 10000
+```
 
 ## Frontend
 
