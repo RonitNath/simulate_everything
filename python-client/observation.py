@@ -1,6 +1,6 @@
 """
 Adapts the Rust server's flat JSON observation into 2D numpy arrays
-matching the interface expected by the ported strategic/graph agents.
+matching the interface expected by the strategic and graph agents.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import numpy as np
 
 @dataclass
 class Observation:
-    """Mirrors the fields the strategic agent reads from the JAX Observation."""
+    """Mirrors the fields the strategic agent reads from server observations."""
 
     armies: np.ndarray  # (H, W) int32
     owned_cells: np.ndarray  # (H, W) bool
