@@ -346,6 +346,15 @@ const V2SimApp: Component = () => {
                 <svg width="14" height="14"><line x1="1" y1="7" x2="13" y2="7" stroke="#ff6644" stroke-width="3" stroke-linecap="round" /></svg>
                 <span>Combat edge</span>
               </div>
+              <div class={styles.legendTitle} style={{ "margin-top": "6px" }}>Unit status</div>
+              <div class={styles.legendGrid}>
+                <span style={{ color: "#ff6644", "font-weight": "bold", "text-align": "center" }}>⚔</span>
+                <span>In combat</span>
+                <span style={{ color: "#88cc88", "font-weight": "bold", "text-align": "center" }}>→</span>
+                <span>Moving</span>
+                <span style={{ color: "#aaa", "font-weight": "bold", "text-align": "center" }}>◷</span>
+                <span>Cooldown</span>
+              </div>
               <div class={styles.legendTitle} style={{ "margin-top": "6px" }}>Score bar</div>
               <div class={styles.legendGrid}>
                 <div style={{ width: "14px", height: "10px", background: "#4ac0c0", "border-radius": "2px" }} />
