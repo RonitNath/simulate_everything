@@ -8,6 +8,7 @@ use simulate_everything_engine::v2::{
     observation::{self, ObservationSession},
     sim,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -20,6 +21,8 @@ pub fn main(args: &[String]) {
     let profile_mode = args.iter().any(|a| a == "--profile");
     let converge_mode = args.iter().any(|a| a == "--converge");
     let ascii_mode = args.iter().any(|a| a == "--ascii");
+    let postmortem_mode = args.iter().any(|a| a == "--postmortem");
+    let explain_mode = args.iter().any(|a| a == "--explain");
     let top_n: usize = flag_value(args, "--top")
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
@@ -139,6 +142,13 @@ pub fn main(args: &[String]) {
         return;
     }
 
+    if postmortem_mode {
+        let matchup = &matchups[0];
+        let seed = seeds[0];
+        run_postmortem_game(seed, matchup, max_ticks, (w, h), num_players);
+        return;
+    }
+
     if profile_mode {
         let matchup = &matchups[0];
         let seed = seeds[0];
@@ -157,6 +167,7 @@ pub fn main(args: &[String]) {
             batch_size,
             top_n,
             &interrupted,
+            explain_mode,
         );
     } else {
         run_fixed_seeds(
@@ -167,6 +178,7 @@ pub fn main(args: &[String]) {
             num_players,
             top_n,
             &interrupted,
+            explain_mode,
         );
     }
 }
@@ -209,6 +221,10 @@ struct V2GameResult {
     interest_score: f64,
     interest_tags: Vec<String>,
     snapshots: Vec<V2Snapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loss_category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loss_explanation: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -299,6 +315,7 @@ fn run_fixed_seeds(
     num_players: u8,
     top_n: usize,
     interrupted: &Arc<AtomicBool>,
+    explain: bool,
 ) {
     let total_start = Instant::now();
 
@@ -320,7 +337,7 @@ fn run_fixed_seeds(
 
         let results: Vec<V2GameResult> = seeds
             .par_iter()
-            .map(|&seed| run_bench_game(seed, matchup, max_ticks, (w, h), num_players))
+            .map(|&seed| run_bench_game(seed, matchup, max_ticks, (w, h), num_players, explain))
             .collect();
 
         let mut stats = V2MatchupStats::new(matchup);
@@ -331,6 +348,9 @@ fn run_fixed_seeds(
 
         print_matchup_summary(&stats);
         print_interesting_games(&stats.results, top_n);
+        if explain {
+            print_loss_patterns(&stats.results);
+        }
     }
 
     eprintln!("\nTotal wall time: {:.2?}", total_start.elapsed());
@@ -350,6 +370,7 @@ fn run_convergence(
     batch_size: u64,
     top_n: usize,
     interrupted: &Arc<AtomicBool>,
+    explain: bool,
 ) {
     let total_start = Instant::now();
 
@@ -386,7 +407,7 @@ fn run_convergence(
 
             let results: Vec<V2GameResult> = batch_seeds
                 .par_iter()
-                .map(|&seed| run_bench_game(seed, matchup, max_ticks, (w, h), num_players))
+                .map(|&seed| run_bench_game(seed, matchup, max_ticks, (w, h), num_players, explain))
                 .collect();
 
             for result in results {
@@ -422,9 +443,58 @@ fn run_convergence(
 
         print_matchup_summary(&stats);
         print_interesting_games(&stats.results, top_n);
+        if explain {
+            print_loss_patterns(&stats.results);
+        }
     }
 
     eprintln!("\nTotal wall time: {:.2?}", total_start.elapsed());
+}
+
+// ---------------------------------------------------------------------------
+// Postmortem mode (single game, full analysis)
+// ---------------------------------------------------------------------------
+
+fn run_postmortem_game(
+    seed: u64,
+    agent_names: &[&str],
+    max_ticks: u64,
+    (w, h): (usize, usize),
+    num_players: u8,
+) {
+    use simulate_everything_engine::v2::{gamelog::GameLog, runner};
+
+    let mut state = v2_mapgen::generate(&V2MapConfig {
+        width: w,
+        height: h,
+        num_players,
+        seed,
+    });
+    state.game_log = Some(GameLog::new());
+
+    let general_positions: Vec<(u8, simulate_everything_engine::v2::hex::Axial)> = state
+        .players
+        .iter()
+        .filter(|p| p.alive)
+        .filter_map(|p| state.units.get(p.general_id).map(|u| (p.id, u.pos)))
+        .collect();
+
+    let mut agents: Vec<Box<dyn V2Agent>> = agent_names
+        .iter()
+        .map(|name| v2_agent::agent_by_name(name).unwrap())
+        .collect();
+
+    let tick_limit = sim::timeout_limit(max_ticks);
+    runner::run_loop(&mut state, &mut agents, tick_limit, |_| {});
+
+    let winner = sim::winner_at_limit(&state, max_ticks);
+    let timed_out = sim::reached_timeout(&state, tick_limit);
+    let names: Vec<String> = agent_names.iter().map(|s| s.to_string()).collect();
+
+    if let Some(log) = state.game_log.take() {
+        let summary = log.summarize(&names, winner, state.tick, timed_out, &general_positions);
+        println!("{}", summary.render());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -638,13 +708,27 @@ fn run_bench_game(
     max_ticks: u64,
     (w, h): (usize, usize),
     num_players: u8,
+    log_enabled: bool,
 ) -> V2GameResult {
+    use simulate_everything_engine::v2::gamelog::{self, GameLog};
+
     let mut state = v2_mapgen::generate(&V2MapConfig {
         width: w,
         height: h,
         num_players,
         seed,
     });
+
+    if log_enabled {
+        state.game_log = Some(GameLog::new());
+    }
+
+    let general_positions: Vec<(u8, simulate_everything_engine::v2::hex::Axial)> = state
+        .players
+        .iter()
+        .filter(|p| p.alive)
+        .filter_map(|p| state.units.get(p.general_id).map(|u| (p.id, u.pos)))
+        .collect();
 
     let mut agents: Vec<Box<dyn V2Agent>> = agent_names
         .iter()
@@ -736,6 +820,22 @@ fn run_bench_game(
     let (interest_score, interest_tags) =
         score_game(winner_idx, state.tick, lead_changes, &snapshots, max_ticks);
 
+    let (loss_category, loss_explanation) = if let Some(log) = state.game_log.take() {
+        let timed_out = sim::reached_timeout(&state, sim::timeout_limit(max_ticks));
+        let summary = log.summarize(&ids, winner_idx, state.tick, timed_out, &general_positions);
+        let loser = winner_idx.and_then(|w| (0..num_players).find(|&i| i != w));
+        if let Some(l) = loser {
+            (
+                Some(gamelog::categorize_loss(&summary, l).to_string()),
+                Some(summary.one_liner()),
+            )
+        } else {
+            (None, Some(summary.one_liner()))
+        }
+    } else {
+        (None, None)
+    };
+
     V2GameResult {
         seed,
         matchup: matchup_key,
@@ -758,6 +858,8 @@ fn run_bench_game(
         interest_score,
         interest_tags,
         snapshots,
+        loss_category,
+        loss_explanation,
     }
 }
 
@@ -1133,6 +1235,46 @@ fn print_interesting_games(results: &[V2GameResult], top_n: usize) {
             r.interest_score,
             r.interest_tags.join(", "),
         );
+    }
+}
+
+fn print_loss_patterns(results: &[V2GameResult]) {
+    if results.is_empty() {
+        return;
+    }
+
+    // Collect loss categories
+    let mut categories: HashMap<String, Vec<&V2GameResult>> = HashMap::new();
+    for r in results {
+        if let Some(ref cat) = r.loss_category {
+            categories.entry(cat.clone()).or_default().push(r);
+        }
+    }
+
+    if categories.is_empty() {
+        return;
+    }
+
+    let total_losses: usize = categories.values().map(|v| v.len()).sum();
+    eprintln!("\n  Loss patterns ({} losses examined):", total_losses);
+
+    let mut sorted: Vec<_> = categories.iter().collect();
+    sorted.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    for (category, games) in &sorted {
+        let pct = games.len() as f64 / total_losses as f64 * 100.0;
+        eprintln!("  - {:>3} ({:>4.1}%): {}", games.len(), pct, category);
+    }
+
+    // Print a few example one-liners for the most common pattern
+    if let Some((_, games)) = sorted.first() {
+        let show = games.len().min(3);
+        eprintln!("\n  Example losses:");
+        for r in games.iter().take(show) {
+            if let Some(ref expl) = r.loss_explanation {
+                eprintln!("    seed={}: {}", r.seed, expl);
+            }
+        }
     }
 }
 

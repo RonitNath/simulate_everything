@@ -62,12 +62,64 @@ pub fn run_loop<F>(
                     directives = directives.len(),
                     "agent polled"
                 );
+
+                // Record agent poll before applying directives
+                if let Some(log) = &mut state.game_log {
+                    let mut move_count = 0u16;
+                    let mut engage_count = 0u16;
+                    let mut produce_count = 0u16;
+                    let mut other_count = 0u16;
+                    for d in &directives {
+                        match d {
+                            directive::Directive::Move { .. } => move_count += 1,
+                            directive::Directive::Engage { .. } => engage_count += 1,
+                            directive::Directive::Produce => produce_count += 1,
+                            _ => other_count += 1,
+                        }
+                    }
+                    log.record_poll(super::gamelog::AgentPollRecord {
+                        tick: state.tick,
+                        player: pid,
+                        move_count,
+                        engage_count,
+                        produce_count,
+                        other_count,
+                        mode: agent.mode().map(String::from),
+                    });
+                }
+
                 directive::apply_directives(state, pid, &directives);
             }
             state.clear_dirty_hexes();
         }
 
         sim::tick(state);
+
+        // Economy sampling every 50 ticks
+        if state.game_log.is_some() && state.tick % 50 == 0 {
+            let player_ids: Vec<u8> = state
+                .players
+                .iter()
+                .filter(|p| p.alive)
+                .map(|p| p.id)
+                .collect();
+            for pid in player_ids {
+                let sample = super::gamelog::GameLog::sample_economy(state, pid);
+                if let Some(log) = &mut state.game_log {
+                    log.record_economy(sample);
+                }
+            }
+        }
+
+        // Detect new settlements
+        if state.game_log.is_some() {
+            let settlements = super::gamelog::collect_settlements(state);
+            let tick = state.tick;
+            if let Some(log) = &mut state.game_log {
+                log.detect_new_settlements(tick, &settlements);
+            }
+        }
+
         after_tick(state);
     }
 }

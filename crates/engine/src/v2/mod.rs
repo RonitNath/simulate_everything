@@ -2,6 +2,7 @@ pub mod agent;
 pub mod ascii;
 pub mod combat;
 pub mod directive;
+pub mod gamelog;
 pub mod hex;
 pub mod mapgen;
 pub mod observation;

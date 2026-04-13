@@ -215,6 +215,7 @@ pub fn generate(config: &MapConfig) -> GameState {
         next_hex_revision: 0,
         #[cfg(debug_assertions)]
         tick_accumulator: None,
+        game_log: None,
     };
     seed_starting_scouted(&mut state);
     state.rebuild_spatial();

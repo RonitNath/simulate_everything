@@ -1,5 +1,6 @@
 use bitvec::prelude::BitVec;
 use super::SETTLEMENT_THRESHOLD;
+use super::gamelog::GameLog;
 use super::hex::{Axial, axial_to_offset};
 use super::spatial::SpatialIndex;
 use serde::{Deserialize, Serialize};
@@ -159,6 +160,8 @@ pub struct GameState {
     #[cfg(debug_assertions)]
     #[serde(skip)]
     pub tick_accumulator: Option<TickAccumulator>,
+    #[serde(skip)]
+    pub game_log: Option<GameLog>,
 }
 
 impl GameState {

@@ -18,6 +18,7 @@ pub trait Agent: Send {
     fn init(&mut self, obs: &InitialObservation);
     fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive>;
     fn reset(&mut self) {}
+    fn mode(&self) -> Option<&str> { None }
 }
 
 fn seed_observation(obs: &InitialObservation) -> Observation {
@@ -525,6 +526,15 @@ impl Agent for StrikerAgent {
         let directives = self.decide(&obs);
         self.cached_observation = Some(obs);
         directives
+    }
+
+    fn mode(&self) -> Option<&str> {
+        Some(match self.mode {
+            StrikerMode::Expand => "expand",
+            StrikerMode::Scout => "scout",
+            StrikerMode::Rally => "rally",
+            StrikerMode::Strike => "strike",
+        })
     }
 
     fn reset(&mut self) {

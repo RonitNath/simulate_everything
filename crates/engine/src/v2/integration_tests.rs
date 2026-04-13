@@ -108,6 +108,7 @@ fn blank_state(width: usize, height: usize, num_players: u8) -> GameState {
         next_hex_revision: 0,
         #[cfg(debug_assertions)]
         tick_accumulator: Some(TickAccumulator::default()),
+        game_log: None,
     };
     state.rebuild_spatial();
     state

@@ -63,6 +63,16 @@ pub fn engage(state: &mut GameState, attacker_id: UnitKey, target_id: UnitKey) -
         "engagement created"
     );
 
+    if let Some(log) = &mut state.game_log {
+        log.record(super::gamelog::GameEvent::EngagementCreated {
+            tick: state.tick,
+            attacker: state.units[attacker_id].public_id,
+            target: state.units[target_id].public_id,
+            attacker_owner: state.units[attacker_id].owner,
+            target_owner: state.units[target_id].owner,
+        });
+    }
+
     true
 }
 
@@ -258,6 +268,7 @@ mod tests {
             next_hex_revision: 0,
             #[cfg(debug_assertions)]
             tick_accumulator: Some(TickAccumulator::default()),
+            game_log: None,
         };
         state.rebuild_spatial();
         state

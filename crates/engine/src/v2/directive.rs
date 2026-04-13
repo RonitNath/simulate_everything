@@ -344,6 +344,14 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
         is_general: false,
     });
     debug_assert!(state.units.contains_key(unit_key));
+    if let Some(log) = &mut state.game_log {
+        log.record(super::gamelog::GameEvent::UnitProduced {
+            tick: state.tick,
+            player: player_id,
+            unit_id: id,
+            pos: spawn_pos,
+        });
+    }
     if let Some(cell) = state.cell_at_mut(spawn_pos) {
         let changed = cell.stockpile_owner != Some(player_id);
         cell.stockpile_owner = Some(player_id);

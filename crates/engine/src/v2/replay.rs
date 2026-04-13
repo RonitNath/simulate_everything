@@ -369,6 +369,7 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         next_hex_revision: 0,
         #[cfg(debug_assertions)]
         tick_accumulator: None,
+        game_log: None,
     };
     state.rebuild_spatial();
     state

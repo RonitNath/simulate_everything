@@ -803,6 +803,35 @@ fn decrement_cooldowns(state: &mut GameState) {
 
 fn cleanup(state: &mut GameState) {
     combat::cleanup_engagements(state);
+
+    // Record unit deaths before removing them
+    if state.game_log.is_some() {
+        let dead: Vec<_> = state
+            .units
+            .iter()
+            .filter(|(_, u)| u.strength <= 0.0)
+            .map(|(_, u)| {
+                let killer = u
+                    .engagements
+                    .first()
+                    .and_then(|e| state.units.get(e.enemy_id).map(|enemy| enemy.owner));
+                (u.public_id, u.owner, u.pos, killer, u.is_general)
+            })
+            .collect();
+        if let Some(log) = &mut state.game_log {
+            for (unit_id, player, pos, killer, is_general) in dead {
+                log.record(super::gamelog::GameEvent::UnitKilled {
+                    tick: state.tick,
+                    player,
+                    unit_id,
+                    pos,
+                    killer,
+                    was_general: is_general,
+                });
+            }
+        }
+    }
+
     state.units.retain(|_, u| u.strength > 0.0);
 
     let eliminated: Vec<u8> = state
@@ -814,6 +843,12 @@ fn cleanup(state: &mut GameState) {
         .collect();
 
     for pid in eliminated {
+        if let Some(log) = &mut state.game_log {
+            log.record(super::gamelog::GameEvent::PlayerEliminated {
+                tick: state.tick,
+                player: pid,
+            });
+        }
         if let Some(player) = state.players.iter_mut().find(|p| p.id == pid) {
             player.alive = false;
         }
