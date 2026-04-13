@@ -212,14 +212,10 @@ impl SwarmAgent {
                     let (dr, dc) = dir.delta();
                     let nr = row as i32 + dr;
                     let nc = col as i32 + dc;
-                    nr >= 0
-                        && nc >= 0
-                        && (nr as usize) < h
-                        && (nc as usize) < w
-                        && {
-                            let ni = nr as usize * w + nc as usize;
-                            obs.tiles[ni] != Tile::Mountain && obs.owners[ni] != Some(obs.player)
-                        }
+                    nr >= 0 && nc >= 0 && (nr as usize) < h && (nc as usize) < w && {
+                        let ni = nr as usize * w + nc as usize;
+                        obs.tiles[ni] != Tile::Mountain && obs.owners[ni] != Some(obs.player)
+                    }
                 });
                 if is_frontier {
                     all_frontier.push(idx);
@@ -293,7 +289,11 @@ impl SwarmAgent {
                     }
 
                     let target_tile = obs.tiles[nr * w + nc];
-                    let mut score: i32 = if target_tile == Tile::City { 2000 } else { 1000 };
+                    let mut score: i32 = if target_tile == Tile::City {
+                        2000
+                    } else {
+                        1000
+                    };
                     let dist_to_center =
                         ((nr as f32 - center_r).abs() + (nc as f32 - center_c).abs()) as i32;
                     score -= dist_to_center * 10;
@@ -347,14 +347,10 @@ impl SwarmAgent {
                     let (dr, dc) = dir.delta();
                     let nr = row as i32 + dr;
                     let nc = col as i32 + dc;
-                    nr >= 0
-                        && nc >= 0
-                        && (nr as usize) < h
-                        && (nc as usize) < w
-                        && {
-                            let ni = nr as usize * w + nc as usize;
-                            obs.tiles[ni] != Tile::Mountain && obs.owners[ni] != Some(obs.player)
-                        }
+                    nr >= 0 && nc >= 0 && (nr as usize) < h && (nc as usize) < w && {
+                        let ni = nr as usize * w + nc as usize;
+                        obs.tiles[ni] != Tile::Mountain && obs.owners[ni] != Some(obs.player)
+                    }
                 });
                 if is_frontier {
                     all_frontier.push(idx);
@@ -406,7 +402,13 @@ impl SwarmAgent {
                 } else if can_capture {
                     // Can capture: prefer cells closer to target.
                     let td = target_dist[ni];
-                    let base = if is_enemy { 2000 } else if dest_tile == Tile::City { 3000 } else { 1000 };
+                    let base = if is_enemy {
+                        2000
+                    } else if dest_tile == Tile::City {
+                        3000
+                    } else {
+                        1000
+                    };
                     base - td as i32 * 5
                 } else {
                     // Can't capture: maybe retreat through own territory.

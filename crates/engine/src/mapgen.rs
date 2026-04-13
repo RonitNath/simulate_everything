@@ -61,7 +61,11 @@ impl MapConfig {
         let min_side = width.min(height);
         // General distance: scales down with more players so they can all fit.
         // 2 players: ~40% of smaller dim. 8+: ~15%.
-        let dist_pct = if num_players <= 2 { 40 } else { (60 / num_players as usize).max(12) };
+        let dist_pct = if num_players <= 2 {
+            40
+        } else {
+            (60 / num_players as usize).max(12)
+        };
         let min_general_distance = (min_side * dist_pct / 100).max(6);
         // Margin from edge: ~15% of smaller dimension, at least 3.
         let general_margin = (min_side / 7).max(3);

@@ -12,7 +12,7 @@ const PLAYER_COLORS = [
 type Phase =
   | { kind: "connecting" }
   | { kind: "playing"; game: V2GameInfo }
-  | { kind: "game_over"; game: V2GameInfo; winner: number | null; tick: number };
+  | { kind: "game_over"; game: V2GameInfo; winner: number | null; tick: number; timedOut: boolean };
 
 const SPEED_PRESETS = [
   { label: "0.5x", ms: 500 },
@@ -94,7 +94,13 @@ const V2App: Component = () => {
             const game = (p.kind === "playing" || p.kind === "game_over")
               ? (p as any).game as V2GameInfo
               : { width: 0, height: 0, terrain: [], material_map: [], num_players: 0, agent_names: [] };
-            setPhase({ kind: "game_over", game, winner: msg.winner, tick: msg.tick });
+            setPhase({
+              kind: "game_over",
+              game,
+              winner: msg.winner,
+              tick: msg.tick,
+              timedOut: !!msg.timed_out,
+            });
             setFollowing(false);
             break;
           }
@@ -170,7 +176,7 @@ const V2App: Component = () => {
             {(g) => <>{g().width}x{g().height} hex &middot; {g().num_players} players</>}
           </Show>
           <Show when={phase().kind === "game_over"}>
-            {" "}&middot; Winner: {gameInfo()?.agent_names[(phase() as any).winner] ?? "draw"}
+            {" "}&middot; {((phase() as any).timedOut ? "Timeout" : "Winner")}: {gameInfo()?.agent_names[(phase() as any).winner] ?? "draw"}
           </Show>
         </span>
       </div>

@@ -179,7 +179,7 @@ const V2SimApp: Component = () => {
             <span style={{ "font-size": "12px", color: "#8888a0", "margin-left": "auto" }}>
               {r().width}x{r().height} hex
               <Show when={r().winner !== null}>
-                {" "}&middot; Winner: {r().agent_names[r().winner!]}
+                {" "}&middot; {r().timed_out ? "Timeout" : "Winner"}: {r().agent_names[r().winner!]}
               </Show>
             </span>
           )}

@@ -4,7 +4,7 @@ use super::directive::Directive;
 use super::hex::{self, Axial};
 use super::observation::{Observation, UnitInfo};
 use super::state::{CargoType, Role};
-use super::{SOLDIERS_PER_UNIT, UNIT_FOOD_COST, UNIT_MATERIAL_COST};
+use super::{SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIERS_PER_UNIT, UNIT_FOOD_COST, UNIT_MATERIAL_COST};
 
 pub trait Agent: Send {
     fn name(&self) -> &str;
@@ -12,11 +12,15 @@ pub trait Agent: Send {
     fn reset(&mut self) {}
 }
 
-pub struct SpreadAgent;
+pub struct SpreadAgent {
+    pending_settlement: Option<Axial>,
+}
 
 impl SpreadAgent {
     pub fn new() -> Self {
-        Self
+        Self {
+            pending_settlement: None,
+        }
     }
 }
 
@@ -29,6 +33,23 @@ impl Agent for SpreadAgent {
         let mut directives = Vec::new();
         let general = obs.own_units.iter().find(|u| u.is_general);
         let general_hex = general.map(|u| Axial::new(u.q, u.r));
+        let settlements = settlement_hexes(obs);
+
+        if let Some(target) = self.pending_settlement {
+            if settlement_hexes(obs).contains(&target) {
+                self.pending_settlement = None;
+            } else if let Some(convoy) = obs
+                .own_convoys
+                .iter()
+                .find(|c| c.cargo_type == CargoType::Settlers)
+            {
+                directives.push(Directive::SendConvoy {
+                    convoy_id: convoy.id,
+                    dest_q: target.q,
+                    dest_r: target.r,
+                });
+            }
+        }
 
         if let Some(hex) = general_hex {
             if general_hex_needs_depot(obs, hex) {
@@ -87,6 +108,25 @@ impl Agent for SpreadAgent {
                     remaining_food -= UNIT_FOOD_COST;
                     remaining_material -= UNIT_MATERIAL_COST;
                     ready -= SOLDIERS_PER_UNIT;
+                }
+            }
+
+            let general_population = total_population_on_hex(obs, hex);
+            if self.pending_settlement.is_none()
+                && !obs
+                    .own_convoys
+                    .iter()
+                    .any(|c| c.cargo_type == CargoType::Settlers)
+                && general_population >= SETTLEMENT_THRESHOLD + SETTLER_CONVOY_SIZE + 5
+            {
+                if let Some(target) = pick_settlement_target(obs, &settlements, hex) {
+                    directives.push(Directive::LoadConvoy {
+                        hex_q: hex.q,
+                        hex_r: hex.r,
+                        cargo_type: CargoType::Settlers,
+                        amount: SETTLER_CONVOY_SIZE as f32,
+                    });
+                    self.pending_settlement = Some(target);
                 }
             }
 
@@ -176,6 +216,10 @@ impl Agent for SpreadAgent {
 
         directives
     }
+
+    fn reset(&mut self) {
+        self.pending_settlement = None;
+    }
 }
 
 fn cell_index(obs: &Observation, ax: Axial) -> Option<usize> {
@@ -234,6 +278,63 @@ fn population_mix(obs: &Observation, hex: Axial) -> (u16, u16, u16, u16, u16) {
         }
     }
     (idle, farmers, workers, trained_soldiers, untrained_soldiers)
+}
+
+fn total_population_on_hex(obs: &Observation, hex: Axial) -> u16 {
+    obs.own_population
+        .iter()
+        .filter(|p| p.q == hex.q && p.r == hex.r)
+        .map(|p| p.count)
+        .sum()
+}
+
+fn settlement_hexes(obs: &Observation) -> Vec<Axial> {
+    let mut settlements = Vec::new();
+    for pop in &obs.own_population {
+        let hex = Axial::new(pop.q, pop.r);
+        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex) {
+            settlements.push(hex);
+        }
+    }
+    settlements
+}
+
+fn pick_settlement_target(obs: &Observation, settlements: &[Axial], origin: Axial) -> Option<Axial> {
+    let mut best: Option<(Axial, f32)> = None;
+    for (idx, owner) in obs.stockpile_owner.iter().enumerate() {
+        if *owner != Some(obs.player) {
+            continue;
+        }
+        let hex = index_to_hex(obs, idx);
+        if settlements.contains(&hex) {
+            continue;
+        }
+        if total_population_on_hex(obs, hex) > 0 {
+            continue;
+        }
+        let support_distance = settlements
+            .iter()
+            .map(|s| hex::distance(*s, hex))
+            .min()
+            .unwrap_or(i32::MAX);
+        if support_distance <= SETTLEMENT_SUPPORT_RADIUS {
+            continue;
+        }
+        let distance_from_origin = hex::distance(origin, hex);
+        if distance_from_origin < 2 || distance_from_origin > 8 {
+            continue;
+        }
+        let fertility = obs.terrain[idx];
+        if fertility <= 0.0 {
+            continue;
+        }
+        let score = fertility * 2.0 + obs.material_map[idx] - distance_from_origin as f32 * 0.25;
+        match best {
+            Some((_, best_score)) if best_score >= score => {}
+            _ => best = Some((hex, score)),
+        }
+    }
+    best.map(|(hex, _)| hex)
 }
 
 fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<u32, usize> {
@@ -383,7 +484,7 @@ mod tests {
             seed: 42,
         });
         let obs = observe(&state, 0);
-        let mut agent = SpreadAgent;
+        let mut agent = SpreadAgent::new();
         let directives = agent.act(&obs);
         assert!(directives.iter().any(|d| {
             matches!(
@@ -404,7 +505,7 @@ mod tests {
             seed: 42,
         });
         let obs = observe(&state, 0);
-        let mut agent = SpreadAgent;
+        let mut agent = SpreadAgent::new();
         let directives = agent.act(&obs);
         assert!(
             directives

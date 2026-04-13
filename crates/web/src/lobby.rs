@@ -1,14 +1,14 @@
 use crate::protocol::*;
+use rand::{SeedableRng, rngs::StdRng};
 use simulate_everything_engine::{
     event::PlayerStats,
     game::Game,
     mapgen::{self, MapConfig},
     replay::Frame,
 };
-use rand::{rngs::StdRng, SeedableRng};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, Mutex, Notify};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tracing::{info, warn};
 
 pub struct TurnSubmission {
@@ -72,7 +72,11 @@ impl Lobby {
     }
 
     pub async fn broadcast_config(&self, show_numbers: Option<bool>, tick_ms: Option<u64>) {
-        self.broadcast(ServerToSpectator::Config { show_numbers, tick_ms }).await;
+        self.broadcast(ServerToSpectator::Config {
+            show_numbers,
+            tick_ms,
+        })
+        .await;
     }
 
     pub fn spectator_subscribe(&self) -> broadcast::Receiver<ServerToSpectator> {
@@ -120,7 +124,14 @@ impl Lobby {
     pub async fn add_agent(
         &self,
         name: String,
-    ) -> Result<(u8, mpsc::Receiver<ServerToAgent>, mpsc::Sender<TurnSubmission>), String> {
+    ) -> Result<
+        (
+            u8,
+            mpsc::Receiver<ServerToAgent>,
+            mpsc::Sender<TurnSubmission>,
+        ),
+        String,
+    > {
         let mut agents = self.agents.lock().await;
         if agents.len() >= self.num_players as usize {
             return Err("Lobby is full".to_string());
@@ -151,14 +162,21 @@ impl Lobby {
 
         let lobby_players: Vec<LobbyPlayer> = agents
             .iter()
-            .map(|a| LobbyPlayer { slot: a.slot, name: a.name.clone() })
+            .map(|a| LobbyPlayer {
+                slot: a.slot,
+                name: a.name.clone(),
+            })
             .collect();
         self.broadcast(ServerToSpectator::Lobby {
             players: lobby_players,
             players_needed: needed,
-        }).await;
+        })
+        .await;
 
-        info!("Agent '{}' joined as player {} ({}/{})", name, slot, connected, needed);
+        info!(
+            "Agent '{}' joined as player {} ({}/{})",
+            name, slot, connected, needed
+        );
 
         if connected == needed {
             self.ready_notify.notify_one();
@@ -171,16 +189,23 @@ impl Lobby {
         let mut agents = self.agents.lock().await;
         agents.retain(|a| a.slot != slot);
         let connected = agents.len() as u8;
-        info!("Player {} disconnected ({}/{} remaining)", slot, connected, self.num_players);
+        info!(
+            "Player {} disconnected ({}/{} remaining)",
+            slot, connected, self.num_players
+        );
 
         let lobby_players: Vec<LobbyPlayer> = agents
             .iter()
-            .map(|a| LobbyPlayer { slot: a.slot, name: a.name.clone() })
+            .map(|a| LobbyPlayer {
+                slot: a.slot,
+                name: a.name.clone(),
+            })
             .collect();
         self.broadcast(ServerToSpectator::Lobby {
             players: lobby_players,
             players_needed: self.num_players,
-        }).await;
+        })
+        .await;
     }
 
     pub async fn run_loop(self: Arc<Self>) {
@@ -233,11 +258,16 @@ impl Lobby {
             height: state.height,
             num_players: self.num_players,
             agent_names: agent_names.clone(),
-        }).await;
+        })
+        .await;
 
         let initial_frame = make_frame(&state);
         let zero_compute = vec![0u64; self.num_players as usize];
-        self.broadcast(ServerToSpectator::Frame { frame: initial_frame, compute_us: zero_compute }).await;
+        self.broadcast(ServerToSpectator::Frame {
+            frame: initial_frame,
+            compute_us: zero_compute,
+        })
+        .await;
 
         let mut game = Game::with_seed(state, self.max_turns, seed);
 
@@ -286,7 +316,11 @@ impl Lobby {
 
             let frame = make_frame(&game.state);
             let zero_compute = vec![0u64; self.num_players as usize];
-            self.broadcast(ServerToSpectator::Frame { frame, compute_us: zero_compute }).await;
+            self.broadcast(ServerToSpectator::Frame {
+                frame,
+                compute_us: zero_compute,
+            })
+            .await;
 
             // Enforce minimum tick pacing — sleep until tick_ms has elapsed.
             let elapsed = tick_start.elapsed();
@@ -303,10 +337,13 @@ impl Lobby {
 
         let agents = self.agents.lock().await;
         for agent in agents.iter() {
-            let _ = agent.obs_tx.try_send(ServerToAgent::GameEnd { winner, turns });
+            let _ = agent
+                .obs_tx
+                .try_send(ServerToAgent::GameEnd { winner, turns });
         }
 
-        self.broadcast(ServerToSpectator::GameEnd { winner, turns }).await;
+        self.broadcast(ServerToSpectator::GameEnd { winner, turns })
+            .await;
     }
 }
 

@@ -1,4 +1,5 @@
 use super::hex::{Axial, axial_to_offset};
+use super::SETTLEMENT_THRESHOLD;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +84,7 @@ pub struct Population {
 pub enum CargoType {
     Food,
     Material,
+    Settlers,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,12 +92,14 @@ pub struct Convoy {
     pub id: u32,
     pub owner: u8,
     pub pos: Axial,
+    pub origin: Axial,
     pub destination: Axial,
     pub cargo_type: CargoType,
     pub cargo_amount: f32,
     pub capacity: f32,
     pub speed: f32,
     pub move_cooldown: u8,
+    pub returning: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,5 +184,17 @@ impl GameState {
     pub fn in_bounds(&self, ax: Axial) -> bool {
         let (row, col) = axial_to_offset(ax);
         row >= 0 && col >= 0 && (row as usize) < self.height && (col as usize) < self.width
+    }
+
+    pub fn population_on_hex(&self, owner: u8, ax: Axial) -> u16 {
+        self.population
+            .iter()
+            .filter(|p| p.owner == owner && p.hex == ax)
+            .map(|p| p.count)
+            .sum()
+    }
+
+    pub fn is_settlement(&self, owner: u8, ax: Axial) -> bool {
+        self.population_on_hex(owner, ax) >= SETTLEMENT_THRESHOLD
     }
 }

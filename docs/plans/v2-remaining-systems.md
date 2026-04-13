@@ -11,12 +11,13 @@ The V2 engine now includes:
 - Continuous tick sim (10hz, movement cooldowns)
 - Entity units (strength 100→0, edge-based engagement, 1/sqrt(N) effectiveness)
 - Two-resource economy (stationary units generate food + material, units consume food upkeep, starvation damages strength)
-- Population roles and soldier training at the general hex
+- Population roles, soldier training, settlements, and slow civilian migration
 - Stockpiles, depots, convoys, and road levels
+- Settlement radius-1 local accrual, remote frontier stockpile decay, and settler convoys for deliberate expansion
 - Terrain pipeline with height, moisture, rivers, biomes, regions, and height-aware vision/combat/movement
 - Fog of war with height bonus
-- SpreadAgent updated for role assignment, training, depots, roads, and convoy loading
-- Web integration (round-robin, WebSocket spectator, replay)
+- SpreadAgent updated for role assignment, training, depots, roads, settler launches, and convoy loading
+- Web integration (round-robin, WebSocket spectator, replay), including timeout-scored winners at 3000 ticks
 
 Key files:
 - `crates/engine/src/v2/state.rs` — terrain, stockpiles, roads, regions, units, population, convoys

@@ -75,7 +75,7 @@ impl SubprocessAgent {
         if let Some(ref mut handle) = self.child {
             let mut buf = String::new();
             match handle.reader.read_line(&mut buf) {
-                Ok(0) => None,    // EOF
+                Ok(0) => None, // EOF
                 Ok(_) => Some(buf),
                 Err(_) => None,
             }
@@ -112,7 +112,12 @@ impl SubprocessAgent {
                     "Right" => Direction::Right,
                     _ => Direction::Up,
                 };
-                actions.push(Action::Move { row, col, dir, split });
+                actions.push(Action::Move {
+                    row,
+                    col,
+                    dir,
+                    split,
+                });
             }
         }
         actions
@@ -144,7 +149,10 @@ impl Agent for SubprocessAgent {
         };
 
         if !self.send_line(&obs_json) {
-            eprintln!("Failed to send observation to subprocess agent '{}'", self.name);
+            eprintln!(
+                "Failed to send observation to subprocess agent '{}'",
+                self.name
+            );
             return vec![];
         }
 

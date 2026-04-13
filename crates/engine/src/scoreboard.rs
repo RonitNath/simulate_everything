@@ -16,7 +16,11 @@ impl AgentRecord {
 
     pub fn win_rate(&self) -> f64 {
         let g = self.games();
-        if g == 0 { 0.0 } else { self.wins as f64 / g as f64 }
+        if g == 0 {
+            0.0
+        } else {
+            self.wins as f64 / g as f64
+        }
     }
 }
 
@@ -37,10 +41,13 @@ impl Scoreboard {
     pub fn record(&mut self, participants: &[String], winner: Option<usize>) {
         self.total_games += 1;
         for (i, id) in participants.iter().enumerate() {
-            let record = self.records.entry(id.clone()).or_insert_with(|| AgentRecord {
-                id: id.clone(),
-                ..Default::default()
-            });
+            let record = self
+                .records
+                .entry(id.clone())
+                .or_insert_with(|| AgentRecord {
+                    id: id.clone(),
+                    ..Default::default()
+                });
             match winner {
                 Some(w) if w == i => record.wins += 1,
                 Some(_) => record.losses += 1,

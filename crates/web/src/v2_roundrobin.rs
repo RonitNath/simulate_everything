@@ -7,6 +7,7 @@ use simulate_everything_engine::v2::{
     replay::UnitSnapshot,
     sim,
     state::GameState,
+    TIMEOUT_TICKS,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -171,7 +172,7 @@ impl V2RoundRobin {
             // Broadcast initial frame
             self.broadcast(make_frame(&state)).await;
 
-            let max_ticks: u64 = 5000;
+            let max_ticks: u64 = TIMEOUT_TICKS;
             let mut aborted = false;
 
             while state.tick < max_ticks && !sim::is_over(&state) {
@@ -210,12 +211,13 @@ impl V2RoundRobin {
             }
 
             if !aborted {
-                let winner = sim::winner(&state);
+                let winner = sim::winner_at_limit(&state, max_ticks);
                 info!("V2 RR game done: winner={:?}, ticks={}", winner, state.tick);
 
                 self.broadcast(V2ServerToSpectator::GameEnd {
                     winner,
                     tick: state.tick,
+                    timed_out: sim::reached_timeout(&state, max_ticks),
                 })
                 .await;
             } else {

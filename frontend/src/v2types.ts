@@ -34,4 +34,5 @@ export interface V2Replay {
   agent_names: string[];
   frames: V2Frame[];
   winner: number | null;
+  timed_out: boolean;
 }

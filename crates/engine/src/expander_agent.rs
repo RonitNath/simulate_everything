@@ -298,14 +298,10 @@ impl ExpanderAgent {
                     let (dr, dc) = dir.delta();
                     let nr = row as i32 + dr;
                     let nc = col as i32 + dc;
-                    nr >= 0
-                        && nc >= 0
-                        && (nr as usize) < h
-                        && (nc as usize) < w
-                        && {
-                            let ni = nr as usize * w + nc as usize;
-                            obs.tiles[ni] != Tile::Mountain && obs.owners[ni] != Some(obs.player)
-                        }
+                    nr >= 0 && nc >= 0 && (nr as usize) < h && (nc as usize) < w && {
+                        let ni = nr as usize * w + nc as usize;
+                        obs.tiles[ni] != Tile::Mountain && obs.owners[ni] != Some(obs.player)
+                    }
                 });
                 if is_frontier {
                     all_frontier.push(idx);
@@ -466,8 +462,7 @@ impl ExpanderAgent {
                                 let nr = (row as i32 + dr) as usize;
                                 let nc = (col as i32 + dc) as usize;
                                 let ni = nr * w + nc;
-                                obs.owners[ni] == Some(obs.player)
-                                    && consolidation_dist[ni] < my_cd
+                                obs.owners[ni] == Some(obs.player) && consolidation_dist[ni] < my_cd
                             })
                             .min_by_key(|&dir| {
                                 let (dr, dc) = dir.delta();

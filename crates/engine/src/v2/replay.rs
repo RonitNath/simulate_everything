@@ -38,6 +38,7 @@ pub struct Replay {
     pub agent_names: Vec<String>,
     pub frames: Vec<Frame>,
     pub winner: Option<u8>,
+    pub timed_out: bool,
 }
 
 fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
@@ -77,13 +78,14 @@ pub fn record_game(
     sample_interval: u64,
 ) -> Replay {
     let mut state = generate(config);
+    let tick_limit = sim::timeout_limit(max_ticks);
     let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
     let terrain: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
     let material_map: Vec<f32> = state.grid.iter().map(|c| c.material_value).collect();
 
     let mut frames = vec![capture_frame(&state)];
 
-    while state.tick < max_ticks && !sim::is_over(&state) {
+    while state.tick < tick_limit && !sim::is_over(&state) {
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             for (player_id, agent) in agents.iter_mut().enumerate() {
                 let pid = player_id as u8;
@@ -116,7 +118,8 @@ pub fn record_game(
         num_players: config.num_players as usize,
         agent_names,
         frames,
-        winner: sim::winner(&state),
+        winner: sim::winner_at_limit(&state, tick_limit),
+        timed_out: sim::reached_timeout(&state, tick_limit),
     }
 }
 
