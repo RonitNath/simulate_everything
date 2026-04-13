@@ -21,19 +21,35 @@ pub struct Cell {
 
 impl Cell {
     pub fn empty() -> Self {
-        Self { tile: Tile::Empty, owner: None, armies: 0 }
+        Self {
+            tile: Tile::Empty,
+            owner: None,
+            armies: 0,
+        }
     }
 
     pub fn mountain() -> Self {
-        Self { tile: Tile::Mountain, owner: None, armies: 0 }
+        Self {
+            tile: Tile::Mountain,
+            owner: None,
+            armies: 0,
+        }
     }
 
     pub fn city(armies: i32) -> Self {
-        Self { tile: Tile::City, owner: None, armies }
+        Self {
+            tile: Tile::City,
+            owner: None,
+            armies,
+        }
     }
 
     pub fn general(player: u8) -> Self {
-        Self { tile: Tile::General, owner: Some(player), armies: 1 }
+        Self {
+            tile: Tile::General,
+            owner: Some(player),
+            armies: 1,
+        }
     }
 }
 
@@ -76,7 +92,11 @@ impl GameState {
 
     /// Sum armies owned by a player.
     pub fn army_count(&self, player: u8) -> i32 {
-        self.grid.iter().filter(|c| c.owner == Some(player)).map(|c| c.armies).sum()
+        self.grid
+            .iter()
+            .filter(|c| c.owner == Some(player))
+            .map(|c| c.armies)
+            .sum()
     }
 
     /// Number of players still alive.

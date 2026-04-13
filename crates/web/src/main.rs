@@ -14,6 +14,11 @@ use axum::{
     response::{Html, IntoResponse, Json},
     routing::get,
 };
+use lobby::{Lobby, TurnSubmission};
+use protocol::{AgentToServer, ServerToAgent, SpectatorToServer};
+use rand::{SeedableRng, rngs::StdRng};
+use roundrobin::RoundRobin;
+use serde::Deserialize;
 use simulate_everything_engine::{
     agent::Agent,
     game::Game,
@@ -22,17 +27,12 @@ use simulate_everything_engine::{
     scoreboard::Scoreboard,
     v2,
 };
-use lobby::{Lobby, TurnSubmission};
-use protocol::{AgentToServer, ServerToAgent, SpectatorToServer};
-use rand::{SeedableRng, rngs::StdRng};
-use roundrobin::RoundRobin;
-use serde::Deserialize;
-use v2_roundrobin::V2RoundRobin;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
+use v2_roundrobin::V2RoundRobin;
 
 // ============================================================
 // Shared state
@@ -66,8 +66,8 @@ struct GameParams {
 }
 
 fn run_game(seed: u64, num_players: u8, max_turns: u32, size: Option<(usize, usize)>) -> Replay {
-    use simulate_everything_engine::agent::all_builtin_agents;
     use rand::seq::SliceRandom;
+    use simulate_everything_engine::agent::all_builtin_agents;
 
     let mut rng = StdRng::seed_from_u64(seed);
     let config = match size {
@@ -602,10 +602,7 @@ async fn v2_rr_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     )
 }
 
-async fn ws_v2_rr(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_v2_rr(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let rx = state.v2_rr.spectator_subscribe();
     let catchup = state.v2_rr.spectator_catchup().await;
     ws.on_upgrade(move |socket| handle_v2_spectator(socket, rx, catchup))
@@ -744,7 +741,9 @@ async fn main() {
     info!("Serving static files from: {}", static_dir);
 
     let app = Router::new()
-        .route("/", get(simulator_page))
+        .route("/", get(v2_sim_page))
+        .route("/rr", get(v2_rr_page))
+        .route("/ws/rr", get(ws_v2_rr))
         .route("/api/game", get(api_game))
         .route("/api/ascii", get(api_ascii))
         .route("/api/v2/game", get(api_v2_game))
@@ -752,8 +751,9 @@ async fn main() {
         .route("/live", get(live_page))
         .route("/ws/agent", get(ws_agent))
         .route("/ws/spectate", get(ws_spectate_live))
-        .route("/rr", get(rr_page))
-        .route("/ws/rr", get(ws_spectate_rr))
+        .route("/v1", get(simulator_page))
+        .route("/v1/rr", get(rr_page))
+        .route("/ws/v1/rr", get(ws_spectate_rr))
         .route("/scoreboard", get(scoreboard_page))
         .route("/api/scoreboard", get(api_scoreboard))
         .route("/api/rr/config", axum::routing::post(api_rr_config))

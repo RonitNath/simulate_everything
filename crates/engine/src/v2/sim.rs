@@ -4,18 +4,21 @@ use super::pathfinding;
 use super::state::{CargoType, GameState, Population, Role};
 use super::{
     BASE_MOVE_COOLDOWN, BASE_STORAGE_CAP, CONVOY_MOVE_COOLDOWN, DEPOT_STORAGE_CAP, FARMER_RATE,
-    FOOD_RATE, MATERIAL_RATE, POPULATION_GROWTH_RATE, SOLDIER_READY_THRESHOLD, STARVATION_DAMAGE,
-    TERRAIN_MOVE_PENALTY, TRAINING_RATE, UPKEEP_PER_UNIT, WORKER_RATE,
+    FOOD_RATE, FRONTIER_DECAY_RATE, MATERIAL_RATE, MIGRATION_DIVISOR, POPULATION_GROWTH_RATE, TIMEOUT_TICKS,
+    SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SOLDIER_READY_THRESHOLD, STARVATION_DAMAGE, TERRAIN_MOVE_PENALTY,
+    TRAINING_RATE, UPKEEP_PER_UNIT, WORKER_RATE,
 };
 use std::collections::HashMap;
 
 pub fn tick(state: &mut GameState) {
     generate_resources(state);
     grow_population(state);
+    migrate_population(state);
     consume_upkeep(state);
     combat::resolve_combat(state);
     move_convoys(state);
     move_units(state);
+    decay_frontier_stockpiles(state);
     decrement_cooldowns(state);
     cleanup(state);
     check_stale_engagements(state);
@@ -27,6 +30,14 @@ pub fn is_over(state: &GameState) -> bool {
     state.players.iter().filter(|p| p.alive).count() <= 1
 }
 
+pub fn timeout_limit(max_ticks: u64) -> u64 {
+    max_ticks.min(TIMEOUT_TICKS)
+}
+
+pub fn reached_timeout(state: &GameState, max_ticks: u64) -> bool {
+    state.tick >= timeout_limit(max_ticks)
+}
+
 pub fn winner(state: &GameState) -> Option<u8> {
     let alive: Vec<_> = state.players.iter().filter(|p| p.alive).collect();
     if alive.len() == 1 {
@@ -34,6 +45,107 @@ pub fn winner(state: &GameState) -> Option<u8> {
     } else {
         None
     }
+}
+
+pub fn winner_at_limit(state: &GameState, max_ticks: u64) -> Option<u8> {
+    winner(state).or_else(|| {
+        if reached_timeout(state, max_ticks) {
+            winner_by_score(state)
+        } else {
+            None
+        }
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScoreBreakdown {
+    pub player_id: u8,
+    pub population: f32,
+    pub territory: f32,
+    pub military: f32,
+    pub stockpiles: f32,
+    pub total: f32,
+}
+
+pub fn score_players(state: &GameState) -> Vec<ScoreBreakdown> {
+    let total_population = state
+        .population
+        .iter()
+        .map(|p| p.count as f32)
+        .sum::<f32>()
+        .max(1.0);
+    let total_territory = (state
+        .grid
+        .iter()
+        .filter(|c| c.stockpile_owner.is_some())
+        .count() as f32)
+        .max(1.0);
+    let total_military = state
+        .units
+        .iter()
+        .map(|u| u.strength.max(0.0))
+        .sum::<f32>()
+        .max(1.0);
+    let total_stockpiles = state
+        .grid
+        .iter()
+        .map(|c| c.food_stockpile + c.material_stockpile)
+        .sum::<f32>()
+        .max(1.0);
+
+    state
+        .players
+        .iter()
+        .map(|player| {
+            let population = state
+                .population
+                .iter()
+                .filter(|p| p.owner == player.id)
+                .map(|p| p.count as f32)
+                .sum::<f32>();
+            let territory = state
+                .grid
+                .iter()
+                .filter(|c| c.stockpile_owner == Some(player.id))
+                .count() as f32;
+            let military = state
+                .units
+                .iter()
+                .filter(|u| u.owner == player.id)
+                .map(|u| u.strength.max(0.0))
+                .sum::<f32>();
+            let stockpiles = state
+                .grid
+                .iter()
+                .filter(|c| c.stockpile_owner == Some(player.id))
+                .map(|c| c.food_stockpile + c.material_stockpile)
+                .sum::<f32>();
+            let total = 0.4 * (population / total_population)
+                + 0.3 * (territory / total_territory)
+                + 0.2 * (military / total_military)
+                + 0.1 * (stockpiles / total_stockpiles);
+            ScoreBreakdown {
+                player_id: player.id,
+                population,
+                territory,
+                military,
+                stockpiles,
+                total,
+            }
+        })
+        .collect()
+}
+
+pub fn winner_by_score(state: &GameState) -> Option<u8> {
+    score_players(state)
+        .into_iter()
+        .max_by(|a, b| {
+            a.total
+                .partial_cmp(&b.total)
+                .unwrap()
+                .then_with(|| a.military.partial_cmp(&b.military).unwrap())
+        })
+        .map(|s| s.player_id)
 }
 
 fn storage_cap(has_depot: bool) -> f32 {
@@ -44,8 +156,30 @@ fn storage_cap(has_depot: bool) -> f32 {
     }
 }
 
+fn settlement_hexes(state: &GameState, owner: u8) -> Vec<Axial> {
+    let mut hexes = Vec::new();
+    for pop in state.population.iter().filter(|p| p.owner == owner) {
+        if state.population_on_hex(owner, pop.hex) >= SETTLEMENT_THRESHOLD && !hexes.contains(&pop.hex) {
+            hexes.push(pop.hex);
+        }
+    }
+    hexes
+}
+
+fn supported_settlement(state: &GameState, owner: u8, ax: Axial) -> Option<Axial> {
+    settlement_hexes(state, owner)
+        .into_iter()
+        .filter(|settlement| hex::distance(*settlement, ax) <= SETTLEMENT_SUPPORT_RADIUS)
+        .min_by_key(|settlement| hex::distance(*settlement, ax))
+}
+
+fn has_settlement_support(state: &GameState, owner: u8, ax: Axial) -> bool {
+    supported_settlement(state, owner, ax).is_some()
+}
+
 fn add_stockpile(state: &mut GameState, ax: Axial, owner: u8, food: f32, material: f32) {
-    if let Some(cell) = state.cell_at_mut(ax) {
+    let target = supported_settlement(state, owner, ax).unwrap_or(ax);
+    if let Some(cell) = state.cell_at_mut(target) {
         if cell.stockpile_owner.is_none() || cell.stockpile_owner == Some(owner) {
             cell.stockpile_owner = Some(owner);
         }
@@ -157,6 +291,9 @@ fn grow_population(state: &mut GameState) {
             continue;
         }
         let total_pop: u16 = cohorts.iter().map(|p| p.count).sum();
+        if total_pop < SETTLEMENT_THRESHOLD {
+            continue;
+        }
         let Some(cell) = state.cell_at(hex) else {
             continue;
         };
@@ -190,6 +327,90 @@ fn grow_population(state: &mut GameState) {
             state.next_pop_id += 1;
         }
     }
+}
+
+fn migrate_population(state: &mut GameState) {
+    let mut seen: Vec<(Axial, u8)> = Vec::new();
+    let mut migrations: Vec<(u32, Axial)> = Vec::new();
+
+    for pop in &state.population {
+        let key = (pop.hex, pop.owner);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+
+        let total_pop = state.population_on_hex(pop.owner, pop.hex);
+        if total_pop <= 15 || total_pop < SETTLEMENT_THRESHOLD {
+            continue;
+        }
+
+        let roll =
+            (state.tick + pop.hex.q.unsigned_abs() as u64 * 17 + pop.hex.r.unsigned_abs() as u64 * 31)
+                % MIGRATION_DIVISOR;
+        if roll != 0 {
+            continue;
+        }
+
+        let origin_fertility = state.cell_at(pop.hex).map(|c| c.terrain_value).unwrap_or(0.0);
+        let target = hex::neighbors(pop.hex)
+            .into_iter()
+            .filter(|n| state.in_bounds(*n))
+            .filter(|n| {
+                state
+                    .cell_at(*n)
+                    .map(|c| c.stockpile_owner == Some(pop.owner))
+                    .unwrap_or(false)
+            })
+            .filter(|n| !state.is_settlement(pop.owner, *n))
+            .max_by(|a, b| {
+                let af = state.cell_at(*a).map(|c| c.terrain_value).unwrap_or(0.0);
+                let bf = state.cell_at(*b).map(|c| c.terrain_value).unwrap_or(0.0);
+                af.partial_cmp(&bf).unwrap()
+            });
+        let Some(target_hex) = target else { continue };
+        let target_fertility = state
+            .cell_at(target_hex)
+            .map(|c| c.terrain_value)
+            .unwrap_or(0.0);
+        if target_fertility < origin_fertility {
+            continue;
+        }
+        if let Some(source) = state.population.iter().find(|p| {
+            p.owner == pop.owner && p.hex == pop.hex && p.role != Role::Soldier && p.count > 0
+        }) {
+            migrations.push((source.id, target_hex));
+        }
+    }
+
+    for (source_id, target_hex) in migrations {
+        if let Some(idx) = state
+            .population
+            .iter()
+            .position(|p| p.id == source_id && p.count > 0)
+        {
+            let owner = state.population[idx].owner;
+            state.population[idx].count -= 1;
+            if let Some(target) = state
+                .population
+                .iter_mut()
+                .find(|p| p.owner == owner && p.hex == target_hex && p.role == Role::Idle)
+            {
+                target.count += 1;
+            } else {
+                state.population.push(Population {
+                    id: state.next_pop_id,
+                    hex: target_hex,
+                    owner,
+                    count: 1,
+                    role: Role::Idle,
+                    training: 0.0,
+                });
+                state.next_pop_id += 1;
+            }
+        }
+    }
+    state.population.retain(|p| p.count > 0);
 }
 
 fn consume_upkeep(state: &mut GameState) {
@@ -333,13 +554,61 @@ fn move_convoys(state: &mut GameState) {
             if next == dest {
                 if let Some(idx) = state.convoys.iter().position(|c| c.id == id) {
                     let convoy = state.convoys.remove(idx);
-                    add_convoy_cargo_to_cell(
-                        state,
-                        dest,
-                        owner,
-                        convoy.cargo_type,
-                        convoy.cargo_amount,
-                    );
+                    match convoy.cargo_type {
+                        CargoType::Settlers => {
+                            if owner_controls_hex(state, owner, dest)
+                                && state
+                                    .cell_at(dest)
+                                    .map(|c| c.terrain_value > 0.0)
+                                    .unwrap_or(false)
+                                && !state.is_settlement(owner, dest)
+                            {
+                                if let Some(target) = state.population.iter_mut().find(|p| {
+                                    p.owner == owner && p.hex == dest && p.role == Role::Idle
+                                }) {
+                                    target.count += convoy.cargo_amount.round() as u16;
+                                } else {
+                                    state.population.push(Population {
+                                        id: state.next_pop_id,
+                                        hex: dest,
+                                        owner,
+                                        count: convoy.cargo_amount.round() as u16,
+                                        role: Role::Idle,
+                                        training: 0.0,
+                                    });
+                                    state.next_pop_id += 1;
+                                }
+                                if let Some(cell) = state.cell_at_mut(dest) {
+                                    cell.stockpile_owner = Some(owner);
+                                }
+                            }
+                        }
+                        CargoType::Food | CargoType::Material => {
+                            add_convoy_cargo_to_cell(
+                                state,
+                                dest,
+                                owner,
+                                convoy.cargo_type,
+                                convoy.cargo_amount,
+                            );
+                            if !convoy.returning && convoy.origin != dest {
+                                state.convoys.push(super::state::Convoy {
+                                    id: state.next_convoy_id,
+                                    owner: convoy.owner,
+                                    pos: dest,
+                                    origin: convoy.origin,
+                                    destination: convoy.origin,
+                                    cargo_type: convoy.cargo_type,
+                                    cargo_amount: 0.0,
+                                    capacity: convoy.capacity,
+                                    speed: convoy.speed,
+                                    move_cooldown: CONVOY_MOVE_COOLDOWN,
+                                    returning: true,
+                                });
+                                state.next_convoy_id += 1;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -361,8 +630,51 @@ fn add_convoy_cargo_to_cell(
             CargoType::Material => {
                 cell.material_stockpile = (cell.material_stockpile + amount).clamp(0.0, cap)
             }
+            CargoType::Settlers => {}
         }
     }
+}
+
+fn decay_frontier_stockpiles(state: &mut GameState) {
+    let support_mask: Vec<bool> = state
+        .grid
+        .iter()
+        .enumerate()
+        .map(|(idx, cell)| {
+            if let Some(owner) = cell.stockpile_owner {
+                has_settlement_support(state, owner, offset_index_to_axial(state, idx))
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    for (idx, supported) in support_mask.into_iter().enumerate() {
+        if !supported {
+            let cell = &mut state.grid[idx];
+            if cell.stockpile_owner.is_some() {
+                cell.food_stockpile *= 1.0 - FRONTIER_DECAY_RATE;
+                cell.material_stockpile *= 1.0 - FRONTIER_DECAY_RATE;
+            }
+        }
+    }
+}
+
+fn offset_index_to_axial(state: &GameState, idx: usize) -> Axial {
+    let row = idx / state.width;
+    let col = idx % state.width;
+    hex::offset_to_axial(row as i32, col as i32)
+}
+
+fn owner_controls_hex(state: &GameState, player_id: u8, hex: Axial) -> bool {
+    state
+        .cell_at(hex)
+        .map(|c| c.stockpile_owner == Some(player_id))
+        .unwrap_or(false)
+        || state
+            .units
+            .iter()
+            .any(|u| u.owner == player_id && u.pos == hex)
 }
 
 fn decrement_cooldowns(state: &mut GameState) {
@@ -595,5 +907,90 @@ mod tests {
         apply_directives(&mut state, 0, &[Directive::Produce]);
         let after = state.units.iter().filter(|u| u.owner == 0).count();
         assert!(after > before);
+    }
+
+    #[test]
+    fn unsupported_frontier_stockpiles_decay() {
+        let mut state = test_state();
+        let general_pos = state
+            .units
+            .iter()
+            .find(|u| u.owner == 0 && u.is_general)
+            .unwrap()
+            .pos;
+        let frontier = neighbors(general_pos)
+            .into_iter()
+            .flat_map(neighbors)
+            .find(|ax| state.in_bounds(*ax) && distance(*ax, general_pos) >= 2)
+            .unwrap();
+        let cell = state.cell_at_mut(frontier).unwrap();
+        cell.stockpile_owner = Some(0);
+        cell.food_stockpile = 10.0;
+        cell.material_stockpile = 8.0;
+
+        tick(&mut state);
+
+        let cell = state.cell_at(frontier).unwrap();
+        assert!(cell.food_stockpile < 10.0);
+        assert!(cell.material_stockpile < 8.0);
+    }
+
+    #[test]
+    fn settler_convoy_can_found_remote_settlement() {
+        let mut state = test_state();
+        let general_pos = state
+            .units
+            .iter()
+            .find(|u| u.owner == 0 && u.is_general)
+            .unwrap()
+            .pos;
+        let target = neighbors(general_pos)
+            .into_iter()
+            .flat_map(neighbors)
+            .find(|ax| state.in_bounds(*ax) && distance(*ax, general_pos) >= 2)
+            .unwrap();
+        state.cell_at_mut(target).unwrap().stockpile_owner = Some(0);
+
+        apply_directives(
+            &mut state,
+            0,
+            &[Directive::LoadConvoy {
+                hex_q: general_pos.q,
+                hex_r: general_pos.r,
+                cargo_type: CargoType::Settlers,
+                amount: 10.0,
+            }],
+        );
+        let convoy_id = state.convoys[0].id;
+        apply_directives(
+            &mut state,
+            0,
+            &[Directive::SendConvoy {
+                convoy_id,
+                dest_q: target.q,
+                dest_r: target.r,
+            }],
+        );
+
+        for _ in 0..40 {
+            tick(&mut state);
+            if state.is_settlement(0, target) {
+                break;
+            }
+        }
+
+        assert!(state.is_settlement(0, target));
+    }
+
+    #[test]
+    fn timeout_winner_uses_score() {
+        let mut state = test_state();
+        state.tick = TIMEOUT_TICKS;
+        for pop in state.population.iter_mut().filter(|p| p.owner == 0) {
+            pop.count = pop.count.saturating_add(20);
+        }
+
+        assert_eq!(winner_at_limit(&state, TIMEOUT_TICKS), Some(0));
+        assert!(reached_timeout(&state, TIMEOUT_TICKS));
     }
 }

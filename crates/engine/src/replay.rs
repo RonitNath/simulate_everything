@@ -1,6 +1,6 @@
-use serde::Serialize;
 use crate::event::PlayerStats;
 use crate::state::{Cell, GameState};
+use serde::Serialize;
 
 /// A compact snapshot of the grid at one turn.
 #[derive(Debug, Clone, Serialize)]

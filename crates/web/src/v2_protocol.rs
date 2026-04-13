@@ -22,7 +22,11 @@ pub enum V2ServerToSpectator {
         alive: Vec<bool>,
     },
     #[serde(rename = "v2_game_end")]
-    GameEnd { winner: Option<u8>, tick: u64 },
+    GameEnd {
+        winner: Option<u8>,
+        tick: u64,
+        timed_out: bool,
+    },
     #[serde(rename = "v2_config")]
     Config {
         #[serde(skip_serializing_if = "Option::is_none")]

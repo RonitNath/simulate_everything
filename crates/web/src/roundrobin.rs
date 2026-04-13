@@ -1,15 +1,15 @@
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use simulate_everything_engine::{
-    agent::{rr_agents, Agent},
+    agent::{Agent, rr_agents},
     event::PlayerStats,
     game::Game,
     mapgen::{self, MapConfig},
     replay::Frame,
     scoreboard::Scoreboard,
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex, Notify};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::{Mutex, Notify, broadcast};
 use tracing::info;
 
 use crate::protocol::ServerToSpectator;
@@ -128,7 +128,11 @@ impl RoundRobin {
     }
 
     pub async fn broadcast_config(&self, show_numbers: Option<bool>, tick_ms: Option<u64>) {
-        self.broadcast(ServerToSpectator::Config { show_numbers, tick_ms }).await;
+        self.broadcast(ServerToSpectator::Config {
+            show_numbers,
+            tick_ms,
+        })
+        .await;
     }
 
     pub fn spectator_subscribe(&self) -> broadcast::Receiver<ServerToSpectator> {
@@ -214,30 +218,48 @@ impl RoundRobin {
                 .collect();
 
             // Disambiguate duplicate names with a suffix.
-            let mut name_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            let agent_names: Vec<String> = agents.iter().map(|a| {
-                let base = a.id();
-                let count = name_counts.entry(base.clone()).or_insert(0);
-                *count += 1;
-                if *count == 1 { base } else { format!("{} #{}", base, count) }
-            }).collect();
+            let mut name_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let agent_names: Vec<String> = agents
+                .iter()
+                .map(|a| {
+                    let base = a.id();
+                    let count = name_counts.entry(base.clone()).or_insert(0);
+                    *count += 1;
+                    if *count == 1 {
+                        base
+                    } else {
+                        format!("{} #{}", base, count)
+                    }
+                })
+                .collect();
             let agent_ids = agent_names.clone();
 
             let config = MapConfig::for_size(23, 23, NUM_PLAYERS);
             let state = mapgen::generate(&config, &mut rng);
 
-            info!("RR game #{}: {} (seed={})", seed - 999, agent_ids.join(", "), seed);
+            info!(
+                "RR game #{}: {} (seed={})",
+                seed - 999,
+                agent_ids.join(", "),
+                seed
+            );
 
             self.broadcast(ServerToSpectator::GameStart {
                 width: state.width,
                 height: state.height,
                 num_players: NUM_PLAYERS,
                 agent_names: agent_names.clone(),
-            }).await;
+            })
+            .await;
 
             let initial_frame = make_frame(&state);
             let zero_compute = vec![0u64; NUM_PLAYERS as usize];
-            self.broadcast(ServerToSpectator::Frame { frame: initial_frame, compute_us: zero_compute }).await;
+            self.broadcast(ServerToSpectator::Frame {
+                frame: initial_frame,
+                compute_us: zero_compute,
+            })
+            .await;
 
             let mut game = Game::with_seed(state, 500, seed);
             let mut aborted = false;
@@ -267,7 +289,8 @@ impl RoundRobin {
                 game.step(&orders);
 
                 let frame = make_frame(&game.state);
-                self.broadcast(ServerToSpectator::Frame { frame, compute_us }).await;
+                self.broadcast(ServerToSpectator::Frame { frame, compute_us })
+                    .await;
 
                 let compute_elapsed = tick_start.elapsed();
                 {
@@ -285,14 +308,19 @@ impl RoundRobin {
                 let winner = game.state.winner;
                 let turns = game.state.turn;
 
-                info!("RR game done: winner={:?}, turns={}", winner.map(|w| &agent_ids[w as usize]), turns);
+                info!(
+                    "RR game done: winner={:?}, turns={}",
+                    winner.map(|w| &agent_ids[w as usize]),
+                    turns
+                );
 
                 {
                     let mut sb = self.scoreboard.lock().await;
                     sb.record(&agent_ids, winner.map(|w| w as usize));
                 }
 
-                self.broadcast(ServerToSpectator::GameEnd { winner, turns }).await;
+                self.broadcast(ServerToSpectator::GameEnd { winner, turns })
+                    .await;
             } else {
                 info!("RR game aborted (reset)");
             }

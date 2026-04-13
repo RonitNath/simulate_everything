@@ -218,6 +218,11 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `UNIT_MATERIAL_COST` | 5.0 | Material cost to produce one unit |
 | `UPKEEP_PER_UNIT` | 0.02 / tick | Food upkeep per unit |
 | `STARVATION_DAMAGE` | 0.5 | Strength lost per tick when upkeep cannot be paid |
+| `SETTLEMENT_THRESHOLD` | 10 | Population required for a hex to count as a settlement |
+| `SETTLER_CONVOY_SIZE` | 10 | Population loaded into one settler convoy |
+| `SETTLEMENT_SUPPORT_RADIUS` | 1 hex | Radius that auto-accrues production into a settlement stockpile |
+| `FRONTIER_DECAY_RATE` | 0.02 / tick | Unsupported frontier stockpile spoilage rate |
+| `TIMEOUT_TICKS` | 3000 | Hard timeout before winner-by-score is used |
 | `SOLDIERS_PER_UNIT` | 5 | Trained population consumed per produced unit |
 | `INITIAL_STRENGTH` | 100.0 | Starting strength for a new unit |
 | `DAMAGE_RATE` | 0.05 | Fraction of strength dealt per tick in combat |
@@ -247,6 +252,17 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `replay` | `UnitSnapshot` and replay recording types |
 | `runner` | Synchronous game runner (used by `/api/v2/game`) |
 
+**V2 economy and settlement rules:**
+
+- Population exists per hex, but only hexes with at least `SETTLEMENT_THRESHOLD` population count as settlements.
+- Only settlements grow population, can build depots/roads, and act as stockpile anchors.
+- Production inside `SETTLEMENT_SUPPORT_RADIUS` of a settlement auto-accrues into that settlement's stockpile.
+- Production outside settlement support remains on the producing hex until convoyed away.
+- Unsupported frontier stockpiles decay by `FRONTIER_DECAY_RATE` each tick.
+- Natural migration is slow adjacent drift from established settlements into owned fertile frontier hexes.
+- Deliberate long-range expansion uses settler convoys carrying `SETTLER_CONVOY_SIZE` population.
+- V2 games end either by elimination or by `TIMEOUT_TICKS`, where the timeout winner is chosen by weighted score: population 40%, territory 30%, military strength 20%, stockpiles 10%.
+
 ### V2 Web Routes
 
 | Route | Method | Description |
@@ -272,7 +288,7 @@ All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crate
 |--------|--------|-------------|
 | `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. Terrain arrays currently expose the food/material productivity layers used by the UI. |
 | `v2_frame` | `tick: u64`, `units: Vec<UnitSnapshot>`, `player_food: Vec<f32>`, `player_material: Vec<f32>`, `alive: Vec<bool>` | Sent every tick. Full unit list with positions, strength, engagement state, and per-player economy. |
-| `v2_game_end` | `winner: Option<u8>`, `tick: u64` | Sent when the game ends. `winner` is `null` on timeout. |
+| `v2_game_end` | `winner: Option<u8>`, `tick: u64`, `timed_out: bool` | Sent when the game ends. Timeouts still report the scored winner; `timed_out` distinguishes score wins from elimination wins. |
 | `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
 
 `UnitSnapshot` fields: `id`, `owner`, `q`, `r`, `strength`, `engaged` (bool), `is_general` (bool).
@@ -285,7 +301,7 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 
 - 2-player games on 30×30 hex maps.
 - Seeds increment from 1000 each game.
-- Max 5000 ticks per game before forced `game_end`.
+- Max 3000 ticks per game before forced `game_end` and score-based winner selection.
 - Agents are polled every `AGENT_POLL_INTERVAL` (5) ticks.
 - Currently runs **SpreadAgent vs SpreadAgent** — both players use the same placeholder agent.
 - Supports pause / resume / reset without process restart.
@@ -308,7 +324,7 @@ Directives are accumulated and applied to the game state by `directive::apply_di
 **SpreadAgent** — current placeholder:
 
 - Balances general-hex population between farmers, workers, and soldier training.
-- Builds a depot and basic roads around the general, then opportunistically launches convoys from owned stockpile hexes.
+- Builds a depot and basic roads around the general, launches settler convoys once the core is large enough, and opportunistically launches resource convoys from owned stockpile hexes.
 - Produces units from trained soldiers when the general hex has enough local food/material stockpile.
 - Moves non-general units with the original spread/lanes heuristic and engages opportunistically.
 

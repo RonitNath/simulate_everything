@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use simulate_everything_engine::action::Action;
 use simulate_everything_engine::agent::Observation;
 use simulate_everything_engine::replay::Frame;
-use serde::{Deserialize, Serialize};
 
 // === Messages FROM spectators TO server ===
 

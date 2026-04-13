@@ -1,11 +1,11 @@
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use rayon::prelude::*;
 use simulate_everything_engine::agent::{self, Agent};
 use simulate_everything_engine::game::Game;
 use simulate_everything_engine::mapgen::{self, MapConfig};
 use simulate_everything_engine::replay::Replay;
 use simulate_everything_engine::state::Tile;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-use rayon::prelude::*;
 use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 
@@ -81,7 +81,10 @@ fn parse_seed_range(s: &str) -> Vec<u64> {
 
 fn parse_size(s: &str) -> (usize, usize) {
     let (w, h) = s.split_once('x').expect("size must be WxH");
-    (w.parse().expect("bad width"), h.parse().expect("bad height"))
+    (
+        w.parse().expect("bad width"),
+        h.parse().expect("bad height"),
+    )
 }
 
 fn export_main(args: &[String]) {
@@ -125,7 +128,9 @@ fn export_main(args: &[String]) {
         "Generating {} replays: {} on {}x{} (max_turns={})",
         seeds.len(),
         agent_names.join(" vs "),
-        w, h, max_turns,
+        w,
+        h,
+        max_turns,
     );
 
     // Generate replays in parallel.
@@ -237,7 +242,9 @@ fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
     write!(out, "{}", replay.num_players).unwrap();
     out.push_str(",\"an\":[");
     for (i, name) in replay.agent_names.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
         out.push('"');
         out.push_str(name);
         out.push('"');
@@ -251,7 +258,9 @@ fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
     let mut prev_grid: Option<&[simulate_everything_engine::state::Cell]> = None;
 
     for (i, frame) in replay.frames.iter().enumerate() {
-        if i > 0 { out.push(','); }
+        if i > 0 {
+            out.push(',');
+        }
 
         let is_keyframe = i % keyframe_interval == 0;
 
@@ -261,7 +270,9 @@ fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
         if is_keyframe || prev_grid.is_none() {
             out.push_str(",\"g\":[");
             for (j, cell) in frame.grid.iter().enumerate() {
-                if j > 0 { out.push(','); }
+                if j > 0 {
+                    out.push(',');
+                }
                 write_cell_compact(&mut out, cell);
             }
             out.push(']');
@@ -271,7 +282,9 @@ fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
             for (j, cell) in frame.grid.iter().enumerate() {
                 let p = &prev[j];
                 if cell.tile != p.tile || cell.owner != p.owner || cell.armies != p.armies {
-                    if !first { out.push(','); }
+                    if !first {
+                        out.push(',');
+                    }
                     write!(out, "{},", j).unwrap();
                     write_cell_compact(&mut out, cell);
                     first = false;
@@ -282,11 +295,18 @@ fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
 
         out.push_str(",\"s\":[");
         for (j, stat) in frame.stats.iter().enumerate() {
-            if j > 0 { out.push(','); }
-            write!(out, "[{},{},{},{}]",
-                stat.player, stat.land, stat.armies,
+            if j > 0 {
+                out.push(',');
+            }
+            write!(
+                out,
+                "[{},{},{},{}]",
+                stat.player,
+                stat.land,
+                stat.armies,
                 if stat.alive { 1 } else { 0 }
-            ).unwrap();
+            )
+            .unwrap();
         }
         out.push_str("]}");
 
@@ -312,13 +332,12 @@ fn write_cell_compact(out: &mut String, cell: &simulate_everything_engine::state
 // Self-contained HTML renderer
 // ---------------------------------------------------------------------------
 
-fn render_standalone_html(
-    replay: &Replay,
-    seed: u64,
-    agent_names: &[&str],
-    title: &str,
-) -> String {
-    let keyframe_interval = if replay.width * replay.height > 10_000 { 50 } else { 100 };
+fn render_standalone_html(replay: &Replay, seed: u64, agent_names: &[&str], title: &str) -> String {
+    let keyframe_interval = if replay.width * replay.height > 10_000 {
+        50
+    } else {
+        100
+    };
     let replay_json = compact_replay_json(replay, keyframe_interval);
     // For many players, show "12p FFA (pressure, expander, swarm)" instead of listing all
     let matchup = if agent_names.len() > 4 {
@@ -470,7 +489,7 @@ fn html_escape(s: &str) -> String {
 
 #[cfg(feature = "serve")]
 fn serve_main(args: &[String]) {
-    use axum::{routing::get_service, Router};
+    use axum::{Router, routing::get_service};
     use tower_http::services::ServeDir;
 
     let dir = flag_value(args, "--dir").unwrap_or("./replays");

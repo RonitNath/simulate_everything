@@ -13,17 +13,18 @@ pub fn run_game(
     agents: &mut [Box<dyn Agent>],
     max_ticks: u64,
 ) -> Option<u8> {
+    let tick_limit = sim::timeout_limit(max_ticks);
     let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
     tracing::info!(
         width = state.width,
         height = state.height,
         players = state.players.len(),
-        max_ticks,
+        max_ticks = tick_limit,
         ?agent_names,
         "game starting"
     );
 
-    while state.tick < max_ticks && !sim::is_over(state) {
+    while state.tick < tick_limit && !sim::is_over(state) {
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             for (player_id, agent) in agents.iter_mut().enumerate() {
                 let pid = player_id as u8;
@@ -74,9 +75,10 @@ pub fn run_game(
         }
     }
 
-    let winner = sim::winner(state);
+    let winner = sim::winner_at_limit(state, tick_limit);
     tracing::info!(
         tick = state.tick,
+        timed_out = sim::reached_timeout(state, tick_limit),
         winner = ?winner,
         "game ended"
     );

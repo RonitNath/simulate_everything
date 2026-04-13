@@ -1,5 +1,5 @@
-use serde::Serialize;
 use crate::action::Action;
+use serde::Serialize;
 
 /// Structured events emitted during a game, designed for AI agent consumption.
 /// Each event is one JSONL line.
@@ -24,11 +24,7 @@ pub enum Event {
     },
     /// A player captured another player's general.
     #[serde(rename = "elimination")]
-    Elimination {
-        turn: u32,
-        eliminated: u8,
-        by: u8,
-    },
+    Elimination { turn: u32, eliminated: u8, by: u8 },
     /// Game over.
     #[serde(rename = "game_end")]
     GameEnd {

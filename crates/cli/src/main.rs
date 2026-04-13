@@ -1,12 +1,12 @@
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use rayon::prelude::*;
+use serde::Serialize;
 use simulate_everything_engine::agent::{self, Agent};
 use simulate_everything_engine::game::Game;
 use simulate_everything_engine::mapgen::{self, MapConfig};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
-use rayon::prelude::*;
-use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 fn main() {
@@ -32,11 +32,11 @@ fn sim_main(args: &[String]) {
         .map(|s| s.as_str())
         .collect();
 
-    let seed: u64 = positional.first().and_then(|s| s.parse().ok()).unwrap_or(42);
-    let num_players: u8 = positional
-        .get(1)
+    let seed: u64 = positional
+        .first()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(2);
+        .unwrap_or(42);
+    let num_players: u8 = positional.get(1).and_then(|s| s.parse().ok()).unwrap_or(2);
     let max_turns: u32 = positional
         .get(2)
         .and_then(|s| s.parse().ok())
@@ -55,8 +55,8 @@ fn sim_main(args: &[String]) {
     let gen_time = gen_start.elapsed();
     eprintln!("Map generated in {:?}", gen_time);
 
-    use simulate_everything_engine::agent::all_builtin_agents;
     use rand::seq::SliceRandom;
+    use simulate_everything_engine::agent::all_builtin_agents;
 
     let mut pool = all_builtin_agents();
     pool.shuffle(&mut rng);
@@ -486,10 +486,7 @@ fn run_convergence(
             }
 
             if next_seed >= max_seeds {
-                eprintln!(
-                    "  reached max seeds ({}) without converging",
-                    max_seeds
-                );
+                eprintln!("  reached max seeds ({}) without converging", max_seeds);
                 break;
             }
 
@@ -725,8 +722,15 @@ fn run_bench_game(
         .collect();
 
     // Compute interestingness score.
-    let (interest_score, interest_tags) =
-        score_game(winner_idx, turn_count, lead_changes, max_army_ratio, &was_behind, &snapshots, max_turns);
+    let (interest_score, interest_tags) = score_game(
+        winner_idx,
+        turn_count,
+        lead_changes,
+        max_army_ratio,
+        &was_behind,
+        &snapshots,
+        max_turns,
+    );
 
     GameResult {
         seed,
@@ -890,7 +894,8 @@ fn winner_was_behind_late(winner: u8, snapshots: &[Snapshot], after_turn: u32) -
 // ---------------------------------------------------------------------------
 
 fn print_matchup_summary(stats: &MatchupStats) {
-    eprintln!("\n  {:>16} {:>5} {:>6} {:>10} {:>10} {:>10}",
+    eprintln!(
+        "\n  {:>16} {:>5} {:>6} {:>10} {:>10} {:>10}",
         "agent", "wins", "win%", "avg_us/t", "max_us", "total_ms"
     );
     for i in 0..stats.agents.len() {
@@ -950,10 +955,7 @@ fn print_interesting_games(results: &[GameResult], top_n: usize) {
         "seed", "turns", "winner", "final_land", "score", "tags"
     );
     for r in ranked.iter().take(top_n) {
-        let winner_str = r
-            .winner
-            .as_deref()
-            .unwrap_or("draw");
+        let winner_str = r.winner.as_deref().unwrap_or("draw");
         let land_str = r
             .final_land
             .iter()

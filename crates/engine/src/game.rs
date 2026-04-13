@@ -3,8 +3,8 @@ use crate::agent::Observation;
 use crate::event::{Event, PlayerAction, PlayerStats};
 use crate::state::{GameState, Tile};
 use rand::Rng;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 /// Runs the game loop. Manages turn execution, army growth, and win conditions.
 pub struct Game {
@@ -51,7 +51,11 @@ impl Game {
         let mut executed_counts: Vec<usize> = vec![0; player_orders.len()];
 
         // Find max number of orders any player submitted.
-        let max_orders = player_orders.iter().map(|(_, acts)| acts.len()).max().unwrap_or(0);
+        let max_orders = player_orders
+            .iter()
+            .map(|(_, acts)| acts.len())
+            .max()
+            .unwrap_or(0);
 
         // Interleave execution round-robin.
         for order_idx in 0..max_orders {

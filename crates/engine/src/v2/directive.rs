@@ -6,7 +6,7 @@ use super::state::{CargoType, Convoy, GameState, Population, Role, Unit};
 use super::{
     CONVOY_CAPACITY, CONVOY_MOVE_COOLDOWN, DEPOT_BUILD_COST, INITIAL_STRENGTH, ROAD_LEVEL2_COST,
     ROAD_LEVEL3_COST, SOLDIER_EQUIP_COST, SOLDIER_READY_THRESHOLD, SOLDIERS_PER_UNIT,
-    TRAIN_BATCH_SIZE, UNIT_FOOD_COST, UNIT_MATERIAL_COST,
+    SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, TRAIN_BATCH_SIZE, UNIT_FOOD_COST, UNIT_MATERIAL_COST,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +159,10 @@ fn owner_controls_hex(state: &GameState, player_id: u8, hex: Axial) -> bool {
             .units
             .iter()
             .any(|u| u.owner == player_id && u.pos == hex)
+}
+
+fn is_settlement_hex(state: &GameState, player_id: u8, hex: Axial) -> bool {
+    state.is_settlement(player_id, hex)
 }
 
 fn split_population(state: &mut GameState, idx: usize, count: u16, role: Role, training: f32) {
@@ -344,6 +348,10 @@ fn load_convoy(
     if !owner_controls_hex(state, player_id, hex) || amount <= 0.0 {
         return;
     }
+    if cargo_type == CargoType::Settlers {
+        let _ = load_settlers(state, player_id, hex);
+        return;
+    }
     let Some(destination) = general_pos(state, player_id) else {
         return;
     };
@@ -365,6 +373,7 @@ fn load_convoy(
             cell.material_stockpile -= amt;
             amt
         }
+        CargoType::Settlers => 0.0,
     };
     if cargo_amount <= 0.0 {
         return;
@@ -374,14 +383,66 @@ fn load_convoy(
         id: state.next_convoy_id,
         owner: player_id,
         pos: hex,
+        origin: hex,
         destination,
         cargo_type,
         cargo_amount,
         capacity: CONVOY_CAPACITY,
         speed: 1.0,
         move_cooldown: CONVOY_MOVE_COOLDOWN,
+        returning: false,
     });
     state.next_convoy_id += 1;
+}
+
+fn load_settlers(state: &mut GameState, player_id: u8, hex: Axial) -> bool {
+    if !is_settlement_hex(state, player_id, hex) {
+        return false;
+    }
+    let total_pop = state.population_on_hex(player_id, hex);
+    if total_pop < SETTLEMENT_THRESHOLD + SETTLER_CONVOY_SIZE {
+        return false;
+    }
+    let available_non_soldiers: u16 = state
+        .population
+        .iter()
+        .filter(|p| p.owner == player_id && p.hex == hex && p.role != Role::Soldier)
+        .map(|p| p.count)
+        .sum();
+    if available_non_soldiers < SETTLER_CONVOY_SIZE {
+        return false;
+    }
+    let mut remaining = SETTLER_CONVOY_SIZE;
+    for pop in state.population.iter_mut().filter(|p| {
+        p.owner == player_id && p.hex == hex && p.role != Role::Soldier && p.count > 0
+    }) {
+        if remaining == 0 {
+            break;
+        }
+        let take = remaining.min(pop.count);
+        pop.count -= take;
+        remaining -= take;
+    }
+    state.population.retain(|p| p.count > 0);
+    if remaining > 0 {
+        return false;
+    }
+    let destination = hex;
+    state.convoys.push(Convoy {
+        id: state.next_convoy_id,
+        owner: player_id,
+        pos: hex,
+        origin: hex,
+        destination,
+        cargo_type: CargoType::Settlers,
+        cargo_amount: SETTLER_CONVOY_SIZE as f32,
+        capacity: SETTLER_CONVOY_SIZE as f32,
+        speed: 1.0,
+        move_cooldown: CONVOY_MOVE_COOLDOWN,
+        returning: false,
+    });
+    state.next_convoy_id += 1;
+    true
 }
 
 fn send_convoy(state: &mut GameState, player_id: u8, convoy_id: u32, dest: Axial) {
@@ -394,11 +455,12 @@ fn send_convoy(state: &mut GameState, player_id: u8, convoy_id: u32, dest: Axial
         .find(|c| c.id == convoy_id && c.owner == player_id)
     {
         convoy.destination = dest;
+        convoy.returning = false;
     }
 }
 
 fn build_depot(state: &mut GameState, player_id: u8, hex: Axial) {
-    if !owner_controls_hex(state, player_id, hex) {
+    if !owner_controls_hex(state, player_id, hex) || !is_settlement_hex(state, player_id, hex) {
         return;
     }
     let Some(cell) = state.cell_at_mut(hex) else {
@@ -415,7 +477,7 @@ fn build_depot(state: &mut GameState, player_id: u8, hex: Axial) {
 }
 
 fn build_road(state: &mut GameState, player_id: u8, hex: Axial, level: u8) {
-    if !owner_controls_hex(state, player_id, hex) {
+    if !owner_controls_hex(state, player_id, hex) || !is_settlement_hex(state, player_id, hex) {
         return;
     }
     let Some(cell) = state.cell_at_mut(hex) else {
