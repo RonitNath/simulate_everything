@@ -242,6 +242,9 @@ fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
             q: u.pos.q,
             r: u.pos.r,
             strength: u.strength,
+            engagements: u.engagements.clone(),
+            move_cooldown: u.move_cooldown,
+            destination: u.destination,
             engaged: !u.engagements.is_empty(),
             is_general: u.is_general,
         })
