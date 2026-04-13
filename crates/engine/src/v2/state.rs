@@ -1,6 +1,15 @@
-use super::hex::{Axial, axial_to_offset};
+use bitvec::prelude::BitVec;
 use super::SETTLEMENT_THRESHOLD;
+use super::hex::{Axial, axial_to_offset};
+use super::spatial::SpatialIndex;
 use serde::{Deserialize, Serialize};
+use slotmap::{SlotMap, new_key_type};
+
+new_key_type! {
+    pub struct UnitKey;
+    pub struct PopKey;
+    pub struct ConvoyKey;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Biome {
@@ -46,13 +55,13 @@ pub struct Cell {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Engagement {
-    pub enemy_id: u32,
+    pub enemy_id: UnitKey,
     pub edge: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Unit {
-    pub id: u32,
+    pub public_id: u32,
     pub owner: u8,
     pub pos: Axial,
     pub strength: f32,
@@ -72,7 +81,7 @@ pub enum Role {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Population {
-    pub id: u32,
+    pub public_id: u32,
     pub hex: Axial,
     pub owner: u8,
     pub count: u16,
@@ -89,7 +98,7 @@ pub enum CargoType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Convoy {
-    pub id: u32,
+    pub public_id: u32,
     pub owner: u8,
     pub pos: Axial,
     pub origin: Axial,
@@ -107,7 +116,7 @@ pub struct Player {
     pub id: u8,
     pub food: f32,
     pub material: f32,
-    pub general_id: u32,
+    pub general_id: UnitKey,
     pub alive: bool,
 }
 
@@ -128,19 +137,35 @@ pub struct GameState {
     pub height: usize,
     /// Row-major grid in offset coordinates.
     pub grid: Vec<Cell>,
-    pub units: Vec<Unit>,
+    pub units: SlotMap<UnitKey, Unit>,
     pub players: Vec<Player>,
-    pub population: Vec<Population>,
-    pub convoys: Vec<Convoy>,
+    pub population: SlotMap<PopKey, Population>,
+    pub convoys: SlotMap<ConvoyKey, Convoy>,
     pub regions: Vec<Region>,
     pub tick: u64,
-    /// Monotonically increasing counter for assigning unique unit IDs.
+    /// Monotonically increasing counters for frontend/replay-facing IDs.
     pub next_unit_id: u32,
     pub next_pop_id: u32,
     pub next_convoy_id: u32,
+    pub scouted: Vec<Vec<bool>>,
+    #[serde(skip)]
+    pub spatial: SpatialIndex,
+    #[serde(skip)]
+    pub dirty_hexes: BitVec,
+    #[serde(skip)]
+    pub hex_revisions: Vec<u64>,
+    #[serde(skip)]
+    pub next_hex_revision: u64,
+    #[cfg(debug_assertions)]
+    #[serde(skip)]
+    pub tick_accumulator: Option<TickAccumulator>,
 }
 
 impl GameState {
+    pub fn rebuild_spatial(&mut self) {
+        self.spatial.rebuild(&self.units);
+    }
+
     pub fn index(&self, row: usize, col: usize) -> usize {
         row * self.width + col
     }
@@ -152,6 +177,29 @@ impl GameState {
     pub fn cell_mut(&mut self, row: usize, col: usize) -> &mut Cell {
         let idx = self.index(row, col);
         &mut self.grid[idx]
+    }
+
+    pub fn mark_dirty_index(&mut self, idx: usize) {
+        if idx < self.dirty_hexes.len() {
+            self.dirty_hexes.set(idx, true);
+            self.next_hex_revision += 1;
+            self.hex_revisions[idx] = self.next_hex_revision;
+        }
+    }
+
+    pub fn mark_dirty_axial(&mut self, ax: Axial) {
+        let (row, col) = axial_to_offset(ax);
+        if row < 0 || col < 0 {
+            return;
+        }
+        let (row, col) = (row as usize, col as usize);
+        if row < self.height && col < self.width {
+            self.mark_dirty_index(self.index(row, col));
+        }
+    }
+
+    pub fn clear_dirty_hexes(&mut self) {
+        self.dirty_hexes.fill(false);
     }
 
     pub fn cell_at(&self, ax: Axial) -> Option<&Cell> {
@@ -188,7 +236,7 @@ impl GameState {
 
     pub fn population_on_hex(&self, owner: u8, ax: Axial) -> u16 {
         self.population
-            .iter()
+            .values()
             .filter(|p| p.owner == owner && p.hex == ax)
             .map(|p| p.count)
             .sum()
@@ -197,4 +245,94 @@ impl GameState {
     pub fn is_settlement(&self, owner: u8, ax: Axial) -> bool {
         self.population_on_hex(owner, ax) >= SETTLEMENT_THRESHOLD
     }
+
+    pub fn unit_key_by_public_id(&self, public_id: u32) -> Option<UnitKey> {
+        self.units
+            .iter()
+            .find_map(|(key, unit)| (unit.public_id == public_id).then_some(key))
+    }
+
+    pub fn unit_by_public_id(&self, public_id: u32) -> Option<&Unit> {
+        let key = self.unit_key_by_public_id(public_id)?;
+        self.units.get(key)
+    }
+
+    pub fn unit_by_public_id_mut(&mut self, public_id: u32) -> Option<&mut Unit> {
+        let key = self.unit_key_by_public_id(public_id)?;
+        self.units.get_mut(key)
+    }
+
+    pub fn pop_key_by_public_id(&self, public_id: u32) -> Option<PopKey> {
+        self.population
+            .iter()
+            .find_map(|(key, pop)| (pop.public_id == public_id).then_some(key))
+    }
+
+    pub fn convoy_key_by_public_id(&self, public_id: u32) -> Option<ConvoyKey> {
+        self.convoys
+            .iter()
+            .find_map(|(key, convoy)| (convoy.public_id == public_id).then_some(key))
+    }
+
+    pub fn general_pos(&self, player_id: u8) -> Option<Axial> {
+        let general_id = self.players.iter().find(|p| p.id == player_id)?.general_id;
+        Some(self.units.get(general_id)?.pos)
+    }
+
+    pub fn has_unit_at(&self, ax: Axial) -> bool {
+        self.spatial.has_unit_at(ax)
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_food_produced(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.food_produced += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_material_produced(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.material_produced += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_food_consumed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.food_consumed += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_material_consumed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.material_consumed += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_food_destroyed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.food_destroyed += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_material_destroyed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.material_destroyed += amount;
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TickAccumulator {
+    pub food_produced: f32,
+    pub food_consumed: f32,
+    pub food_destroyed: f32,
+    pub material_produced: f32,
+    pub material_consumed: f32,
+    pub material_destroyed: f32,
 }

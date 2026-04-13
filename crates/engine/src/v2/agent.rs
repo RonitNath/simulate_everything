@@ -1,14 +1,22 @@
+use slotmap::Key;
 use std::collections::HashMap;
 
 use super::directive::Directive;
 use super::hex::{self, Axial};
-use super::observation::{Observation, UnitInfo};
-use super::state::{CargoType, Role};
-use super::{SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIERS_PER_UNIT, UNIT_FOOD_COST, UNIT_MATERIAL_COST};
+use super::observation::{
+    InitialObservation, Observation, ObservationDelta, UnitInfo, apply_delta_to_observation,
+    materialize_observation,
+};
+use super::state::{CargoType, Role, UnitKey};
+use super::{
+    SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIERS_PER_UNIT,
+    UNIT_FOOD_COST, UNIT_MATERIAL_COST,
+};
 
 pub trait Agent: Send {
     fn name(&self) -> &str;
-    fn act(&mut self, obs: &Observation) -> Vec<Directive>;
+    fn init(&mut self, obs: &InitialObservation);
+    fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive>;
     fn reset(&mut self) {}
 }
 
@@ -28,22 +36,18 @@ pub fn agent_by_name(name: &str) -> Option<Box<dyn Agent>> {
 
 pub struct SpreadAgent {
     pending_settlement: Option<Axial>,
+    cached_observation: Option<Observation>,
 }
 
 impl SpreadAgent {
     pub fn new() -> Self {
         Self {
             pending_settlement: None,
+            cached_observation: None,
         }
     }
-}
 
-impl Agent for SpreadAgent {
-    fn name(&self) -> &str {
-        "spread"
-    }
-
-    fn act(&mut self, obs: &Observation) -> Vec<Directive> {
+    fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
         let mut directives = Vec::new();
         let general = obs.own_units.iter().find(|u| u.is_general);
         let general_hex = general.map(|u| Axial::new(u.q, u.r));
@@ -87,7 +91,7 @@ impl Agent for SpreadAgent {
             .iter()
             .map(|e| ((e.q, e.r), e))
             .collect();
-        let friendly_near_enemy: HashMap<u32, usize> = count_friendlies_near_enemies(obs);
+        let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
 
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
         let enemy_target = enemy_direction(obs);
@@ -142,9 +146,58 @@ impl Agent for SpreadAgent {
 
         directives
     }
+}
+
+impl Agent for SpreadAgent {
+    fn name(&self) -> &str {
+        "spread"
+    }
+
+    fn init(&mut self, obs: &InitialObservation) {
+        self.cached_observation = Some(materialize_observation(
+            obs,
+            &ObservationDelta {
+                tick: 0,
+                player: obs.player,
+                newly_scouted: obs
+                    .scouted
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| **s)
+                    .map(|(index, _)| super::observation::NewScoutedHex {
+                        index,
+                        terrain: obs.terrain[index],
+                        material: obs.material_map[index],
+                        height: obs.height_map[index],
+                    })
+                    .collect(),
+                hex_changes: Vec::new(),
+                own_units: Vec::new(),
+                visible_enemies: Vec::new(),
+                own_population: Vec::new(),
+                visible_enemy_population: Vec::new(),
+                own_convoys: Vec::new(),
+                visible_enemy_convoys: Vec::new(),
+                visible: vec![false; obs.width * obs.height],
+                total_food: 0.0,
+                total_material: 0.0,
+            },
+        ));
+    }
+
+    fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive> {
+        let Some(mut obs) = self.cached_observation.take() else {
+            return Vec::new();
+        };
+        apply_delta_to_observation(&mut obs, delta);
+        let directives = self.decide(&obs);
+        self.cached_observation = Some(obs);
+        directives
+    }
 
     fn reset(&mut self) {
         self.pending_settlement = None;
+        self.cached_observation = None;
     }
 }
 
@@ -162,6 +215,7 @@ pub struct StrikerAgent {
     mode: StrikerMode,
     last_known_enemy_general: Option<Axial>,
     pending_settlement: Option<Axial>,
+    cached_observation: Option<Observation>,
 }
 
 impl StrikerAgent {
@@ -170,16 +224,11 @@ impl StrikerAgent {
             mode: StrikerMode::Expand,
             last_known_enemy_general: None,
             pending_settlement: None,
+            cached_observation: None,
         }
     }
-}
-
-impl Agent for StrikerAgent {
-    fn name(&self) -> &str {
-        "striker"
-    }
-
-    fn act(&mut self, obs: &Observation) -> Vec<Directive> {
+    
+    fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
         let mut directives = Vec::new();
         let general = obs.own_units.iter().find(|u| u.is_general);
         let general_hex = general.map(|u| Axial::new(u.q, u.r));
@@ -245,7 +294,7 @@ impl Agent for StrikerAgent {
             .iter()
             .map(|e| ((e.q, e.r), e))
             .collect();
-        let friendly_near_enemy: HashMap<u32, usize> = count_friendlies_near_enemies(obs);
+        let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
         let enemy_target = enemy_direction(obs);
 
@@ -356,11 +405,60 @@ impl Agent for StrikerAgent {
 
         directives
     }
+}
+
+impl Agent for StrikerAgent {
+    fn name(&self) -> &str {
+        "striker"
+    }
+
+    fn init(&mut self, obs: &InitialObservation) {
+        self.cached_observation = Some(materialize_observation(
+            obs,
+            &ObservationDelta {
+                tick: 0,
+                player: obs.player,
+                newly_scouted: obs
+                    .scouted
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| **s)
+                    .map(|(index, _)| super::observation::NewScoutedHex {
+                        index,
+                        terrain: obs.terrain[index],
+                        material: obs.material_map[index],
+                        height: obs.height_map[index],
+                    })
+                    .collect(),
+                hex_changes: Vec::new(),
+                own_units: Vec::new(),
+                visible_enemies: Vec::new(),
+                own_population: Vec::new(),
+                visible_enemy_population: Vec::new(),
+                own_convoys: Vec::new(),
+                visible_enemy_convoys: Vec::new(),
+                visible: vec![false; obs.width * obs.height],
+                total_food: 0.0,
+                total_material: 0.0,
+            },
+        ));
+    }
+
+    fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive> {
+        let Some(mut obs) = self.cached_observation.take() else {
+            return Vec::new();
+        };
+        apply_delta_to_observation(&mut obs, delta);
+        let directives = self.decide(&obs);
+        self.cached_observation = Some(obs);
+        directives
+    }
 
     fn reset(&mut self) {
         self.mode = StrikerMode::Expand;
         self.last_known_enemy_general = None;
         self.pending_settlement = None;
+        self.cached_observation = None;
     }
 }
 
@@ -379,11 +477,11 @@ impl StrikerAgent {
     }
 }
 
-fn is_strike_unit(unit_id: u32) -> bool {
-    (unit_id % 5) < 3 // 60% of units
+fn is_strike_unit(unit_id: UnitKey) -> bool {
+    (unit_id.data().as_ffi() % 5) < 3 // 60% of units
 }
 
-fn assign_guards(obs: &Observation, general: &UnitInfo, count: usize) -> Vec<u32> {
+fn assign_guards(obs: &Observation, general: &UnitInfo, count: usize) -> Vec<UnitKey> {
     let gen_pos = Axial::new(general.q, general.r);
     let mut candidates: Vec<&UnitInfo> = obs
         .own_units
@@ -578,14 +676,19 @@ fn settlement_hexes(obs: &Observation) -> Vec<Axial> {
     let mut settlements = Vec::new();
     for pop in &obs.own_population {
         let hex = Axial::new(pop.q, pop.r);
-        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex) {
+        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex)
+        {
             settlements.push(hex);
         }
     }
     settlements
 }
 
-fn pick_settlement_target(obs: &Observation, settlements: &[Axial], origin: Axial) -> Option<Axial> {
+fn pick_settlement_target(
+    obs: &Observation,
+    settlements: &[Axial],
+    origin: Axial,
+) -> Option<Axial> {
     let mut best: Option<(Axial, f32)> = None;
     for (idx, owner) in obs.stockpile_owner.iter().enumerate() {
         if *owner != Some(obs.player) {
@@ -623,8 +726,8 @@ fn pick_settlement_target(obs: &Observation, settlements: &[Axial], origin: Axia
     best.map(|(hex, _)| hex)
 }
 
-fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<u32, usize> {
-    let mut counts: HashMap<u32, usize> = HashMap::new();
+fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<UnitKey, usize> {
+    let mut counts: HashMap<UnitKey, usize> = HashMap::new();
     for enemy in &obs.visible_enemies {
         let enemy_pos = Axial::new(enemy.q, enemy.r);
         let count = obs
@@ -641,8 +744,8 @@ fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<u32, usize> {
 fn find_engageable_enemy(
     unit: &UnitInfo,
     enemy_by_pos: &HashMap<(i32, i32), &UnitInfo>,
-    friendly_counts: &HashMap<u32, usize>,
-) -> Option<u32> {
+    friendly_counts: &HashMap<UnitKey, usize>,
+) -> Option<UnitKey> {
     let unit_pos = Axial::new(unit.q, unit.r);
     hex::neighbors(unit_pos)
         .iter()
@@ -717,7 +820,7 @@ fn pick_lane_destination(
     let (unit_r, unit_c) = hex::axial_to_offset(unit_pos);
     let dx = target_c - unit_c;
     let dy = target_r - unit_r;
-    let lane_hash = ((unit.id as i32 * 7 + 13) % 5) - 2;
+    let lane_hash = (((unit.id.data().as_ffi() as i32) * 7 + 13) % 5) - 2;
     let perp_offset = lane_hash * 3;
     let dest_r = target_r
         + if dx != 0 {
@@ -759,7 +862,7 @@ fn enemy_direction(obs: &Observation) -> Option<Axial> {
 mod tests {
     use super::*;
     use crate::v2::mapgen::{MapConfig, generate};
-    use crate::v2::observation::observe;
+    use crate::v2::observation::{ObservationSession, initial_observation, observe_delta};
 
     #[test]
     fn spread_agent_manages_population() {
@@ -769,9 +872,13 @@ mod tests {
             num_players: 2,
             seed: 42,
         });
-        let obs = observe(&state, 0);
+        let mut state = state;
         let mut agent = SpreadAgent::new();
-        let directives = agent.act(&obs);
+        let init = initial_observation(&state, 0);
+        agent.init(&init);
+        let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+        let delta = observe_delta(&mut state, 0, &mut session);
+        let directives = agent.act(&delta);
         assert!(directives.iter().any(|d| {
             matches!(
                 d,
@@ -790,9 +897,13 @@ mod tests {
             num_players: 2,
             seed: 42,
         });
-        let obs = observe(&state, 0);
+        let mut state = state;
         let mut agent = SpreadAgent::new();
-        let directives = agent.act(&obs);
+        let init = initial_observation(&state, 0);
+        agent.init(&init);
+        let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+        let delta = observe_delta(&mut state, 0, &mut session);
+        let directives = agent.act(&delta);
         assert!(
             directives
                 .iter()
