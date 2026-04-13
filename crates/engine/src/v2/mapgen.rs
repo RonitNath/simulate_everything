@@ -1,0 +1,475 @@
+use noise::{NoiseFn, Perlin};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
+use super::hex::{axial_to_offset, distance, offset_to_axial, within_radius};
+use super::state::{Cell, GameState, Player, Unit};
+use super::{INITIAL_STRENGTH, INITIAL_UNITS};
+
+pub struct MapConfig {
+    pub width: usize,
+    pub height: usize,
+    pub num_players: u8,
+    pub seed: u64,
+}
+
+impl Default for MapConfig {
+    fn default() -> Self {
+        Self {
+            width: 60,
+            height: 60,
+            num_players: 2,
+            seed: 42,
+        }
+    }
+}
+
+pub fn generate(config: &MapConfig) -> GameState {
+    let mut rng = StdRng::seed_from_u64(config.seed);
+    let perlin = Perlin::new(config.seed as u32);
+
+    let total = config.width * config.height;
+    let mut grid = Vec::with_capacity(total);
+
+    // Terrain generation: 3 octaves of Perlin noise
+    for row in 0..config.height {
+        for col in 0..config.width {
+            let wx = col as f64 + 0.5 * (row & 1) as f64;
+            let wy = row as f64 * 0.866;
+
+            let v1 = perlin.get([wx * 0.04, wy * 0.04]);
+            let v2 = perlin.get([wx * 0.1, wy * 0.1]) * 0.5;
+            let v3 = perlin.get([wx * 0.3, wy * 0.3]) * 0.25;
+            let sum = v1 + v2 + v3;
+
+            let terrain_value = (((sum / 1.75) * 0.5 + 0.5) * 3.0) as f32;
+            let terrain_value = terrain_value.clamp(0.0, 3.0);
+            grid.push(Cell { terrain_value });
+        }
+    }
+
+    // Strategic value heatmap: sum terrain_value within hex radius 10
+    let strategic_values = compute_strategic_values(&grid, config.width, config.height);
+
+    // General placement
+    let margin = (config.width.max(config.height) / 8).max(5);
+    let general_positions = place_generals(config, &grid, &strategic_values, margin, &mut rng);
+
+    // Build units and players
+    let mut units: Vec<Unit> = Vec::new();
+    let mut players: Vec<Player> = Vec::new();
+    let mut next_id: u32 = 0;
+
+    for (player_idx, &gen_pos) in general_positions.iter().enumerate() {
+        let owner = player_idx as u8;
+
+        // Spawn the general unit
+        let general_id = next_id;
+        next_id += 1;
+        units.push(Unit {
+            id: general_id,
+            owner,
+            pos: gen_pos,
+            strength: INITIAL_STRENGTH,
+            move_cooldown: 0,
+            engagements: Vec::new(),
+            destination: None,
+            is_general: true,
+        });
+
+        // Spawn INITIAL_UNITS nearby units
+        let mut placed = 0;
+        let mut candidates: Vec<_> = within_radius(gen_pos, 3)
+            .into_iter()
+            .filter(|&ax| ax != gen_pos)
+            .collect();
+        // Shuffle candidates for determinism
+        for i in (1..candidates.len()).rev() {
+            let j = rng.gen_range(0..=i);
+            candidates.swap(i, j);
+        }
+        for candidate in candidates {
+            if placed >= INITIAL_UNITS {
+                break;
+            }
+            if !is_in_bounds(candidate, config.width, config.height) {
+                continue;
+            }
+            units.push(Unit {
+                id: next_id,
+                owner,
+                pos: candidate,
+                strength: INITIAL_STRENGTH,
+                move_cooldown: 0,
+                engagements: Vec::new(),
+                destination: None,
+                is_general: false,
+            });
+            next_id += 1;
+            placed += 1;
+        }
+
+        players.push(Player {
+            id: owner,
+            resources: 0.0,
+            general_id,
+            alive: true,
+        });
+    }
+
+    GameState {
+        width: config.width,
+        height: config.height,
+        grid,
+        units,
+        players,
+        tick: 0,
+    }
+}
+
+fn is_in_bounds(ax: super::hex::Axial, width: usize, height: usize) -> bool {
+    let (row, col) = axial_to_offset(ax);
+    row >= 0 && col >= 0 && (row as usize) < height && (col as usize) < width
+}
+
+fn compute_strategic_values(grid: &[Cell], width: usize, height: usize) -> Vec<f32> {
+    let radius = 10i32;
+    let mut sv = Vec::with_capacity(grid.len());
+
+    for row in 0..height {
+        for col in 0..width {
+            let center = offset_to_axial(row as i32, col as i32);
+            let mut sum = 0.0f32;
+            let nearby = within_radius(center, radius);
+            for neighbor in nearby {
+                let (nr, nc) = axial_to_offset(neighbor);
+                if nr >= 0 && nc >= 0 && (nr as usize) < height && (nc as usize) < width {
+                    sum += grid[(nr as usize) * width + (nc as usize)].terrain_value;
+                }
+            }
+            sv.push(sum);
+        }
+    }
+    sv
+}
+
+fn place_generals(
+    config: &MapConfig,
+    grid: &[Cell],
+    strategic_values: &[f32],
+    margin: usize,
+    rng: &mut StdRng,
+) -> Vec<super::hex::Axial> {
+    // Collect candidates: terrain > 1.0, far enough from edge
+    let candidates: Vec<_> = (0..config.height)
+        .flat_map(|row| (0..config.width).map(move |col| (row, col)))
+        .filter(|&(row, col)| {
+            let idx = row * config.width + col;
+            grid[idx].terrain_value > 1.0
+                && row >= margin
+                && row + margin < config.height
+                && col >= margin
+                && col + margin < config.width
+        })
+        .collect();
+
+    if config.num_players == 2 {
+        place_generals_2p(config, grid, strategic_values, &candidates, rng)
+    } else {
+        place_generals_np(config, grid, strategic_values, &candidates, rng)
+    }
+}
+
+fn place_generals_2p(
+    config: &MapConfig,
+    _grid: &[Cell],
+    strategic_values: &[f32],
+    candidates: &[(usize, usize)],
+    rng: &mut StdRng,
+) -> Vec<super::hex::Axial> {
+    // Score pairs by: distance - abs(sv_diff) * weight
+    // For large maps, sample a subset of candidate pairs
+    let max_candidates = candidates.len().min(200);
+    let sampled: Vec<_> = if candidates.len() > max_candidates {
+        let mut indices: Vec<usize> = (0..candidates.len()).collect();
+        for i in (1..indices.len()).rev() {
+            let j = rng.gen_range(0..=i);
+            indices.swap(i, j);
+        }
+        indices[..max_candidates]
+            .iter()
+            .map(|&i| candidates[i])
+            .collect()
+    } else {
+        candidates.to_vec()
+    };
+
+    let sv_weight = 0.1f32;
+    let mut best_score = f32::NEG_INFINITY;
+    let mut best_pair = (
+        offset_to_axial(0, 0),
+        offset_to_axial(config.height as i32 - 1, config.width as i32 - 1),
+    );
+
+    for i in 0..sampled.len() {
+        for j in (i + 1)..sampled.len() {
+            let (r1, c1) = sampled[i];
+            let (r2, c2) = sampled[j];
+            let ax1 = offset_to_axial(r1 as i32, c1 as i32);
+            let ax2 = offset_to_axial(r2 as i32, c2 as i32);
+            let dist = distance(ax1, ax2) as f32;
+            let sv1 = strategic_values[r1 * config.width + c1];
+            let sv2 = strategic_values[r2 * config.width + c2];
+            let sv_diff = (sv1 - sv2).abs();
+            let score = dist - sv_diff * sv_weight;
+            if score > best_score {
+                best_score = score;
+                best_pair = (ax1, ax2);
+            }
+        }
+    }
+
+    vec![best_pair.0, best_pair.1]
+}
+
+fn place_generals_np(
+    config: &MapConfig,
+    _grid: &[Cell],
+    strategic_values: &[f32],
+    candidates: &[(usize, usize)],
+    rng: &mut StdRng,
+) -> Vec<super::hex::Axial> {
+    let max_candidates = candidates.len().min(300);
+    let sampled: Vec<_> = if candidates.len() > max_candidates {
+        let mut indices: Vec<usize> = (0..candidates.len()).collect();
+        for i in (1..indices.len()).rev() {
+            let j = rng.gen_range(0..=i);
+            indices.swap(i, j);
+        }
+        indices[..max_candidates]
+            .iter()
+            .map(|&i| candidates[i])
+            .collect()
+    } else {
+        candidates.to_vec()
+    };
+
+    let mut placed: Vec<super::hex::Axial> = Vec::new();
+
+    // First general: pick one with median strategic value
+    if sampled.is_empty() {
+        // Fallback: just use corners
+        for i in 0..config.num_players as usize {
+            placed.push(offset_to_axial(i as i32, i as i32));
+        }
+        return placed;
+    }
+
+    let first_idx = rng.gen_range(0..sampled.len());
+    let (r0, c0) = sampled[first_idx];
+    placed.push(offset_to_axial(r0 as i32, c0 as i32));
+
+    let avg_sv = strategic_values.iter().sum::<f32>() / strategic_values.len() as f32;
+
+    for _ in 1..config.num_players {
+        let mut best_score = f32::NEG_INFINITY;
+        let mut best = placed[0];
+
+        for &(row, col) in &sampled {
+            let ax = offset_to_axial(row as i32, col as i32);
+            if placed.iter().any(|&p| p == ax) {
+                continue;
+            }
+            let min_dist = placed
+                .iter()
+                .map(|&p| distance(p, ax) as f32)
+                .fold(f32::INFINITY, f32::min);
+            let sv = strategic_values[row * config.width + col];
+            let sv_diff = (sv - avg_sv).abs();
+            let score = min_dist - sv_diff * 0.05;
+            if score > best_score {
+                best_score = score;
+                best = ax;
+            }
+        }
+        placed.push(best);
+    }
+
+    placed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::hex::distance;
+    use super::*;
+
+    fn default_state() -> GameState {
+        generate(&MapConfig::default())
+    }
+
+    #[test]
+    fn terrain_values_in_range() {
+        let state = default_state();
+        for cell in &state.grid {
+            assert!(
+                cell.terrain_value >= 0.0 && cell.terrain_value <= 3.0,
+                "terrain_value {} out of range",
+                cell.terrain_value
+            );
+        }
+    }
+
+    #[test]
+    fn different_seeds_differ() {
+        let s1 = generate(&MapConfig {
+            seed: 1,
+            ..Default::default()
+        });
+        let s2 = generate(&MapConfig {
+            seed: 2,
+            ..Default::default()
+        });
+        let diffs = s1
+            .grid
+            .iter()
+            .zip(s2.grid.iter())
+            .filter(|(a, b)| (a.terrain_value - b.terrain_value).abs() > 0.001)
+            .count();
+        assert!(
+            diffs > 100,
+            "seeds 1 and 2 produce too similar terrain ({} diffs)",
+            diffs
+        );
+    }
+
+    #[test]
+    fn terrain_has_variance() {
+        let state = default_state();
+        let values: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
+        let mean = values.iter().sum::<f32>() / values.len() as f32;
+        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / values.len() as f32;
+        let std_dev = variance.sqrt();
+        assert!(std_dev > 0.1, "std dev {} too low", std_dev);
+    }
+
+    #[test]
+    fn generals_placed_on_valid_terrain() {
+        let state = default_state();
+        for player in &state.players {
+            let general = state
+                .units
+                .iter()
+                .find(|u| u.id == player.general_id)
+                .unwrap();
+            let cell = state.cell_at(general.pos).unwrap();
+            assert!(
+                cell.terrain_value > 1.0,
+                "general at terrain_value {}",
+                cell.terrain_value
+            );
+        }
+    }
+
+    #[test]
+    fn generals_far_apart() {
+        let state = default_state();
+        let generals: Vec<_> = state
+            .players
+            .iter()
+            .map(|p| {
+                state
+                    .units
+                    .iter()
+                    .find(|u| u.id == p.general_id)
+                    .unwrap()
+                    .pos
+            })
+            .collect();
+        for i in 0..generals.len() {
+            for j in (i + 1)..generals.len() {
+                let d = distance(generals[i], generals[j]);
+                let min_dist = MapConfig::default().width as i32 / 4;
+                assert!(d > min_dist, "generals only {} apart (min {})", d, min_dist);
+            }
+        }
+    }
+
+    #[test]
+    fn strategic_values_balanced() {
+        let config = MapConfig::default();
+        let state = generate(&config);
+        let sv = compute_strategic_values(&state.grid, config.width, config.height);
+        let gen_svs: Vec<f32> = state
+            .players
+            .iter()
+            .map(|p| {
+                let g = state.units.iter().find(|u| u.id == p.general_id).unwrap();
+                let (row, col) = axial_to_offset(g.pos);
+                sv[(row as usize) * config.width + (col as usize)]
+            })
+            .collect();
+        let max_sv = gen_svs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let min_sv = gen_svs.iter().cloned().fold(f32::INFINITY, f32::min);
+        // Within 30%
+        assert!(
+            (max_sv - min_sv) / max_sv < 0.30,
+            "strategic value imbalance: max={max_sv}, min={min_sv}"
+        );
+    }
+
+    #[test]
+    fn each_player_has_correct_unit_count() {
+        let state = default_state();
+        for player in &state.players {
+            let count = state.units.iter().filter(|u| u.owner == player.id).count();
+            // INITIAL_UNITS normal units + 1 general
+            assert_eq!(
+                count,
+                INITIAL_UNITS + 1,
+                "player {} has {} units",
+                player.id,
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn initial_units_near_general() {
+        let state = default_state();
+        for player in &state.players {
+            let general_pos = state
+                .units
+                .iter()
+                .find(|u| u.id == player.general_id)
+                .unwrap()
+                .pos;
+            for unit in state
+                .units
+                .iter()
+                .filter(|u| u.owner == player.id && !u.is_general)
+            {
+                let d = distance(general_pos, unit.pos);
+                assert!(
+                    d <= 3,
+                    "unit for player {} is distance {} from general",
+                    player.id,
+                    d
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn grid_size_matches_config() {
+        let config = MapConfig {
+            width: 20,
+            height: 30,
+            num_players: 2,
+            seed: 99,
+        };
+        let state = generate(&config);
+        assert_eq!(state.width, 20);
+        assert_eq!(state.height, 30);
+        assert_eq!(state.grid.len(), 600);
+    }
+}

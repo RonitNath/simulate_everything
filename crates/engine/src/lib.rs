@@ -1,16 +1,16 @@
-pub mod state;
 pub mod action;
-pub mod mapgen;
 pub mod agent;
 pub mod ascii;
 pub mod event;
 pub mod game;
+pub mod mapgen;
+pub mod pressure_agent;
 pub mod replay;
 pub mod scoreboard;
-pub mod pressure_agent;
+pub mod state;
 pub mod subprocess_agent;
+pub mod v2;
 
-pub use state::{GameState, Cell, Tile};
 pub use action::Action;
 pub use agent::Agent;
 pub use ascii::screenshot;
@@ -19,4 +19,5 @@ pub use game::Game;
 pub use pressure_agent::PressureAgent;
 pub use replay::Replay;
 pub use scoreboard::Scoreboard;
+pub use state::{Cell, GameState, Tile};
 pub use subprocess_agent::SubprocessAgent;
