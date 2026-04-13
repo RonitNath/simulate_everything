@@ -124,6 +124,7 @@ pub fn generate(config: &MapConfig) -> GameState {
         units,
         players,
         tick: 0,
+        next_unit_id: next_id,
     }
 }
 

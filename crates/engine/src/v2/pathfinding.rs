@@ -1,4 +1,4 @@
-use super::hex::{distance, neighbors, Axial};
+use super::hex::{Axial, distance, neighbors};
 use super::state::GameState;
 use std::collections::{HashMap, VecDeque};
 
@@ -68,7 +68,7 @@ pub fn find_path(state: &GameState, from: Axial, to: Axial) -> Vec<Axial> {
 mod tests {
     use super::*;
     use crate::v2::hex::{distance, offset_to_axial};
-    use crate::v2::mapgen::{generate, MapConfig};
+    use crate::v2::mapgen::{MapConfig, generate};
 
     fn test_state() -> GameState {
         generate(&MapConfig {

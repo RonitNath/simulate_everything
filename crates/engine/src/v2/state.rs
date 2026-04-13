@@ -41,6 +41,8 @@ pub struct GameState {
     pub units: Vec<Unit>,
     pub players: Vec<Player>,
     pub tick: u64,
+    /// Monotonically increasing counter for assigning unique unit IDs.
+    pub next_unit_id: u32,
 }
 
 impl GameState {

@@ -230,6 +230,7 @@ mod tests {
             units,
             players,
             tick: 0,
+            next_unit_id: 300,
         }
     }
 
