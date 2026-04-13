@@ -6,6 +6,7 @@ pub mod hex;
 pub mod mapgen;
 pub mod observation;
 pub mod pathfinding;
+pub mod replay;
 pub mod runner;
 pub mod sim;
 pub mod state;

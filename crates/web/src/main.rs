@@ -4,13 +4,13 @@ mod roundrobin;
 
 use askama::Template;
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket},
         Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::{Html, IntoResponse, Json},
     routing::get,
-    Router,
 };
 use generals_engine::{
     agent::Agent,
@@ -18,10 +18,11 @@ use generals_engine::{
     mapgen::{self, MapConfig},
     replay::Replay,
     scoreboard::Scoreboard,
+    v2,
 };
 use lobby::{Lobby, TurnSubmission};
 use protocol::{AgentToServer, ServerToAgent, SpectatorToServer};
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use roundrobin::RoundRobin;
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -94,7 +95,13 @@ fn run_game(seed: u64, num_players: u8, max_turns: u32, size: Option<(usize, usi
 }
 
 async fn simulator_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Html(IndexTemplate { build_ver: state.build_ver.clone() }.render().unwrap())
+    Html(
+        IndexTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
 }
 
 async fn api_game(Query(params): Query<GameParams>) -> impl IntoResponse {
@@ -134,13 +141,85 @@ async fn api_ascii(Query(params): Query<AsciiParams>) -> impl IntoResponse {
     let replay = run_game(seed, num_players, max_turns, size);
 
     let frame = match params.at {
-        Some(turn) => replay.frames.iter().find(|f| f.turn == turn)
+        Some(turn) => replay
+            .frames
+            .iter()
+            .find(|f| f.turn == turn)
             .or_else(|| replay.frames.last()),
         None => replay.frames.last(),
     };
 
     match frame {
         Some(f) => f.ascii(replay.width, replay.height).to_string(),
+        None => "No frames captured".to_string(),
+    }
+}
+
+// ============================================================
+// V2 Simulator
+// ============================================================
+
+#[derive(Deserialize)]
+struct V2GameParams {
+    seed: Option<u64>,
+    players: Option<u8>,
+    width: Option<usize>,
+    height: Option<usize>,
+    ticks: Option<u64>,
+}
+
+async fn api_v2_game(Query(params): Query<V2GameParams>) -> impl IntoResponse {
+    let config = v2::mapgen::MapConfig {
+        width: params.width.unwrap_or(30),
+        height: params.height.unwrap_or(30),
+        num_players: params.players.unwrap_or(2),
+        seed: params.seed.unwrap_or_else(|| rand::random()),
+    };
+    let max_ticks = params.ticks.unwrap_or(2000);
+    let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
+        .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
+        .collect();
+    let replay = v2::replay::record_game(&config, &mut agents, max_ticks, 10);
+    Json(replay)
+}
+
+#[derive(Deserialize)]
+struct V2AsciiParams {
+    seed: Option<u64>,
+    players: Option<u8>,
+    width: Option<usize>,
+    height: Option<usize>,
+    ticks: Option<u64>,
+    at: Option<u64>,
+}
+
+async fn api_v2_ascii(Query(params): Query<V2AsciiParams>) -> impl IntoResponse {
+    let config = v2::mapgen::MapConfig {
+        width: params.width.unwrap_or(30),
+        height: params.height.unwrap_or(30),
+        num_players: params.players.unwrap_or(2),
+        seed: params.seed.unwrap_or(42),
+    };
+    let max_ticks = params.ticks.unwrap_or(2000);
+    let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
+        .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
+        .collect();
+    let replay = v2::replay::record_game(&config, &mut agents, max_ticks, 10);
+
+    let frame = match params.at {
+        Some(at) => replay
+            .frames
+            .iter()
+            .min_by_key(|f| (f.tick as i64 - at as i64).unsigned_abs())
+            .or(replay.frames.last()),
+        None => replay.frames.last(),
+    };
+
+    match frame {
+        Some(f) => {
+            let state = v2::replay::reconstruct_state(&replay, f);
+            v2::ascii::render_state(&state)
+        }
         None => "No frames captured".to_string(),
     }
 }
@@ -156,13 +235,16 @@ struct LiveTemplate {
 }
 
 async fn live_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Html(LiveTemplate { build_ver: state.build_ver.clone() }.render().unwrap())
+    Html(
+        LiveTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
 }
 
-async fn ws_agent(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_agent(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_agent(socket, state))
 }
 
@@ -222,13 +304,17 @@ async fn handle_agent(mut socket: WebSocket, state: Arc<AppState>) {
 async fn wait_for_join(socket: &mut WebSocket) -> Option<String> {
     let deadline = tokio::time::Duration::from_secs(10);
     match tokio::time::timeout(deadline, socket.recv()).await {
-        Ok(Some(Ok(Message::Text(text)))) => {
-            match serde_json::from_str::<AgentToServer>(&text) {
-                Ok(AgentToServer::Join { name }) => Some(name),
-                _ => { warn!("Expected Join message, got: {}", text); None }
+        Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<AgentToServer>(&text) {
+            Ok(AgentToServer::Join { name }) => Some(name),
+            _ => {
+                warn!("Expected Join message, got: {}", text);
+                None
             }
+        },
+        _ => {
+            warn!("Agent failed to send Join message in time");
+            None
         }
-        _ => { warn!("Agent failed to send Join message in time"); None }
     }
 }
 
@@ -276,11 +362,18 @@ async fn handle_spectator(
 ) {
     // Send build version first so clients can detect stale JS and reload.
     let hello = serde_json::json!({ "type": "hello", "build_ver": build_ver });
-    if socket.send(Message::Text(hello.to_string().into())).await.is_err() {
+    if socket
+        .send(Message::Text(hello.to_string().into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
-    info!("Spectator connected, sending {} catchup messages", catchup.len());
+    info!(
+        "Spectator connected, sending {} catchup messages",
+        catchup.len()
+    );
     for msg in &catchup {
         let label = match msg {
             protocol::ServerToSpectator::GameStart { .. } => "game_start",
@@ -345,7 +438,13 @@ struct RrTemplate {
 }
 
 async fn rr_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Html(RrTemplate { build_ver: state.build_ver.clone() }.render().unwrap())
+    Html(
+        RrTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
 }
 
 // ============================================================
@@ -359,7 +458,13 @@ struct ScoreboardTemplate {
 }
 
 async fn scoreboard_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Html(ScoreboardTemplate { build_ver: state.build_ver.clone() }.render().unwrap())
+    Html(
+        ScoreboardTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
 }
 
 async fn api_scoreboard(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -394,7 +499,10 @@ async fn api_rr_config(
     if let Some(ms) = body.tick_ms {
         state.rr.set_tick_ms(ms);
     }
-    let _ = state.rr.broadcast_config(body.show_numbers, body.tick_ms).await;
+    let _ = state
+        .rr
+        .broadcast_config(body.show_numbers, body.tick_ms)
+        .await;
     Json(serde_json::json!({"ok": true}))
 }
 
@@ -405,7 +513,10 @@ async fn api_live_config(
     if let Some(ms) = body.tick_ms {
         state.lobby.set_tick_ms(ms);
     }
-    let _ = state.lobby.broadcast_config(body.show_numbers, body.tick_ms).await;
+    let _ = state
+        .lobby
+        .broadcast_config(body.show_numbers, body.tick_ms)
+        .await;
     Json(serde_json::json!({"ok": true}))
 }
 
@@ -456,28 +567,43 @@ async fn main() {
     });
 
     let num_players: u8 = std::env::var("GENERALS_PLAYERS")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(2);
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
     let tick_ms: u64 = std::env::var("GENERALS_TICK_MS")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(250);
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(250);
     let seed: u64 = std::env::var("GENERALS_SEED")
-        .ok().and_then(|s| s.parse().ok()).unwrap_or(42);
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(42);
 
     let scoreboard = Arc::new(Mutex::new(Scoreboard::new()));
 
     let lobby = Arc::new(Lobby::new(num_players, 500, tick_ms, seed));
     let lobby_loop = lobby.clone();
-    tokio::spawn(async move { lobby_loop.run_loop().await; });
+    tokio::spawn(async move {
+        lobby_loop.run_loop().await;
+    });
 
     let rr = Arc::new(RoundRobin::new(tick_ms, scoreboard.clone()));
     let rr_loop = rr.clone();
-    tokio::spawn(async move { rr_loop.run_loop().await; });
+    tokio::spawn(async move {
+        rr_loop.run_loop().await;
+    });
 
     let build_ver = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
         .to_string();
-    let state = Arc::new(AppState { lobby, rr, scoreboard, build_ver });
+    let state = Arc::new(AppState {
+        lobby,
+        rr,
+        scoreboard,
+        build_ver,
+    });
 
     info!("Serving static files from: {}", static_dir);
 
@@ -485,6 +611,8 @@ async fn main() {
         .route("/", get(simulator_page))
         .route("/api/game", get(api_game))
         .route("/api/ascii", get(api_ascii))
+        .route("/api/v2/game", get(api_v2_game))
+        .route("/api/v2/ascii", get(api_v2_ascii))
         .route("/live", get(live_page))
         .route("/ws/agent", get(ws_agent))
         .route("/ws/spectate", get(ws_spectate_live))
