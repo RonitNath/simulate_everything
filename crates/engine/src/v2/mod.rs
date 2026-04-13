@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod ascii;
 pub mod combat;
 pub mod directive;
@@ -5,6 +6,7 @@ pub mod hex;
 pub mod mapgen;
 pub mod observation;
 pub mod pathfinding;
+pub mod runner;
 pub mod sim;
 pub mod state;
 pub mod vision;
