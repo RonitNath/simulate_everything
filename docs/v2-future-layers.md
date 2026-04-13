@@ -1,6 +1,8 @@
 # simulate_everything — Future Layers Beyond V2
 
-This document captures the long-term design vision discussed during the V2 design session. These are NOT part of the V2 implementation. They are future layers that the V2 foundation is designed to support.
+> **Superseded by [roadmap.md](roadmap.md).** The roadmap reorganizes these layers into versioned milestones (V3-V5) with significantly more detail from subsequent design sessions covering economy, population, building, supply logistics, terrain generation, and political/social simulation. This document is retained for historical context but roadmap.md is authoritative.
+
+This document captures the long-term design vision discussed during the initial V2 design session. These are NOT part of the V2 implementation. They are future layers that the V2 foundation is designed to support.
 
 ## Layer 1: Unit Types
 

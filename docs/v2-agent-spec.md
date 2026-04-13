@@ -1,5 +1,7 @@
 # V2 Agent Architecture: "Centurion"
 
+> **Design target, not current state.** The current V2 agent is `SpreadAgent` — a single-pass heuristic placeholder (see `crates/engine/src/v2/agent.rs`). This document describes the Centurion architecture that will replace it. The agent architecture will need further revision once V2's remaining systems (convoys, population, roads — see roadmap.md) are implemented, as they significantly expand the agent's decision space.
+
 ## Performance Target
 
 The agent must be fast enough that a benchmark harness can run:
