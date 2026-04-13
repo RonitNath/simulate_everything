@@ -58,9 +58,12 @@ export interface V2HexDelta {
 }
 
 export interface V2Settlement {
+  id?: number;
   q: number;
   r: number;
   owner: number;
+  settlement_type?: "Farm" | "Village" | "City";
+  population?: number;
 }
 
 export interface V2SpectatorPlayer {
@@ -136,6 +139,7 @@ export interface V2ReplayFrame {
   population: V2PopSnapshot[];
   convoys: V2ConvoySnapshot[];
   scores: V2ScoreSnapshot[];
+  settlements?: V2Settlement[];
 }
 
 export interface V2Replay {
@@ -220,6 +224,6 @@ export function normalizeReplayFrame(f: V2ReplayFrame): BoardFrameData {
     depots: f.cells.map((c) => c.has_depot),
     population: f.population,
     convoys: f.convoys,
-    settlements: [],
+    settlements: f.settlements ?? [],
   };
 }

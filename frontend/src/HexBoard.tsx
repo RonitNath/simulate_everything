@@ -123,7 +123,9 @@ interface CellRender {
   hasDepot: boolean;
   depotSide: number;
   settlOwner?: number;
+  settlType?: "Farm" | "Village" | "City";
   settlPath?: string;
+  settlRadius?: number;
   entry?: CellStack;
   statusIcon?: string;
   statusColor?: string;
@@ -146,6 +148,16 @@ interface DestRender {
   x2: number;
   y2: number;
   stroke: string;
+}
+
+interface ConvoyRouteRender {
+  id: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  stroke: string;
+  dashArray: string;
 }
 
 interface HexBoardProps {
@@ -219,10 +231,11 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       if (owner !== null && owner !== undefined) terrMap.set(i, owner);
     }
 
-    const settlementOwners = new Map<number, number>();
+    const settlementMap = new Map<number, { owner: number; type: "Farm" | "Village" | "City" }>();
     if (settlements.length > 0) {
       for (const settlement of settlements) {
-        settlementOwners.set(axialToIdx(settlement.q, settlement.r, width), settlement.owner);
+        const type = settlement.settlement_type ?? "Village";
+        settlementMap.set(axialToIdx(settlement.q, settlement.r, width), { owner: settlement.owner, type });
       }
     } else {
       const popByHexOwner = new Map<string, number>();
@@ -233,7 +246,7 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       for (const [key, count] of popByHexOwner) {
         if (count < SETTLEMENT_THRESHOLD) continue;
         const [q, r, owner] = key.split(",").map((value) => parseInt(value, 10));
-        settlementOwners.set(axialToIdx(q, r, width), owner);
+        settlementMap.set(axialToIdx(q, r, width), { owner, type: "Village" });
       }
     }
 
@@ -267,7 +280,8 @@ const HexBoard: Component<HexBoardProps> = (props) => {
 
         let terrPts: string | undefined;
         let terrFill: string | undefined;
-        if (!entry && ls.has("territory")) {
+        const hasSettlement = settlementMap.has(idx);
+        if (!entry && !hasSettlement && ls.has("territory")) {
           const owner = terrMap.get(idx);
           if (owner !== undefined) {
             terrPts = hexPoints(cx, cy, s * 0.88);
@@ -276,18 +290,46 @@ const HexBoard: Component<HexBoardProps> = (props) => {
         }
 
         let settlOwner: number | undefined;
+        let settlType: "Farm" | "Village" | "City" | undefined;
         let settlPath: string | undefined;
+        let settlRadius: number | undefined;
         if (ls.has("settlements")) {
-          const owner = settlementOwners.get(idx);
-          if (owner !== undefined) {
-            settlOwner = owner;
-            const hs = s * 0.28;
-            const bx = cx - hs;
-            const by = cy - hs * 0.1;
-            const bw = hs * 2;
-            const bh = hs * 1.2;
-            const peakY = cy - hs * 1.1;
-            settlPath = `M${bx},${by} L${bx},${by + bh} L${bx + bw},${by + bh} L${bx + bw},${by} L${cx},${peakY} Z`;
+          const info = settlementMap.get(idx);
+          if (info !== undefined) {
+            settlOwner = info.owner;
+            settlType = info.type;
+            if (info.type === "Farm") {
+              // Farm: small circle rendered as SVG circle, store radius
+              settlRadius = s * 0.12;
+            } else if (info.type === "City") {
+              // City: crenellated tower shape
+              const w = s * 0.25;
+              const h = s * 0.3;
+              settlPath = [
+                `M${cx - w},${cy + h}`,
+                `L${cx - w},${cy - h}`,
+                `L${cx - w * 0.6},${cy - h}`,
+                `L${cx - w * 0.6},${cy - h * 1.3}`,
+                `L${cx - w * 0.2},${cy - h * 1.3}`,
+                `L${cx - w * 0.2},${cy - h}`,
+                `L${cx + w * 0.2},${cy - h}`,
+                `L${cx + w * 0.2},${cy - h * 1.3}`,
+                `L${cx + w * 0.6},${cy - h * 1.3}`,
+                `L${cx + w * 0.6},${cy - h}`,
+                `L${cx + w},${cy - h}`,
+                `L${cx + w},${cy + h}`,
+                "Z",
+              ].join(" ");
+            } else {
+              // Village: house/pentagon shape
+              const hs = s * 0.25;
+              const bx = cx - hs;
+              const by = cy - hs * 0.1;
+              const bw = hs * 2;
+              const bh = hs * 1.2;
+              const peakY = cy - hs * 1.1;
+              settlPath = `M${bx},${by} L${bx},${by + bh} L${bx + bw},${by + bh} L${bx + bw},${by} L${cx},${peakY} Z`;
+            }
           }
         }
 
@@ -357,7 +399,9 @@ const HexBoard: Component<HexBoardProps> = (props) => {
           hasDepot: ls.has("depots") ? (depots[idx] ?? false) : false,
           depotSide: Math.max(3, s * 0.22),
           settlOwner,
+          settlType,
           settlPath,
+          settlRadius,
           entry,
           statusIcon,
           statusColor,
@@ -367,6 +411,7 @@ const HexBoard: Component<HexBoardProps> = (props) => {
     }
 
     const convoyRenders: ConvoyRender[] = [];
+    const convoyRouteRenders: ConvoyRouteRender[] = [];
     if (ls.has("convoys")) {
       for (const convoy of convoys) {
         const row = convoy.r;
@@ -383,6 +428,30 @@ const HexBoard: Component<HexBoardProps> = (props) => {
             ? (convoy.cargo_type === "Food" ? "F" : convoy.cargo_type === "Material" ? "M" : "S")
             : "",
         });
+
+        // Draw route line from origin to destination
+        if (convoy.origin && convoy.destination) {
+          const origRow = convoy.origin.r;
+          const origCol = convoy.origin.q + (convoy.origin.r - (convoy.origin.r & 1)) / 2;
+          const dstRow = convoy.destination.r;
+          const dstCol = convoy.destination.q + (convoy.destination.r - (convoy.destination.r & 1)) / 2;
+          const [ox, oy] = hexCenter(origRow, origCol, s);
+          const [dx, dy] = hexCenter(dstRow, dstCol, s);
+          const dashArray = convoy.cargo_type === "Food"
+            ? "3,3"
+            : convoy.cargo_type === "Material"
+              ? "6,4"
+              : "2,6";
+          convoyRouteRenders.push({
+            id: convoy.id,
+            x1: ox,
+            y1: oy,
+            x2: dx,
+            y2: dy,
+            stroke: playerRgba(convoy.owner, 0.3),
+            dashArray,
+          });
+        }
       }
     }
 
@@ -407,7 +476,7 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       }
     }
 
-    return { cells, convoyRenders, destRenders, s };
+    return { cells, convoyRenders, convoyRouteRenders, destRenders, s };
   });
 
   return (
@@ -468,12 +537,32 @@ const HexBoard: Component<HexBoardProps> = (props) => {
               />
             )}
 
-            {cell.settlPath !== undefined && cell.settlOwner !== undefined && (
+            {cell.settlOwner !== undefined && cell.settlType === "Farm" && cell.settlRadius !== undefined && (
+              <circle
+                cx={cell.cx}
+                cy={cell.cy}
+                r={cell.settlRadius}
+                fill={playerRgba(cell.settlOwner, 0.8)}
+                stroke="none"
+              />
+            )}
+
+            {cell.settlPath !== undefined && cell.settlOwner !== undefined && cell.settlType === "Village" && (
               <path
                 d={cell.settlPath}
                 fill={playerRgba(cell.settlOwner, 0.9)}
                 stroke="#fff"
                 stroke-width={0.5}
+                stroke-linejoin="miter"
+              />
+            )}
+
+            {cell.settlPath !== undefined && cell.settlOwner !== undefined && cell.settlType === "City" && (
+              <path
+                d={cell.settlPath}
+                fill={playerRgba(cell.settlOwner, 0.95)}
+                stroke="#fff"
+                stroke-width={1}
                 stroke-linejoin="miter"
               />
             )}
@@ -537,6 +626,18 @@ const HexBoard: Component<HexBoardProps> = (props) => {
           </>
         );
       })}
+
+      {renderData().convoyRouteRenders.map((route) => (
+        <line
+          x1={route.x1}
+          y1={route.y1}
+          x2={route.x2}
+          y2={route.y2}
+          stroke={route.stroke}
+          stroke-width={0.8}
+          stroke-dasharray={route.dashArray}
+        />
+      ))}
 
       {renderData().convoyRenders.map((convoy) => (
         <>

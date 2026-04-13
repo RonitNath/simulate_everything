@@ -418,12 +418,25 @@ const V2App: Component = () => {
               <div class={styles.legendGrid}>
                 <svg width="14" height="14"><polygon points="7,1 13,7 7,13 1,7" fill="rgba(74,158,255,0.85)" stroke="#fff" stroke-width="0.5" /></svg>
                 <span>Convoy (F/M/S)</span>
-                <svg width="14" height="14"><path d="M3,4 L3,12 L11,12 L11,4 L7,1 Z" fill="rgba(74,158,255,0.9)" stroke="#fff" stroke-width="0.5" /></svg>
-                <span>Settlement</span>
+                <svg width="14" height="14"><circle cx="7" cy="7" r="2.5" fill="rgba(74,158,255,0.8)" /></svg>
+                <span>Farm</span>
+                <svg width="14" height="14"><path d="M3,5 L3,12 L11,12 L11,5 L7,2 Z" fill="rgba(74,158,255,0.9)" stroke="#fff" stroke-width="0.5" /></svg>
+                <span>Village</span>
+                <svg width="14" height="14"><path d="M2,12 L2,5 L4,5 L4,3 L6,3 L6,5 L8,5 L8,3 L10,3 L10,5 L12,5 L12,12 Z" fill="rgba(74,158,255,0.95)" stroke="#fff" stroke-width="0.5" /></svg>
+                <span>City</span>
                 <svg width="14" height="14"><line x1="2" y1="7" x2="7" y2="7" stroke="rgba(200,200,180,0.6)" stroke-width="2" stroke-linecap="round" /><line x1="7" y1="7" x2="12" y2="4" stroke="rgba(220,200,140,0.7)" stroke-width="2" stroke-linecap="round" /></svg>
                 <span>Road network</span>
                 <svg width="14" height="14"><path d="M3,10 L5,6 L7,8 L9,6 L11,10 Z" fill="#fff" stroke="#000" stroke-width="0.5" /></svg>
                 <span>General (crown)</span>
+              </div>
+              <div class={styles.legendTitle} style={{ "margin-top": "6px" }}>Convoy routes</div>
+              <div class={styles.legendGrid}>
+                <svg width="14" height="14"><line x1="1" y1="7" x2="13" y2="7" stroke="rgba(74,158,255,0.5)" stroke-width="1.5" stroke-dasharray="3,3" /></svg>
+                <span>Food route</span>
+                <svg width="14" height="14"><line x1="1" y1="7" x2="13" y2="7" stroke="rgba(74,158,255,0.5)" stroke-width="1.5" stroke-dasharray="6,4" /></svg>
+                <span>Material route</span>
+                <svg width="14" height="14"><line x1="1" y1="7" x2="13" y2="7" stroke="rgba(74,158,255,0.5)" stroke-width="1.5" stroke-dasharray="2,6" /></svg>
+                <span>Settler route</span>
               </div>
               <div class={styles.legendTitle} style={{ "margin-top": "6px" }}>Unit status</div>
               <div class={styles.legendGrid}>
