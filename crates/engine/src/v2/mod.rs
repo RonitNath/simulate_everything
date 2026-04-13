@@ -3,9 +3,11 @@ pub mod combat;
 pub mod directive;
 pub mod hex;
 pub mod mapgen;
+pub mod observation;
 pub mod pathfinding;
 pub mod sim;
 pub mod state;
+pub mod vision;
 
 pub const RESOURCE_RATE: f32 = 0.1;
 pub const UNIT_COST: f32 = 10.0;
