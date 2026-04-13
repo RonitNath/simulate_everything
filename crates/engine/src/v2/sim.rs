@@ -302,9 +302,9 @@ fn grow_population(state: &mut GameState) {
         }
         let carrying_capacity = 10.0 + cell.terrain_value * 12.0 + cell.water_access * 8.0;
         let headroom = (1.0 - total_pop as f32 / carrying_capacity).max(0.0);
-        let growth = (farmers as f32 * POPULATION_GROWTH_RATE * headroom).floor() as u16;
-        if growth > 0 {
-            growth_targets.push((hex, owner, growth.max(1)));
+        let raw_growth = farmers as f32 * POPULATION_GROWTH_RATE * headroom;
+        if raw_growth > 0.0 {
+            growth_targets.push((hex, owner, raw_growth.floor().max(1.0) as u16));
         }
     }
 
@@ -533,17 +533,12 @@ fn move_convoys(state: &mut GameState) {
                 convoy.pos = next;
                 convoy.move_cooldown = cooldown;
             }
-            if let Some(enemy) = state
-                .units
-                .iter()
-                .find(|u| u.owner != owner && u.pos == next)
-                .map(|u| u.owner)
-            {
+            if let Some((enemy, raid_hex)) = convoy_raider(state, next, owner) {
                 if let Some(idx) = state.convoys.iter().position(|c| c.id == id) {
                     let convoy = state.convoys.remove(idx);
                     add_convoy_cargo_to_cell(
                         state,
-                        next,
+                        raid_hex,
                         enemy,
                         convoy.cargo_type,
                         convoy.cargo_amount,
@@ -613,6 +608,16 @@ fn move_convoys(state: &mut GameState) {
             }
         }
     }
+}
+
+fn convoy_raider(state: &GameState, pos: Axial, owner: u8) -> Option<(u8, Axial)> {
+    state
+        .units
+        .iter()
+        .filter(|u| u.owner != owner)
+        .filter(|u| u.pos == pos || hex::distance(u.pos, pos) == 1)
+        .min_by_key(|u| u.id)
+        .map(|u| (u.owner, u.pos))
 }
 
 fn add_convoy_cargo_to_cell(
@@ -1031,5 +1036,87 @@ mod tests {
         let b = state.units.iter().find(|u| u.id == b_id).unwrap();
         assert!(a.engagements.is_empty());
         assert!(b.engagements.is_empty());
+    }
+
+    #[test]
+    fn convoy_is_raided_from_adjacent_hex() {
+        let mut state = test_state();
+        state.units.clear();
+        state.population.clear();
+        state.convoys.clear();
+        for cell in &mut state.grid {
+            cell.stockpile_owner = None;
+            cell.food_stockpile = 0.0;
+            cell.material_stockpile = 0.0;
+        }
+
+        let convoy_pos = offset_to_axial(5, 5);
+        let destination = neighbors(convoy_pos)[0];
+        let raid_hex = neighbors(destination)[1];
+
+        state.players[0].general_id = 100;
+        state.players[1].general_id = 200;
+        state.units.push(crate::v2::state::Unit {
+            id: 100,
+            owner: 0,
+            pos: offset_to_axial(1, 1),
+            strength: 100.0,
+            move_cooldown: 0,
+            engagements: Vec::new(),
+            destination: None,
+            is_general: true,
+        });
+        state.units.push(crate::v2::state::Unit {
+            id: 200,
+            owner: 1,
+            pos: offset_to_axial(10, 10),
+            strength: 100.0,
+            move_cooldown: 0,
+            engagements: Vec::new(),
+            destination: None,
+            is_general: true,
+        });
+        state.units.push(crate::v2::state::Unit {
+            id: 201,
+            owner: 1,
+            pos: raid_hex,
+            strength: 100.0,
+            move_cooldown: 0,
+            engagements: Vec::new(),
+            destination: None,
+            is_general: false,
+        });
+        state.population.push(Population {
+            id: 0,
+            hex: raid_hex,
+            owner: 1,
+            count: 10,
+            role: Role::Idle,
+            training: 0.0,
+        });
+        state.next_pop_id = 1;
+        state.cell_at_mut(raid_hex).unwrap().stockpile_owner = Some(1);
+        state.cell_at_mut(raid_hex).unwrap().terrain_value = 0.0;
+        state.cell_at_mut(raid_hex).unwrap().material_value = 0.0;
+        state.convoys.push(crate::v2::state::Convoy {
+            id: 0,
+            owner: 0,
+            pos: convoy_pos,
+            origin: convoy_pos,
+            destination,
+            cargo_type: CargoType::Food,
+            cargo_amount: 9.0,
+            capacity: 20.0,
+            speed: 1.0,
+            move_cooldown: 0,
+            returning: false,
+        });
+
+        tick(&mut state);
+
+        assert!(state.convoys.is_empty());
+        let raid_cell = state.cell_at(raid_hex).unwrap();
+        assert_eq!(raid_cell.stockpile_owner, Some(1));
+        assert_eq!(raid_cell.food_stockpile, 9.0);
     }
 }

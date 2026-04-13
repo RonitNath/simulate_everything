@@ -249,7 +249,7 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `pathfinding` | Hex A* for movement |
 | `vision` | Visibility computation |
 | `ascii` | ASCII renderer for debugging |
-| `replay` | `UnitSnapshot` and replay recording types |
+| `replay` | Fidelity-preserving replay snapshots for units, stockpiles, population, convoys, and final-state reconstruction |
 | `runner` | Synchronous game runner (used by `/api/v2/game`) |
 
 **V2 economy and settlement rules:**
@@ -258,6 +258,7 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 - Only settlements grow population, can build depots/roads, and act as stockpile anchors.
 - Production inside `SETTLEMENT_SUPPORT_RADIUS` of a settlement auto-accrues into that settlement's stockpile.
 - Production outside settlement support remains on the producing hex until convoyed away.
+- Convoys are raided if an enemy unit occupies the convoy hex or any adjacent hex after convoy movement; captured cargo is transferred into the raider's hex stockpile.
 - Unsupported frontier stockpiles decay by `FRONTIER_DECAY_RATE` each tick.
 - Natural migration is slow adjacent drift from established settlements into owned fertile frontier hexes.
 - Deliberate long-range expansion uses settler convoys carrying `SETTLER_CONVOY_SIZE` population.
