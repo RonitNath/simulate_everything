@@ -329,6 +329,35 @@ const V2SimApp: Component = () => {
                 )}
               </For>
             </div>
+            {/* Legend */}
+            <div class={styles.legend}>
+              <div class={styles.legendTitle}>Legend</div>
+              <div class={styles.legendGrid}>
+                <svg width="14" height="14"><polygon points="7,1 13,7 7,13 1,7" fill="rgba(74,158,255,0.85)" stroke="#fff" stroke-width="0.5" /></svg>
+                <span>Convoy (F/M/S)</span>
+                <svg width="14" height="14"><polygon points="7,2 3,12 11,12" fill="rgba(74,158,255,0.9)" stroke="#fff" stroke-width="0.5" /></svg>
+                <span>Settlement</span>
+                <svg width="14" height="14"><rect x="3" y="3" width="8" height="8" fill="#c0a000" stroke="#8a7200" stroke-width="0.5" /></svg>
+                <span>Depot</span>
+                <svg width="14" height="14"><line x1="3" y1="7" x2="11" y2="7" stroke="rgba(200,200,180,0.6)" stroke-width="2" /><line x1="7" y1="3" x2="7" y2="11" stroke="rgba(200,200,180,0.6)" stroke-width="2" /></svg>
+                <span>Road</span>
+                <svg width="14" height="14"><text x="7" y="11" text-anchor="middle" font-size="12" fill="#ffd700">★</text></svg>
+                <span>General</span>
+                <svg width="14" height="14"><line x1="1" y1="7" x2="13" y2="7" stroke="#ff6644" stroke-width="3" stroke-linecap="round" /></svg>
+                <span>Combat edge</span>
+              </div>
+              <div class={styles.legendTitle} style={{ "margin-top": "6px" }}>Score bar</div>
+              <div class={styles.legendGrid}>
+                <div style={{ width: "14px", height: "10px", background: "#4ac0c0", "border-radius": "2px" }} />
+                <span>Population</span>
+                <div style={{ width: "14px", height: "10px", background: "#4a80ff", "border-radius": "2px" }} />
+                <span>Territory</span>
+                <div style={{ width: "14px", height: "10px", background: "#ff4a6a", "border-radius": "2px" }} />
+                <span>Military</span>
+                <div style={{ width: "14px", height: "10px", background: "#ffa04a", "border-radius": "2px" }} />
+                <span>Stockpiles</span>
+              </div>
+            </div>
           </div>
         </div>
       </Show>
