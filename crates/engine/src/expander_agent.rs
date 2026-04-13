@@ -51,7 +51,7 @@ impl ExpanderAgent {
         self.memory_owner = vec![None; n];
         self.memory_army = vec![0; n];
         self.memory_turn = vec![0; n];
-        self.enemy_generals = vec![None; 8];
+        self.enemy_generals = vec![None; 16];
         self.initialized = true;
     }
 

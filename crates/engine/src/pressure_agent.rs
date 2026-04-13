@@ -66,7 +66,7 @@ impl PressureAgent {
         self.memory_owner = vec![None; n];
         self.memory_army = vec![0; n];
         self.memory_turn = vec![0; n];
-        self.enemy_generals = vec![None; 8];
+        self.enemy_generals = vec![None; 16];
         self.initialized = true;
     }
 
@@ -360,9 +360,7 @@ impl PressureAgent {
                         let nc = col as i32 + dc;
                         if nr >= 0 && nc >= 0 && (nr as usize) < h && (nc as usize) < w {
                             let ni = nr as usize * w + nc as usize;
-                            if obs.visible[ni]
-                                && obs.owners[ni].is_some_and(|o| o != obs.player)
-                            {
+                            if obs.visible[ni] && obs.owners[ni].is_some_and(|o| o != obs.player) {
                                 has_enemy_visible = true;
                                 break;
                             }

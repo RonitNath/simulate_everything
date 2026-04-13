@@ -59,8 +59,10 @@ impl MapConfig {
         // ~3% of non-mountain cells should be cities.
         let num_cities = (area as f64 * 0.03).round() as usize;
         let min_side = width.min(height);
-        // General distance: 40-60% of the smaller dimension for variety.
-        let min_general_distance = (min_side * 2 / 5).max(6);
+        // General distance: scales down with more players so they can all fit.
+        // 2 players: ~40% of smaller dim. 8+: ~15%.
+        let dist_pct = if num_players <= 2 { 40 } else { (60 / num_players as usize).max(12) };
+        let min_general_distance = (min_side * dist_pct / 100).max(6);
         // Margin from edge: ~15% of smaller dimension, at least 3.
         let general_margin = (min_side / 7).max(3);
         // Cities stay away from generals — mid-game mechanic.
@@ -149,20 +151,29 @@ fn place_mountain_clusters(
         })
     };
 
-    let try_place = |grid: &mut [Cell], row: usize, col: usize, placed: &mut usize, target: usize| -> bool {
-        if *placed >= target { return false; }
-        if row >= h || col >= w { return false; }
-        let idx = row * w + col;
-        if grid[idx].tile != Tile::Empty { return false; }
-        grid[idx] = Cell::mountain();
-        *placed += 1;
-        true
-    };
+    let try_place =
+        |grid: &mut [Cell], row: usize, col: usize, placed: &mut usize, target: usize| -> bool {
+            if *placed >= target {
+                return false;
+            }
+            if row >= h || col >= w {
+                return false;
+            }
+            let idx = row * w + col;
+            if grid[idx].tile != Tile::Empty {
+                return false;
+            }
+            grid[idx] = Cell::mountain();
+            *placed += 1;
+            true
+        };
 
     // Phase 1: Grow clusters from random seeds (~70% of budget).
     let cluster_budget = target * 7 / 10;
     for _ in 0..num_seeds {
-        if placed >= cluster_budget { break; }
+        if placed >= cluster_budget {
+            break;
+        }
 
         // Pick a seed point not near generals.
         let mut seed = None;
@@ -179,7 +190,9 @@ fn place_mountain_clusters(
         // Random walk from seed, placing mountains along the way.
         let walk_len = rng.gen_range(3..=avg_cluster + 3);
         for _ in 0..walk_len {
-            if too_close_to_general(r, c) { break; }
+            if too_close_to_general(r, c) {
+                break;
+            }
             try_place(grid, r, c, &mut placed, cluster_budget);
 
             // Pick a random cardinal direction, biased to continue straight.
@@ -241,11 +254,15 @@ fn place_cities(
         let col = rng.gen_range(0..w);
         let idx = row * w + col;
         if grid[idx].tile == Tile::Empty {
-            let nearest_general_dist = generals.iter().map(|&(gr, gc)| {
-                let dr = (row as i32 - gr as i32).unsigned_abs() as usize;
-                let dc = (col as i32 - gc as i32).unsigned_abs() as usize;
-                dr + dc
-            }).min().unwrap_or(0);
+            let nearest_general_dist = generals
+                .iter()
+                .map(|&(gr, gc)| {
+                    let dr = (row as i32 - gr as i32).unsigned_abs() as usize;
+                    let dc = (col as i32 - gc as i32).unsigned_abs() as usize;
+                    dr + dc
+                })
+                .min()
+                .unwrap_or(0);
 
             if nearest_general_dist < config.city_general_buffer {
                 attempts += 1;
@@ -343,7 +360,5 @@ fn all_connected(grid: &[Cell], w: usize, h: usize, generals: &[(usize, usize)])
         }
     }
 
-    generals
-        .iter()
-        .all(|&(r, c)| visited[r * w + c])
+    generals.iter().all(|&(r, c)| visited[r * w + c])
 }
