@@ -196,7 +196,10 @@ fn manage_auto_settlers(state: &mut GameState, player_id: u8) {
         .values()
         .filter(|s| {
             s.owner == player_id
-                && matches!(s.settlement_type, SettlementType::Village | SettlementType::City)
+                && matches!(
+                    s.settlement_type,
+                    SettlementType::Village | SettlementType::City
+                )
         })
         .map(|s| (s.hex, s.settlement_type))
         .collect();
@@ -532,6 +535,14 @@ fn produce_units_from_settlements(state: &mut GameState, player_id: u8) {
             destination: None,
             is_general: false,
         });
+        if let Some(log) = &mut state.game_log {
+            log.record(super::gamelog::GameEvent::UnitProduced {
+                tick: state.tick,
+                player: player_id,
+                unit_id,
+                pos: spawn_pos,
+            });
+        }
         state.rebuild_spatial();
     }
 }
