@@ -35,6 +35,8 @@ docs/            — detailed documentation
 | Architecture, modes, API, protocol | `docs/architecture.md` |
 | Pressure agent design | `docs/pressure-agent-handoff.md` |
 | Agent trait + built-in agents | `crates/engine/src/agent.rs` |
+| Expander agent impl | `crates/engine/src/expander_agent.rs` |
+| Swarm agent impl | `crates/engine/src/swarm_agent.rs` |
 | Pressure agent impl | `crates/engine/src/pressure_agent.rs` |
 | Game rules + step logic | `crates/engine/src/game.rs` |
 | Map generation | `crates/engine/src/mapgen.rs` |

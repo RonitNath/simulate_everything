@@ -63,8 +63,8 @@ Implement `trait Agent: Send` with `act(&mut self, obs: &Observation, rng: &mut 
 
 | Agent | ID | Strategy |
 |-------|----|----------|
-| ExpanderAgent | expander-v1 | BFS frontier distance, expand outward, consolidate interior |
-| SwarmAgent | swarm-v2 | BFS toward nearest enemy, directional early expansion |
+| ExpanderAgent | expander-v2 | Economy-first with phase transitions (Expand→Pressure→Strike), city-obsessed, FOW memory, 25% frontier attack axis |
+| SwarmAgent | swarm-v3 | Marching-column agent: expand early, then biggest stack marches toward enemy while frontier keeps expanding, FOW memory |
 | PressureAgent | pressure-v3 | Role-based single-objective focus, FOW memory, marauder interception |
 | SubprocessAgent | graph-search-v1 | Bridges to Python process via stdin/stdout (env `GENERALS_PYTHON_CLIENT`) |
 
