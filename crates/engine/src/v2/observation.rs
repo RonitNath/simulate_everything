@@ -75,6 +75,30 @@ fn unit_to_info(u: &Unit) -> UnitInfo {
 
 pub fn observe(state: &GameState, player_id: u8) -> Observation {
     let visible = vision::visible_cells(state, player_id);
+    let food_stockpiles: Vec<f32> = state
+        .grid
+        .iter()
+        .zip(visible.iter())
+        .map(|(cell, &is_visible)| if is_visible { cell.food_stockpile } else { 0.0 })
+        .collect();
+    let material_stockpiles: Vec<f32> = state
+        .grid
+        .iter()
+        .zip(visible.iter())
+        .map(|(cell, &is_visible)| if is_visible { cell.material_stockpile } else { 0.0 })
+        .collect();
+    let stockpile_owner: Vec<Option<u8>> = state
+        .grid
+        .iter()
+        .zip(visible.iter())
+        .map(|(cell, &is_visible)| {
+            if is_visible {
+                cell.stockpile_owner
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let own_units: Vec<UnitInfo> = state
         .units
@@ -161,9 +185,9 @@ pub fn observe(state: &GameState, player_id: u8) -> Observation {
         terrain: state.grid.iter().map(|c| c.terrain_value).collect(),
         material_map: state.grid.iter().map(|c| c.material_value).collect(),
         road_levels: state.grid.iter().map(|c| c.road_level).collect(),
-        food_stockpiles: state.grid.iter().map(|c| c.food_stockpile).collect(),
-        material_stockpiles: state.grid.iter().map(|c| c.material_stockpile).collect(),
-        stockpile_owner: state.grid.iter().map(|c| c.stockpile_owner).collect(),
+        food_stockpiles,
+        material_stockpiles,
+        stockpile_owner,
         width: state.width,
         height: state.height,
         total_food: state
@@ -239,5 +263,29 @@ mod tests {
         assert!(!obs.own_population.is_empty());
         assert_eq!(obs.food_stockpiles.len(), state.width * state.height);
         assert_eq!(obs.road_levels.len(), state.width * state.height);
+    }
+
+    #[test]
+    fn observe_hides_unseen_enemy_stockpiles() {
+        let mut state = test_state();
+        let enemy_hex = state
+            .units
+            .iter()
+            .find(|u| u.owner == 1 && u.is_general)
+            .unwrap()
+            .pos;
+        let cell = state.cell_at_mut(enemy_hex).unwrap();
+        cell.stockpile_owner = Some(1);
+        cell.food_stockpile = 12.0;
+        cell.material_stockpile = 9.0;
+
+        let obs = observe(&state, 0);
+        let (row, col) = axial_to_offset(enemy_hex);
+        let idx = row as usize * state.width + col as usize;
+
+        assert!(!obs.visible[idx]);
+        assert_eq!(obs.food_stockpiles[idx], 0.0);
+        assert_eq!(obs.material_stockpiles[idx], 0.0);
+        assert_eq!(obs.stockpile_owner[idx], None);
     }
 }

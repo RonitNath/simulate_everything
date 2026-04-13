@@ -5,25 +5,14 @@ use super::observation;
 use super::sim;
 use super::state::GameState;
 
-/// Run a complete game with the given agents, polling each every AGENT_POLL_INTERVAL ticks.
-/// Agents are indexed by player ID: agents[0] controls player 0, etc.
-/// Returns the winner's player ID, or None for a draw / simultaneous elimination.
-pub fn run_game(
+pub fn run_loop<F>(
     state: &mut GameState,
     agents: &mut [Box<dyn Agent>],
-    max_ticks: u64,
-) -> Option<u8> {
-    let tick_limit = sim::timeout_limit(max_ticks);
-    let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
-    tracing::info!(
-        width = state.width,
-        height = state.height,
-        players = state.players.len(),
-        max_ticks = tick_limit,
-        ?agent_names,
-        "game starting"
-    );
-
+    tick_limit: u64,
+    mut after_tick: F,
+) where
+    F: FnMut(&GameState),
+{
     while state.tick < tick_limit && !sim::is_over(state) {
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             for (player_id, agent) in agents.iter_mut().enumerate() {
@@ -44,7 +33,30 @@ pub fn run_game(
         }
 
         sim::tick(state);
+        after_tick(state);
+    }
+}
 
+/// Run a complete game with the given agents, polling each every AGENT_POLL_INTERVAL ticks.
+/// Agents are indexed by player ID: agents[0] controls player 0, etc.
+/// Returns the winner's player ID, or None for a draw / simultaneous elimination.
+pub fn run_game(
+    state: &mut GameState,
+    agents: &mut [Box<dyn Agent>],
+    max_ticks: u64,
+) -> Option<u8> {
+    let tick_limit = sim::timeout_limit(max_ticks);
+    let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
+    tracing::info!(
+        width = state.width,
+        height = state.height,
+        players = state.players.len(),
+        max_ticks = tick_limit,
+        ?agent_names,
+        "game starting"
+    );
+
+    run_loop(state, agents, tick_limit, |state| {
         // Periodic summary at debug level
         if state.tick % 50 == 0 {
             for p in &state.players {
@@ -73,7 +85,7 @@ pub fn run_game(
                 );
             }
         }
-    }
+    });
 
     let winner = sim::winner_at_limit(state, tick_limit);
     tracing::info!(

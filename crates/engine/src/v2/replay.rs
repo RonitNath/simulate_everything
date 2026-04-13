@@ -3,10 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::agent::Agent;
 use super::hex::Axial;
 use super::mapgen::{MapConfig, generate};
-use super::observation;
+use super::runner;
 use super::sim;
 use super::state::{Biome, Cell, GameState, Player, Unit};
-use super::{AGENT_POLL_INTERVAL, directive};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnitSnapshot {
@@ -85,25 +84,11 @@ pub fn record_game(
 
     let mut frames = vec![capture_frame(&state)];
 
-    while state.tick < tick_limit && !sim::is_over(&state) {
-        if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
-            for (player_id, agent) in agents.iter_mut().enumerate() {
-                let pid = player_id as u8;
-                if !state.players.iter().any(|p| p.id == pid && p.alive) {
-                    continue;
-                }
-                let obs = observation::observe(&state, pid);
-                let directives = agent.act(&obs);
-                directive::apply_directives(&mut state, pid, &directives);
-            }
-        }
-
-        sim::tick(&mut state);
-
+    runner::run_loop(&mut state, agents, tick_limit, |state| {
         if state.tick % sample_interval == 0 {
-            frames.push(capture_frame(&state));
+            frames.push(capture_frame(state));
         }
-    }
+    });
 
     // Always capture the final state
     if frames.last().map_or(true, |f| f.tick != state.tick) {
@@ -282,6 +267,14 @@ mod tests {
             replay.frames.len() > 10,
             "game should progress meaningfully"
         );
+    }
+
+    #[test]
+    fn record_game_respects_timeout_limit() {
+        let config = test_config();
+        let mut agents = test_agents();
+        let replay = record_game(&config, &mut agents, 10_000, 10);
+        assert!(replay.frames.last().unwrap().tick <= crate::v2::TIMEOUT_TICKS);
     }
 
     #[test]
