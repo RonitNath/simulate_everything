@@ -12,7 +12,9 @@ The game is the simulation. The agents are the players. The fun is watching emer
 
 **Goal**: Playable hex-based real-time strategy with physical economy. Two AI nations expand, build roads, raise armies, fight over contested regions. Spectator experience is watchable and strategically legible.
 
-### Core systems
+### Built (phases 1-7 complete)
+
+The V2 engine is implemented and running. See `v2-engine-spec.md` for full details.
 
 **Hex grid**
 - Axial coordinates (q, r), flat-top orientation, even-r offset storage
@@ -31,8 +33,36 @@ The game is the simulation. The agents are the players. The fun is watching emer
 - Engagements tracked per hex-edge (0-5)
 - Effectiveness = 1/sqrt(N engaged edges) — flanking and encirclement emerge naturally
 - 3+ edges engaged = surrounded, cannot disengage
-- Disengagement costs 50% strength — don't engage unless you'll win
+- Disengagement costs 30% strength
 - No auto-combat: agents explicitly order engagements
+
+**Single-resource economy (placeholder)**
+- Stationary units on terrain generate resources proportional to terrain_value
+- Resources credited directly to player pool (teleportation — replaced by convoys below)
+- 10 resources = produce 1 new unit at general
+
+**Terrain generation (basic)**
+- 3-octave Perlin noise producing terrain_value 0.0-3.0 per hex
+- Strategic value heatmap for balanced general placement
+- Minimum distance constraints between spawns
+
+**Fog of war**
+- Vision radius per unit (3 hexes = 37 hex area)
+- Terrain always visible, units hidden by fog
+- Spectator sees everything plus vision boundaries
+
+**SpreadAgent (placeholder)**
+- Single-pass heuristic: produce when affordable, fan out toward center, engage when advantageous
+- Phase 8 target: replace with Centurion multi-layer architecture (see v2-agent-spec.md)
+
+**Web integration**
+- V2 round-robin mode (SpreadAgent vs SpreadAgent)
+- WebSocket spectator stream with replay support
+- API endpoints for simulation, ASCII view, RR control
+
+### Remaining V2 work (not yet built)
+
+These systems complete the V2 vision. They are designed (see discussion docs) but not implemented.
 
 **Two-resource physical economy**
 - **Food**: produced by farmers on fertile hexes, consumed by all units per tick, perishable in stockpile. Starvation degrades strength then morale.
@@ -75,7 +105,7 @@ The game is the simulation. The agents are the players. The fun is watching emer
 - Reduces food spoilage rate
 - Creates the tambo/depot-chain pattern: stock depots along march routes, armies draw locally
 
-**Terrain generation**
+**Terrain generation (full)**
 - Region graph generated first (fairness constraints per player), then terrain fills in
 - Height field from layered Perlin/simplex noise, parameterized per region archetype
 - Hydraulic erosion pass (particle-based, ~10K droplets)
@@ -86,16 +116,12 @@ The game is the simulation. The agents are the players. The fun is watching emer
 - Fairness validation: each player's Voronoi partition gets equivalent food capacity, material capacity, expansion directions, defensible terrain
 - Region naming from archetype + distinctive features
 
-**Fog of war**
-- Vision radius per unit (3 hexes = 37 hex area)
-- Terrain always visible, units hidden by fog
-- Spectator sees everything plus vision boundaries
-
-**Multi-layer agent architecture**
+**Multi-layer agent architecture (Centurion)**
 - Strategic layer (every ~50 ticks): posture (expand/contest/attack/defend), region priorities, incremental influence maps
 - Operational layer (every ~5 ticks): task generation + greedy matching of units to tasks
 - Tactical layer (every poll): simulation-based engagement decisions for units near enemies
 - Policy-based agents, no LLMs. Performance target: <1ms per poll.
+- See v2-agent-spec.md for full design.
 
 **Sim harness**
 - Batch-run thousands of games for tuning
