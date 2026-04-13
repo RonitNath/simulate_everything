@@ -5,12 +5,13 @@ use super::combat;
 use super::directive::Directive;
 use super::hex::{Axial, distance, neighbors, offset_to_axial};
 use super::mapgen::{MapConfig, generate};
-use super::observation::{self, Observation};
+use super::observation::{self, InitialObservation, ObservationDelta};
 use super::replay;
 use super::runner;
 use super::sim;
 use super::spatial::SpatialIndex;
-use super::state::{Biome, Cell, Convoy, GameState, Player, Population, Role, Unit};
+use super::state::{Biome, Cell, Convoy, GameState, Player, Population, Role, TickAccumulator, Unit};
+use bitvec::vec::BitVec;
 use slotmap::{Key, SlotMap};
 
 struct ScriptedAgent {
@@ -32,7 +33,9 @@ impl Agent for ScriptedAgent {
         self.name
     }
 
-    fn act(&mut self, obs: &Observation) -> Vec<Directive> {
+    fn init(&mut self, _obs: &InitialObservation) {}
+
+    fn act(&mut self, obs: &ObservationDelta) -> Vec<Directive> {
         self.schedule.remove(&obs.tick).unwrap_or_default()
     }
 }
@@ -100,6 +103,11 @@ fn blank_state(width: usize, height: usize, num_players: u8) -> GameState {
         next_convoy_id: 0,
         scouted: vec![vec![true; width * height]; num_players as usize],
         spatial: SpatialIndex::new(width, height),
+        dirty_hexes: BitVec::repeat(false, width * height),
+        hex_revisions: vec![0; width * height],
+        next_hex_revision: 0,
+        #[cfg(debug_assertions)]
+        tick_accumulator: Some(TickAccumulator::default()),
     };
     state.rebuild_spatial();
     state

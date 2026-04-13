@@ -1,3 +1,4 @@
+use bitvec::prelude::BitVec;
 use super::SETTLEMENT_THRESHOLD;
 use super::hex::{Axial, axial_to_offset};
 use super::spatial::SpatialIndex;
@@ -149,6 +150,15 @@ pub struct GameState {
     pub scouted: Vec<Vec<bool>>,
     #[serde(skip)]
     pub spatial: SpatialIndex,
+    #[serde(skip)]
+    pub dirty_hexes: BitVec,
+    #[serde(skip)]
+    pub hex_revisions: Vec<u64>,
+    #[serde(skip)]
+    pub next_hex_revision: u64,
+    #[cfg(debug_assertions)]
+    #[serde(skip)]
+    pub tick_accumulator: Option<TickAccumulator>,
 }
 
 impl GameState {
@@ -167,6 +177,29 @@ impl GameState {
     pub fn cell_mut(&mut self, row: usize, col: usize) -> &mut Cell {
         let idx = self.index(row, col);
         &mut self.grid[idx]
+    }
+
+    pub fn mark_dirty_index(&mut self, idx: usize) {
+        if idx < self.dirty_hexes.len() {
+            self.dirty_hexes.set(idx, true);
+            self.next_hex_revision += 1;
+            self.hex_revisions[idx] = self.next_hex_revision;
+        }
+    }
+
+    pub fn mark_dirty_axial(&mut self, ax: Axial) {
+        let (row, col) = axial_to_offset(ax);
+        if row < 0 || col < 0 {
+            return;
+        }
+        let (row, col) = (row as usize, col as usize);
+        if row < self.height && col < self.width {
+            self.mark_dirty_index(self.index(row, col));
+        }
+    }
+
+    pub fn clear_dirty_hexes(&mut self) {
+        self.dirty_hexes.fill(false);
     }
 
     pub fn cell_at(&self, ax: Axial) -> Option<&Cell> {
@@ -249,4 +282,57 @@ impl GameState {
     pub fn has_unit_at(&self, ax: Axial) -> bool {
         self.spatial.has_unit_at(ax)
     }
+
+    #[cfg(debug_assertions)]
+    pub fn record_food_produced(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.food_produced += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_material_produced(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.material_produced += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_food_consumed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.food_consumed += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_material_consumed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.material_consumed += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_food_destroyed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.food_destroyed += amount;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn record_material_destroyed(&mut self, amount: f32) {
+        if let Some(acc) = self.tick_accumulator.as_mut() {
+            acc.material_destroyed += amount;
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TickAccumulator {
+    pub food_produced: f32,
+    pub food_consumed: f32,
+    pub food_destroyed: f32,
+    pub material_produced: f32,
+    pub material_consumed: f32,
+    pub material_destroyed: f32,
 }

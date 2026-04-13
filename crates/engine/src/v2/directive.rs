@@ -255,7 +255,10 @@ fn train_soldiers(state: &mut GameState, player_id: u8, hex: Axial) {
     let take = batch.min(state.population[key].count);
     if let Some(cell) = state.cell_at_mut(hex) {
         cell.material_stockpile -= take as f32 * SOLDIER_EQUIP_COST;
+        state.mark_dirty_axial(hex);
     }
+    #[cfg(debug_assertions)]
+    state.record_material_consumed(take as f32 * SOLDIER_EQUIP_COST);
     split_population(state, key, take, Role::Soldier, 0.0);
     merge_population(state);
 }
@@ -320,6 +323,12 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
     if let Some(cell) = state.cell_at_mut(general_pos) {
         cell.food_stockpile -= UNIT_FOOD_COST;
         cell.material_stockpile -= UNIT_MATERIAL_COST;
+        state.mark_dirty_axial(general_pos);
+    }
+    #[cfg(debug_assertions)]
+    {
+        state.record_food_consumed(UNIT_FOOD_COST);
+        state.record_material_consumed(UNIT_MATERIAL_COST);
     }
 
     let id = state.next_unit_id;
@@ -336,7 +345,11 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
     });
     debug_assert!(state.units.contains_key(unit_key));
     if let Some(cell) = state.cell_at_mut(spawn_pos) {
+        let changed = cell.stockpile_owner != Some(player_id);
         cell.stockpile_owner = Some(player_id);
+        if changed {
+            state.mark_dirty_axial(spawn_pos);
+        }
     }
     state.rebuild_spatial();
 }
@@ -385,6 +398,7 @@ fn load_convoy(
     if cargo_amount <= 0.0 {
         return;
     }
+    state.mark_dirty_axial(hex);
 
     state.convoys.insert(Convoy {
         public_id: state.next_convoy_id,
@@ -480,6 +494,9 @@ fn build_depot(state: &mut GameState, player_id: u8, hex: Axial) {
     }
     cell.material_stockpile -= DEPOT_BUILD_COST;
     cell.has_depot = true;
+    state.mark_dirty_axial(hex);
+    #[cfg(debug_assertions)]
+    state.record_material_consumed(DEPOT_BUILD_COST);
 }
 
 fn build_road(state: &mut GameState, player_id: u8, hex: Axial, level: u8) {
@@ -503,6 +520,9 @@ fn build_road(state: &mut GameState, player_id: u8, hex: Axial, level: u8) {
     }
     cell.material_stockpile -= cost;
     cell.road_level = level;
+    state.mark_dirty_axial(hex);
+    #[cfg(debug_assertions)]
+    state.record_material_consumed(cost);
 }
 
 #[cfg(test)]

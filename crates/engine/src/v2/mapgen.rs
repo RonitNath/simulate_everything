@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use noise::{NoiseFn, Perlin};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -209,6 +210,11 @@ pub fn generate(config: &MapConfig) -> GameState {
         next_convoy_id: 0,
         scouted: vec![vec![false; config.width * config.height]; config.num_players as usize],
         spatial: SpatialIndex::new(config.width, config.height),
+        dirty_hexes: BitVec::repeat(false, config.width * config.height),
+        hex_revisions: vec![0; config.width * config.height],
+        next_hex_revision: 0,
+        #[cfg(debug_assertions)]
+        tick_accumulator: None,
     };
     seed_starting_scouted(&mut state);
     state.rebuild_spatial();

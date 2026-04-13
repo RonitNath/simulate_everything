@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
@@ -361,6 +362,11 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         next_convoy_id,
         scouted: vec![vec![true; replay.width * replay.height]; replay.num_players],
         spatial: SpatialIndex::new(replay.width, replay.height),
+        dirty_hexes: BitVec::repeat(false, replay.width * replay.height),
+        hex_revisions: vec![0; replay.width * replay.height],
+        next_hex_revision: 0,
+        #[cfg(debug_assertions)]
+        tick_accumulator: None,
     };
     state.rebuild_spatial();
     state

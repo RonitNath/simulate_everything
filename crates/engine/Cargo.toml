@@ -11,3 +11,4 @@ tracing.workspace = true
 noise = "0.9"
 slotmap = { version = "1", features = ["serde"] }
 smallvec = "1"
+bitvec = "1"

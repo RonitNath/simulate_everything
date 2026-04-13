@@ -3,10 +3,9 @@ use simulate_everything_engine::v2::{
     agent::{Agent, SpreadAgent},
     directive,
     mapgen::{self, MapConfig},
-    observation,
-    replay::UnitSnapshot,
+    observation::{self, ObservationSession},
     sim,
-    state::GameState,
+    spectator,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,8 +16,8 @@ use crate::v2_protocol::V2ServerToSpectator;
 
 #[derive(Debug, Clone, Default)]
 pub struct V2RrSnapshot {
-    pub game_start: Option<V2ServerToSpectator>,
-    pub latest_frame: Option<V2ServerToSpectator>,
+    pub init: Option<V2ServerToSpectator>,
+    pub latest_snapshot: Option<V2ServerToSpectator>,
 }
 
 pub struct V2RoundRobin {
@@ -82,28 +81,35 @@ impl V2RoundRobin {
     pub async fn spectator_catchup(&self) -> Vec<V2ServerToSpectator> {
         let snap = self.snapshot.lock().await;
         let mut msgs = Vec::new();
-        if let Some(ref gs) = snap.game_start {
-            msgs.push(gs.clone());
+        if let Some(ref init) = snap.init {
+            msgs.push(init.clone());
         }
-        if let Some(ref frame) = snap.latest_frame {
-            msgs.push(frame.clone());
+        if let Some(ref snapshot) = snap.latest_snapshot {
+            msgs.push(snapshot.clone());
         }
         msgs
+    }
+
+    async fn cache_snapshot(&self, msg: V2ServerToSpectator) {
+        let mut snap = self.snapshot.lock().await;
+        if let V2ServerToSpectator::Snapshot { .. } = &msg {
+            snap.latest_snapshot = Some(msg);
+        }
     }
 
     async fn broadcast(&self, msg: V2ServerToSpectator) {
         let mut snap = self.snapshot.lock().await;
         match &msg {
-            V2ServerToSpectator::GameStart { .. } => {
-                snap.game_start = Some(msg.clone());
-                snap.latest_frame = None;
+            V2ServerToSpectator::Init { .. } => {
+                snap.init = Some(msg.clone());
+                snap.latest_snapshot = None;
             }
-            V2ServerToSpectator::Frame { .. } => {
-                snap.latest_frame = Some(msg.clone());
+            V2ServerToSpectator::Snapshot { .. } => {
+                snap.latest_snapshot = Some(msg.clone());
             }
             V2ServerToSpectator::GameEnd { .. } => {
-                snap.game_start = None;
-                snap.latest_frame = None;
+                snap.init = None;
+                snap.latest_snapshot = None;
             }
             V2ServerToSpectator::Config { .. } => {}
         }
@@ -148,8 +154,12 @@ impl V2RoundRobin {
             let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
 
             let mut state = mapgen::generate(&config);
-            let terrain: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
-            let material_map: Vec<f32> = state.grid.iter().map(|c| c.material_value).collect();
+            let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+            for (pid, agent) in agents.iter_mut().enumerate() {
+                let init = observation::initial_observation(&state, pid as u8);
+                agent.reset();
+                agent.init(&init);
+            }
 
             info!(
                 "V2 RR game #{}: {} (seed={})",
@@ -158,18 +168,19 @@ impl V2RoundRobin {
                 seed
             );
 
-            self.broadcast(V2ServerToSpectator::GameStart {
-                width: state.width,
-                height: state.height,
-                terrain: terrain.clone(),
-                material_map: material_map.clone(),
-                num_players: config.num_players,
-                agent_names: agent_names.clone(),
+            self.broadcast(V2ServerToSpectator::Init {
+                init: spectator::spectator_init(&state, agent_names.clone()),
             })
             .await;
 
-            // Broadcast initial frame
-            self.broadcast(make_frame(&state)).await;
+            self.broadcast(V2ServerToSpectator::Snapshot {
+                snapshot: spectator::snapshot(&state),
+            })
+            .await;
+            self.cache_snapshot(V2ServerToSpectator::Snapshot {
+                snapshot: spectator::snapshot(&state),
+            })
+            .await;
 
             let max_ticks: u64 = TIMEOUT_TICKS;
             let mut aborted = false;
@@ -192,15 +203,24 @@ impl V2RoundRobin {
                         if !state.players.iter().any(|p| p.id == pid && p.alive) {
                             continue;
                         }
-                        let obs = observation::observe(&mut state, pid);
-                        let directives = agent.act(&obs);
+                        let delta = observation::observe_delta(&mut state, pid, &mut session);
+                        let directives = agent.act(&delta);
                         directive::apply_directives(&mut state, pid, &directives);
                     }
+                    state.clear_dirty_hexes();
                 }
 
                 sim::tick(&mut state);
 
-                self.broadcast(make_frame(&state)).await;
+                self.broadcast(V2ServerToSpectator::Snapshot {
+                    snapshot: spectator::snapshot_delta(&state),
+                })
+                .await;
+                self.cache_snapshot(V2ServerToSpectator::Snapshot {
+                    snapshot: spectator::snapshot(&state),
+                })
+                .await;
+                state.clear_dirty_hexes();
 
                 let compute_elapsed = tick_start.elapsed();
                 let target = tokio::time::Duration::from_millis(tick_ms);
@@ -228,34 +248,5 @@ impl V2RoundRobin {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
         }
-    }
-}
-
-fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
-    state
-        .units
-        .values()
-        .map(|u| UnitSnapshot {
-            id: u.public_id,
-            owner: u.owner,
-            q: u.pos.q,
-            r: u.pos.r,
-            strength: u.strength,
-            engagements: u.engagements.clone(),
-            move_cooldown: u.move_cooldown,
-            destination: u.destination,
-            engaged: !u.engagements.is_empty(),
-            is_general: u.is_general,
-        })
-        .collect()
-}
-
-fn make_frame(state: &GameState) -> V2ServerToSpectator {
-    V2ServerToSpectator::Frame {
-        tick: state.tick,
-        units: snapshot_units(state),
-        player_food: state.players.iter().map(|p| p.food).collect(),
-        player_material: state.players.iter().map(|p| p.material).collect(),
-        alive: state.players.iter().map(|p| p.alive).collect(),
     }
 }

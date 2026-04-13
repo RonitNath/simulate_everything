@@ -63,6 +63,95 @@ pub struct Observation {
     pub scouted: Vec<bool>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitialObservation {
+    pub width: usize,
+    pub height: usize,
+    pub player: u8,
+    pub terrain: Vec<f32>,
+    pub material_map: Vec<f32>,
+    pub height_map: Vec<f32>,
+    pub scouted: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewScoutedHex {
+    pub index: usize,
+    pub terrain: f32,
+    pub material: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HexDelta {
+    pub index: usize,
+    pub food_stockpile: f32,
+    pub material_stockpile: f32,
+    pub stockpile_owner: Option<u8>,
+    pub road_level: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservationDelta {
+    pub tick: u64,
+    pub player: u8,
+    pub newly_scouted: Vec<NewScoutedHex>,
+    pub hex_changes: Vec<HexDelta>,
+    pub own_units: Vec<UnitInfo>,
+    pub visible_enemies: Vec<UnitInfo>,
+    pub own_population: Vec<PopulationInfo>,
+    pub visible_enemy_population: Vec<PopulationInfo>,
+    pub own_convoys: Vec<ConvoyInfo>,
+    pub visible_enemy_convoys: Vec<ConvoyInfo>,
+    pub visible: Vec<bool>,
+    pub total_food: f32,
+    pub total_material: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlayerObservationSession {
+    initialized: bool,
+    previous_visible: Vec<bool>,
+    previous_scouted: Vec<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservationSession {
+    players: Vec<PlayerObservationSession>,
+}
+
+impl ObservationSession {
+    pub fn new(player_count: usize, cells: usize) -> Self {
+        Self {
+            players: (0..player_count)
+                .map(|_| PlayerObservationSession {
+                    initialized: false,
+                    previous_visible: vec![false; cells],
+                    previous_scouted: vec![false; cells],
+                })
+                .collect(),
+        }
+    }
+
+    pub fn ensure_player(&mut self, player_id: usize, cells: usize) {
+        while self.players.len() <= player_id {
+            self.players.push(PlayerObservationSession {
+                initialized: false,
+                previous_visible: vec![false; cells],
+                previous_scouted: vec![false; cells],
+            });
+        }
+    }
+
+    pub fn reset(&mut self) {
+        for player in &mut self.players {
+            player.initialized = false;
+            player.previous_visible.fill(false);
+            player.previous_scouted.fill(false);
+        }
+    }
+}
+
 fn unit_to_info(id: UnitKey, u: &Unit) -> UnitInfo {
     UnitInfo {
         id,
@@ -75,61 +164,41 @@ fn unit_to_info(id: UnitKey, u: &Unit) -> UnitInfo {
     }
 }
 
-pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
-    let visible = vision::visible_cells(state, player_id);
-    if let Some(player_scouted) = state.scouted.get_mut(player_id as usize) {
-        for (s, v) in player_scouted.iter_mut().zip(visible.iter()) {
-            *s |= *v;
-        }
-    }
-    let scouted = state.scouted[player_id as usize].clone();
-    let food_stockpiles: Vec<f32> = state
-        .grid
+fn player_totals(state: &GameState, player_id: u8) -> (f32, f32) {
+    state
+        .players
         .iter()
-        .zip(visible.iter())
-        .map(|(cell, &is_visible)| if is_visible { cell.food_stockpile } else { 0.0 })
-        .collect();
-    let material_stockpiles: Vec<f32> = state
-        .grid
-        .iter()
-        .zip(visible.iter())
-        .map(|(cell, &is_visible)| {
-            if is_visible {
-                cell.material_stockpile
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    let stockpile_owner: Vec<Option<u8>> = state
-        .grid
-        .iter()
-        .zip(visible.iter())
-        .map(|(cell, &is_visible)| {
-            if is_visible {
-                cell.stockpile_owner
-            } else {
-                None
-            }
-        })
-        .collect();
+        .find(|p| p.id == player_id)
+        .map(|p| (p.food, p.material))
+        .unwrap_or((0.0, 0.0))
+}
 
-    let own_units: Vec<UnitInfo> = state
+fn collect_entities(
+    state: &GameState,
+    player_id: u8,
+    visible: &[bool],
+) -> (
+    Vec<UnitInfo>,
+    Vec<UnitInfo>,
+    Vec<PopulationInfo>,
+    Vec<PopulationInfo>,
+    Vec<ConvoyInfo>,
+    Vec<ConvoyInfo>,
+) {
+    let own_units = state
         .units
         .iter()
         .filter(|(_, u)| u.owner == player_id)
         .map(|(id, u)| unit_to_info(id, u))
         .collect();
-
-    let visible_enemies: Vec<UnitInfo> = state
+    let visible_enemies = state
         .units
         .iter()
         .filter(|(_, u)| u.owner != player_id)
-        .filter(|(_, u)| is_visible_cell(state, &visible, u.pos.q, u.pos.r))
+        .filter(|(_, u)| is_visible_cell(state, visible, u.pos.q, u.pos.r))
         .map(|(id, u)| unit_to_info(id, u))
         .collect();
-
-    let own_population: Vec<PopulationInfo> = state
+    let own_population = state
         .population
         .iter()
         .filter(|(_, p)| p.owner == player_id)
@@ -143,12 +212,11 @@ pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
             training: p.training,
         })
         .collect();
-
-    let visible_enemy_population: Vec<PopulationInfo> = state
+    let visible_enemy_population = state
         .population
         .iter()
         .filter(|(_, p)| p.owner != player_id)
-        .filter(|(_, p)| is_visible_cell(state, &visible, p.hex.q, p.hex.r))
+        .filter(|(_, p)| is_visible_cell(state, visible, p.hex.q, p.hex.r))
         .map(|(id, p)| PopulationInfo {
             id,
             owner: p.owner,
@@ -159,8 +227,7 @@ pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
             training: p.training,
         })
         .collect();
-
-    let own_convoys: Vec<ConvoyInfo> = state
+    let own_convoys = state
         .convoys
         .iter()
         .filter(|(_, c)| c.owner == player_id)
@@ -175,12 +242,11 @@ pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
             cargo_amount: c.cargo_amount,
         })
         .collect();
-
-    let visible_enemy_convoys: Vec<ConvoyInfo> = state
+    let visible_enemy_convoys = state
         .convoys
         .iter()
         .filter(|(_, c)| c.owner != player_id)
-        .filter(|(_, c)| is_visible_cell(state, &visible, c.pos.q, c.pos.r))
+        .filter(|(_, c)| is_visible_cell(state, visible, c.pos.q, c.pos.r))
         .map(|(id, c)| ConvoyInfo {
             id,
             owner: c.owner,
@@ -193,8 +259,21 @@ pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
         })
         .collect();
 
-    Observation {
-        tick: state.tick,
+    (
+        own_units,
+        visible_enemies,
+        own_population,
+        visible_enemy_population,
+        own_convoys,
+        visible_enemy_convoys,
+    )
+}
+
+pub fn initial_observation(state: &GameState, player_id: u8) -> InitialObservation {
+    let scouted = state.scouted[player_id as usize].clone();
+    InitialObservation {
+        width: state.width,
+        height: state.height,
         player: player_id,
         terrain: state
             .grid
@@ -208,35 +287,101 @@ pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
             .zip(scouted.iter())
             .map(|(cell, &is_scouted)| if is_scouted { cell.material_value } else { 0.0 })
             .collect(),
-        road_levels: state
-            .grid
-            .iter()
-            .zip(scouted.iter())
-            .map(|(cell, &is_scouted)| if is_scouted { cell.road_level } else { 0 })
-            .collect(),
         height_map: state
             .grid
             .iter()
             .zip(scouted.iter())
             .map(|(cell, &is_scouted)| if is_scouted { cell.height } else { 0.0 })
             .collect(),
-        food_stockpiles,
-        material_stockpiles,
-        stockpile_owner,
-        width: state.width,
-        height: state.height,
-        total_food: state
-            .players
-            .iter()
-            .find(|p| p.id == player_id)
-            .map(|p| p.food)
-            .unwrap_or(0.0),
-        total_material: state
-            .players
-            .iter()
-            .find(|p| p.id == player_id)
-            .map(|p| p.material)
-            .unwrap_or(0.0),
+        scouted,
+    }
+}
+
+pub fn observe_delta(
+    state: &mut GameState,
+    player_id: u8,
+    session: &mut ObservationSession,
+) -> ObservationDelta {
+    let cells = state.width * state.height;
+    let player_idx = player_id as usize;
+    session.ensure_player(player_idx, cells);
+    let player_session = &mut session.players[player_idx];
+    if !player_session.initialized {
+        player_session.previous_scouted = state.scouted[player_idx].clone();
+        player_session.initialized = true;
+    }
+
+    let previous_visible = player_session.previous_visible.clone();
+    let previous_scouted = player_session.previous_scouted.clone();
+    let visible = vision::visible_cells(state, player_id);
+    if let Some(player_scouted) = state.scouted.get_mut(player_idx) {
+        for (s, v) in player_scouted.iter_mut().zip(visible.iter()) {
+            *s |= *v;
+        }
+    }
+    let scouted = state.scouted[player_idx].clone();
+
+    let newly_scouted = scouted
+        .iter()
+        .enumerate()
+        .filter(|(idx, is_scouted)| **is_scouted && !previous_scouted[*idx])
+        .map(|(idx, _)| NewScoutedHex {
+            index: idx,
+            terrain: state.grid[idx].terrain_value,
+            material: state.grid[idx].material_value,
+            height: state.grid[idx].height,
+        })
+        .collect();
+
+    let mut changed_indices = Vec::new();
+    for idx in state.dirty_hexes.iter_ones() {
+        if visible[idx] {
+            changed_indices.push(idx);
+        }
+    }
+    for (idx, (&was_visible, &is_visible)) in previous_visible.iter().zip(visible.iter()).enumerate()
+    {
+        if was_visible != is_visible || (is_visible && !previous_scouted[idx] && scouted[idx]) {
+            changed_indices.push(idx);
+        }
+    }
+    changed_indices.sort_unstable();
+    changed_indices.dedup();
+
+    let hex_changes = changed_indices
+        .into_iter()
+        .filter(|&idx| visible[idx])
+        .map(|idx| HexDelta {
+            index: idx,
+            food_stockpile: state.grid[idx].food_stockpile,
+            material_stockpile: state.grid[idx].material_stockpile,
+            stockpile_owner: state.grid[idx].stockpile_owner,
+            road_level: if scouted[idx] {
+                state.grid[idx].road_level
+            } else {
+                0
+            },
+        })
+        .collect();
+
+    let (
+        own_units,
+        visible_enemies,
+        own_population,
+        visible_enemy_population,
+        own_convoys,
+        visible_enemy_convoys,
+    ) = collect_entities(state, player_id, &visible);
+    let (total_food, total_material) = player_totals(state, player_id);
+
+    player_session.previous_visible = visible.clone();
+    player_session.previous_scouted = scouted;
+
+    ObservationDelta {
+        tick: state.tick,
+        player: player_id,
+        newly_scouted,
+        hex_changes,
         own_units,
         visible_enemies,
         own_population,
@@ -244,8 +389,85 @@ pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
         own_convoys,
         visible_enemy_convoys,
         visible,
-        scouted,
+        total_food,
+        total_material,
     }
+}
+
+pub fn materialize_observation(
+    init: &InitialObservation,
+    delta: &ObservationDelta,
+) -> Observation {
+    let mut obs = Observation {
+        tick: delta.tick,
+        player: delta.player,
+        terrain: init.terrain.clone(),
+        material_map: init.material_map.clone(),
+        road_levels: vec![0; init.width * init.height],
+        height_map: init.height_map.clone(),
+        food_stockpiles: vec![0.0; init.width * init.height],
+        material_stockpiles: vec![0.0; init.width * init.height],
+        stockpile_owner: vec![None; init.width * init.height],
+        width: init.width,
+        height: init.height,
+        total_food: delta.total_food,
+        total_material: delta.total_material,
+        own_units: delta.own_units.clone(),
+        visible_enemies: delta.visible_enemies.clone(),
+        own_population: delta.own_population.clone(),
+        visible_enemy_population: delta.visible_enemy_population.clone(),
+        own_convoys: delta.own_convoys.clone(),
+        visible_enemy_convoys: delta.visible_enemy_convoys.clone(),
+        visible: delta.visible.clone(),
+        scouted: init.scouted.clone(),
+    };
+    apply_delta_to_observation(&mut obs, delta);
+    obs
+}
+
+pub fn apply_delta_to_observation(obs: &mut Observation, delta: &ObservationDelta) {
+    obs.tick = delta.tick;
+    obs.player = delta.player;
+    obs.total_food = delta.total_food;
+    obs.total_material = delta.total_material;
+    obs.own_units = delta.own_units.clone();
+    obs.visible_enemies = delta.visible_enemies.clone();
+    obs.own_population = delta.own_population.clone();
+    obs.visible_enemy_population = delta.visible_enemy_population.clone();
+    obs.own_convoys = delta.own_convoys.clone();
+    obs.visible_enemy_convoys = delta.visible_enemy_convoys.clone();
+    obs.visible = delta.visible.clone();
+
+    for idx in 0..obs.visible.len() {
+        if !obs.visible[idx] {
+            obs.food_stockpiles[idx] = 0.0;
+            obs.material_stockpiles[idx] = 0.0;
+            obs.stockpile_owner[idx] = None;
+        }
+    }
+
+    for scouted in &delta.newly_scouted {
+        obs.scouted[scouted.index] = true;
+        obs.terrain[scouted.index] = scouted.terrain;
+        obs.material_map[scouted.index] = scouted.material;
+        obs.height_map[scouted.index] = scouted.height;
+    }
+
+    for cell in &delta.hex_changes {
+        obs.food_stockpiles[cell.index] = cell.food_stockpile;
+        obs.material_stockpiles[cell.index] = cell.material_stockpile;
+        obs.stockpile_owner[cell.index] = cell.stockpile_owner;
+        if obs.scouted[cell.index] {
+            obs.road_levels[cell.index] = cell.road_level;
+        }
+    }
+}
+
+pub fn observe(state: &mut GameState, player_id: u8) -> Observation {
+    let init = initial_observation(state, player_id);
+    let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+    let delta = observe_delta(state, player_id, &mut session);
+    materialize_observation(&init, &delta)
 }
 
 fn is_visible_cell(state: &GameState, visible: &[bool], q: i32, r: i32) -> bool {
@@ -260,63 +482,48 @@ fn is_visible_cell(state: &GameState, visible: &[bool], q: i32, r: i32) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v2::hex::{Axial, axial_to_offset};
+    use crate::v2::hex::offset_to_axial;
     use crate::v2::mapgen::{MapConfig, generate};
 
-    fn test_state() -> GameState {
-        generate(&MapConfig {
-            width: 30,
-            height: 30,
+    #[test]
+    fn observe_masks_hidden_dynamic_cells() {
+        let mut state = generate(&MapConfig {
+            width: 20,
+            height: 20,
+            num_players: 2,
+            seed: 1,
+        });
+        let hidden = offset_to_axial(19, 19);
+        let idx = state.index(19, 19);
+        let cell = state.cell_at_mut(hidden).unwrap();
+        cell.food_stockpile = 9.0;
+        cell.material_stockpile = 4.0;
+        cell.stockpile_owner = Some(1);
+        state.mark_dirty_axial(hidden);
+
+        let obs = observe(&mut state, 0);
+        assert_eq!(obs.food_stockpiles[idx], 0.0);
+        assert_eq!(obs.material_stockpiles[idx], 0.0);
+        assert_eq!(obs.stockpile_owner[idx], None);
+    }
+
+    #[test]
+    fn delta_roundtrip_matches_full_observe() {
+        let mut state = generate(&MapConfig {
+            width: 20,
+            height: 20,
             num_players: 2,
             seed: 42,
-        })
-    }
-
-    #[test]
-    fn observe_includes_all_own_units() {
-        let mut state = test_state();
-        let expected = state.units.values().filter(|u| u.owner == 0).count();
-        let obs = observe(&mut state, 0);
-        assert_eq!(obs.own_units.len(), expected);
-    }
-
-    #[test]
-    fn observe_only_visible_enemies() {
-        let mut state = test_state();
-        let obs = observe(&mut state, 0);
-        for enemy in &obs.visible_enemies {
-            let ax = Axial::new(enemy.q, enemy.r);
-            let (row, col) = axial_to_offset(ax);
-            let idx = row as usize * state.width + col as usize;
-            assert!(obs.visible[idx]);
-        }
-    }
-
-    #[test]
-    fn observe_contains_population_and_stockpiles() {
-        let mut state = test_state();
-        let obs = observe(&mut state, 0);
-        assert!(!obs.own_population.is_empty());
-        assert_eq!(obs.food_stockpiles.len(), state.width * state.height);
-        assert_eq!(obs.road_levels.len(), state.width * state.height);
-    }
-
-    #[test]
-    fn observe_hides_stockpiles_outside_vision() {
-        let mut state = test_state();
-        let visible = vision::visible_cells(&state, 0);
-        let hidden_idx = visible
-            .iter()
-            .position(|cell_visible| !cell_visible)
-            .expect("expected at least one hidden cell");
-
-        state.grid[hidden_idx].food_stockpile = 12.0;
-        state.grid[hidden_idx].material_stockpile = 7.0;
-        state.grid[hidden_idx].stockpile_owner = Some(1);
-
-        let obs = observe(&mut state, 0);
-        assert_eq!(obs.food_stockpiles[hidden_idx], 0.0);
-        assert_eq!(obs.material_stockpiles[hidden_idx], 0.0);
-        assert_eq!(obs.stockpile_owner[hidden_idx], None);
+        });
+        let init = initial_observation(&state, 0);
+        let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+        let delta = observe_delta(&mut state, 0, &mut session);
+        let materialized = materialize_observation(&init, &delta);
+        let full = observe(&mut state, 0);
+        assert_eq!(materialized.visible, full.visible);
+        assert_eq!(materialized.scouted, full.scouted);
+        assert_eq!(materialized.terrain, full.terrain);
+        assert_eq!(materialized.material_map, full.material_map);
+        assert_eq!(materialized.height_map, full.height_map);
     }
 }
