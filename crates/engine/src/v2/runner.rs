@@ -73,7 +73,7 @@ pub fn run_loop<F>(
                         match d {
                             directive::Directive::Move { .. } => move_count += 1,
                             directive::Directive::Engage { .. } => engage_count += 1,
-                            directive::Directive::Produce => produce_count += 1,
+                            directive::Directive::Produce { .. } => produce_count += 1,
                             _ => other_count += 1,
                         }
                     }

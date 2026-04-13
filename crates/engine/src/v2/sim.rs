@@ -78,7 +78,7 @@ pub fn winner_at_limit(state: &GameState, max_ticks: u64) -> Option<u8> {
 pub struct ScoreBreakdown {
     pub player_id: u8,
     pub population: f32,
-    pub territory: f32,
+    pub settlements: f32,
     pub military: f32,
     pub stockpiles: f32,
     pub total: f32,
@@ -91,12 +91,7 @@ pub fn score_players(state: &GameState) -> Vec<ScoreBreakdown> {
         .map(|p| p.count as f32)
         .sum::<f32>()
         .max(1.0);
-    let total_territory = (state
-        .grid
-        .iter()
-        .filter(|c| c.stockpile_owner.is_some())
-        .count() as f32)
-        .max(1.0);
+    let total_settlements = count_all_settlements(state).max(1.0);
     let total_military = state
         .units
         .values()
@@ -120,11 +115,7 @@ pub fn score_players(state: &GameState) -> Vec<ScoreBreakdown> {
                 .filter(|p| p.owner == player.id)
                 .map(|p| p.count as f32)
                 .sum::<f32>();
-            let territory = state
-                .grid
-                .iter()
-                .filter(|c| c.stockpile_owner == Some(player.id))
-                .count() as f32;
+            let settlements = count_player_settlements(state, player.id) as f32;
             let military = state
                 .units
                 .values()
@@ -138,19 +129,37 @@ pub fn score_players(state: &GameState) -> Vec<ScoreBreakdown> {
                 .map(|c| c.food_stockpile + c.material_stockpile)
                 .sum::<f32>();
             let total = 0.4 * (population / total_population)
-                + 0.3 * (territory / total_territory)
+                + 0.3 * (settlements / total_settlements)
                 + 0.2 * (military / total_military)
                 + 0.1 * (stockpiles / total_stockpiles);
             ScoreBreakdown {
                 player_id: player.id,
                 population,
-                territory,
+                settlements,
                 military,
                 stockpiles,
                 total,
             }
         })
         .collect()
+}
+
+fn count_player_settlements(state: &GameState, player_id: u8) -> usize {
+    let mut seen: Vec<Axial> = Vec::new();
+    for pop in state.population.values().filter(|p| p.owner == player_id) {
+        if !seen.contains(&pop.hex) && state.population_on_hex(player_id, pop.hex) >= SETTLEMENT_THRESHOLD {
+            seen.push(pop.hex);
+        }
+    }
+    seen.len()
+}
+
+fn count_all_settlements(state: &GameState) -> f32 {
+    state
+        .players
+        .iter()
+        .map(|p| count_player_settlements(state, p.id) as f32)
+        .sum::<f32>()
 }
 
 pub fn winner_by_score(state: &GameState) -> Option<u8> {
@@ -1205,7 +1214,7 @@ mod tests {
             tick(&mut state);
         }
         let before = state.units.values().filter(|u| u.owner == 0).count();
-        apply_directives(&mut state, 0, &[Directive::Produce]);
+        apply_directives(&mut state, 0, &[Directive::Produce { hex_q: general_pos.q, hex_r: general_pos.r }]);
         let after = state.units.values().filter(|u| u.owner == 0).count();
         assert!(after > before);
     }

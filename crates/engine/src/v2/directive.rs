@@ -31,7 +31,7 @@ pub enum Directive {
     DisengageAll {
         unit_id: UnitKey,
     },
-    Produce,
+    Produce { hex_q: i32, hex_r: i32 },
     AssignRole {
         hex_q: i32,
         hex_r: i32,
@@ -114,7 +114,9 @@ fn apply_one(state: &mut GameState, player_id: u8, directive: &Directive) {
                 combat::disengage_all(state, *unit_id);
             }
         }
-        Directive::Produce => produce_unit(state, player_id),
+        Directive::Produce { hex_q, hex_r } => {
+            produce_unit(state, player_id, Axial::new(*hex_q, *hex_r))
+        }
         Directive::AssignRole {
             hex_q,
             hex_r,
@@ -263,16 +265,15 @@ fn train_soldiers(state: &mut GameState, player_id: u8, hex: Axial) {
     merge_population(state);
 }
 
-fn produce_unit(state: &mut GameState, player_id: u8) {
-    let player = match state.players.iter().find(|p| p.id == player_id && p.alive) {
-        Some(p) => p,
-        None => return,
-    };
-    let general_pos = match state.units.get(player.general_id) {
-        Some(g) => g.pos,
-        None => return,
-    };
-    let Some(cell) = state.cell_at(general_pos) else {
+fn produce_unit(state: &mut GameState, player_id: u8, production_hex: Axial) {
+    if !state.players.iter().any(|p| p.id == player_id && p.alive) {
+        return;
+    }
+    // Must be a settlement the player controls
+    if !is_settlement_hex(state, player_id, production_hex) {
+        return;
+    }
+    let Some(cell) = state.cell_at(production_hex) else {
         return;
     };
     if cell.stockpile_owner != Some(player_id)
@@ -287,7 +288,7 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
         .values()
         .filter(|p| {
             p.owner == player_id
-                && p.hex == general_pos
+                && p.hex == production_hex
                 && p.role == Role::Soldier
                 && p.training >= SOLDIER_READY_THRESHOLD
         })
@@ -297,7 +298,7 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
         return;
     }
 
-    let neighbors = hex::neighbors(general_pos);
+    let neighbors = hex::neighbors(production_hex);
     let spawn_pos = neighbors
         .iter()
         .filter(|&&n| state.in_bounds(n))
@@ -308,7 +309,7 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
     let mut remaining = SOLDIERS_PER_UNIT;
     for (_, pop) in state.population.iter_mut().filter(|(_, p)| {
         p.owner == player_id
-            && p.hex == general_pos
+            && p.hex == production_hex
             && p.role == Role::Soldier
             && p.training >= SOLDIER_READY_THRESHOLD
     }) {
@@ -320,10 +321,10 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
         remaining -= take;
     }
     state.population.retain(|_, p| p.count > 0);
-    if let Some(cell) = state.cell_at_mut(general_pos) {
+    if let Some(cell) = state.cell_at_mut(production_hex) {
         cell.food_stockpile -= UNIT_FOOD_COST;
         cell.material_stockpile -= UNIT_MATERIAL_COST;
-        state.mark_dirty_axial(general_pos);
+        state.mark_dirty_axial(production_hex);
     }
     #[cfg(debug_assertions)]
     {
@@ -575,7 +576,7 @@ mod tests {
             pop.training = SOLDIER_READY_THRESHOLD;
         }
         let initial = state.units.values().filter(|u| u.owner == 0).count();
-        apply_directives(&mut state, 0, &[Directive::Produce]);
+        apply_directives(&mut state, 0, &[Directive::Produce { hex_q: general.q, hex_r: general.r }]);
         assert_eq!(
             state.units.values().filter(|u| u.owner == 0).count(),
             initial + 1

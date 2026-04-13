@@ -106,7 +106,7 @@ impl SpreadAgent {
         if let Some(hex) = general_hex {
             manage_settlement_infrastructure(obs, hex, &mut directives);
             manage_settlement_population(obs, hex, &mut directives);
-            produce_units_at_general(obs, hex, &mut directives);
+            produce_units_at_settlement(obs, hex, &mut directives);
             try_send_settlers(obs, hex, &settlements, &mut self.pending_settlement, &mut directives);
             load_surplus_convoys(obs, general_hex, &mut directives);
 
@@ -117,6 +117,7 @@ impl SpreadAgent {
                 }
                 manage_settlement_infrastructure(obs, settlement, &mut directives);
                 manage_settlement_population(obs, settlement, &mut directives);
+                produce_units_at_settlement(obs, settlement, &mut directives);
             }
         }
 
@@ -368,7 +369,7 @@ impl StrikerAgent {
         if let Some(hex) = general_hex {
             manage_settlement_infrastructure(obs, hex, &mut directives);
             manage_settlement_population(obs, hex, &mut directives);
-            produce_units_at_general(obs, hex, &mut directives);
+            produce_units_at_settlement(obs, hex, &mut directives);
             try_send_settlers(obs, hex, &settlements, &mut self.pending_settlement, &mut directives);
             load_surplus_convoys(obs, general_hex, &mut directives);
 
@@ -378,6 +379,7 @@ impl StrikerAgent {
                 }
                 manage_settlement_infrastructure(obs, settlement, &mut directives);
                 manage_settlement_population(obs, settlement, &mut directives);
+                produce_units_at_settlement(obs, settlement, &mut directives);
             }
         }
 
@@ -588,7 +590,7 @@ impl TurtleAgent {
         if let Some(hex) = general_hex {
             manage_settlement_infrastructure(obs, hex, &mut directives);
             manage_turtle_population(obs, hex, &mut directives);
-            produce_units_at_general(obs, hex, &mut directives);
+            produce_units_at_settlement(obs, hex, &mut directives);
 
             let general_population = total_population_on_hex(obs, hex);
             if self.pending_settlement.is_none()
@@ -617,6 +619,7 @@ impl TurtleAgent {
                 }
                 manage_settlement_infrastructure(obs, settlement, &mut directives);
                 manage_turtle_population(obs, settlement, &mut directives);
+                produce_units_at_settlement(obs, settlement, &mut directives);
             }
         }
 
@@ -854,7 +857,7 @@ fn manage_settlement_infrastructure(obs: &Observation, hex: Axial, directives: &
     }
 }
 
-fn produce_units_at_general(obs: &Observation, hex: Axial, directives: &mut Vec<Directive>) {
+fn produce_units_at_settlement(obs: &Observation, hex: Axial, directives: &mut Vec<Directive>) {
     let (_idle, _farmers, _workers, trained_soldiers, _untrained) = population_mix(obs, hex);
     if let Some(idx) = cell_index(obs, hex) {
         let mut remaining_food = obs.food_stockpiles[idx];
@@ -864,7 +867,7 @@ fn produce_units_at_general(obs: &Observation, hex: Axial, directives: &mut Vec<
             && remaining_material >= UNIT_MATERIAL_COST
             && ready >= SOLDIERS_PER_UNIT
         {
-            directives.push(Directive::Produce);
+            directives.push(Directive::Produce { hex_q: hex.q, hex_r: hex.r });
             remaining_food -= UNIT_FOOD_COST;
             remaining_material -= UNIT_MATERIAL_COST;
             ready -= SOLDIERS_PER_UNIT;
