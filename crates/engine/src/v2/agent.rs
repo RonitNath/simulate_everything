@@ -12,6 +12,19 @@ pub trait Agent: Send {
     fn reset(&mut self) {}
 }
 
+/// All known V2 agent names.
+pub fn builtin_agent_names() -> &'static [&'static str] {
+    &["spread"]
+}
+
+/// Create a V2 agent by name. Returns None for unknown names.
+pub fn agent_by_name(name: &str) -> Option<Box<dyn Agent>> {
+    match name {
+        "spread" => Some(Box::new(SpreadAgent::new())),
+        _ => None,
+    }
+}
+
 pub struct SpreadAgent {
     pending_settlement: Option<Axial>,
 }
