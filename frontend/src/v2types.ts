@@ -22,3 +22,13 @@ export interface V2GameInfo {
   num_players: number;
   agent_names: string[];
 }
+
+export interface V2Replay {
+  width: number;
+  height: number;
+  terrain: number[];
+  num_players: number;
+  agent_names: string[];
+  frames: V2Frame[];
+  winner: number | null;
+}

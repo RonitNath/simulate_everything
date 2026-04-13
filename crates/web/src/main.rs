@@ -558,8 +558,24 @@ async fn api_rr_status(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 }
 
 // ============================================================
-// V2 Round-Robin
+// V2 Pages
 // ============================================================
+
+#[derive(Template)]
+#[template(path = "v2sim.html")]
+struct V2SimTemplate {
+    build_ver: String,
+}
+
+async fn v2_sim_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Html(
+        V2SimTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
+}
 
 #[derive(Template)]
 #[template(path = "v2rr.html")]
@@ -732,6 +748,7 @@ async fn main() {
         .route("/api/rr/reset", axum::routing::post(api_rr_reset))
         .route("/api/rr/status", get(api_rr_status))
         .route("/api/live/config", axum::routing::post(api_live_config))
+        .route("/v2", get(v2_sim_page))
         .route("/v2/rr", get(v2_rr_page))
         .route("/ws/v2/rr", get(ws_v2_rr))
         .route("/api/v2/rr/config", axum::routing::post(api_v2_rr_config))

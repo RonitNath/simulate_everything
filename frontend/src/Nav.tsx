@@ -4,6 +4,7 @@ import * as styles from "./styles/app.css";
 const LINKS = [
   { href: "/", label: "Simulator" },
   { href: "/rr", label: "Round Robin" },
+  { href: "/v2", label: "V2 Sim" },
   { href: "/v2/rr", label: "V2 RR" },
   { href: "/live", label: "Live" },
   { href: "/scoreboard", label: "Scoreboard" },
