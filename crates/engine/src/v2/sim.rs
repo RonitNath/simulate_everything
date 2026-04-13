@@ -974,18 +974,17 @@ fn cleanup(state: &mut GameState) {
                     .engagements
                     .first()
                     .and_then(|e| state.units.get(e.enemy_id).map(|enemy| enemy.owner));
-                (u.public_id, u.owner, u.pos, killer, u.is_general)
+                (u.public_id, u.owner, u.pos, killer)
             })
             .collect();
         if let Some(log) = &mut state.game_log {
-            for (unit_id, player, pos, killer, is_general) in dead {
+            for (unit_id, player, pos, killer) in dead {
                 log.record(super::gamelog::GameEvent::UnitKilled {
                     tick: state.tick,
                     player,
                     unit_id,
                     pos,
                     killer,
-                    was_general: is_general,
                 });
             }
         }
@@ -997,7 +996,7 @@ fn cleanup(state: &mut GameState) {
         .players
         .iter()
         .filter(|p| p.alive)
-        .filter(|p| !state.units.contains_key(p.general_id))
+        .filter(|p| !state.settlements.values().any(|s| s.owner == p.id))
         .map(|p| p.id)
         .collect();
 
@@ -1253,11 +1252,11 @@ mod tests {
         })
     }
 
-    fn non_general_key(state: &GameState, owner: u8) -> crate::v2::state::UnitKey {
+    fn any_unit_key(state: &GameState, owner: u8) -> crate::v2::state::UnitKey {
         state
             .units
             .iter()
-            .find_map(|(key, unit)| (unit.owner == owner && !unit.is_general).then_some(key))
+            .find_map(|(key, unit)| (unit.owner == owner).then_some(key))
             .unwrap()
     }
 
@@ -1292,19 +1291,26 @@ mod tests {
         for (_, pop) in &mut state.population {
             pop.count = 0;
         }
+        // Keep all units stationary so they don't collide and engage.
         for (_, unit) in &mut state.units {
-            unit.destination = Some(offset_to_axial(0, 0));
+            unit.destination = None;
+            unit.move_cooldown = 255;
         }
-        let idx = non_general_key(&state, 0);
+        let idx = any_unit_key(&state, 0);
         let before = state.units[idx].strength;
         tick(&mut state);
-        assert!(state.units[idx].strength < before);
+        // Unit may survive the tick but should lose some strength to starvation.
+        let after = state.units.get(idx).map(|u| u.strength).unwrap_or(0.0);
+        assert!(
+            after < before,
+            "expected starvation damage, before={before}, after={after}"
+        );
     }
 
     #[test]
     fn unit_moves_toward_destination() {
         let mut state = test_state();
-        let unit_idx = non_general_key(&state, 0);
+        let unit_idx = any_unit_key(&state, 0);
         let start = state.units[unit_idx].pos;
         let dest = offset_to_axial(10, 10);
         state.units[unit_idx].destination = Some(dest);
@@ -1321,7 +1327,7 @@ mod tests {
     #[test]
     fn unit_respects_cooldown() {
         let mut state = test_state();
-        let unit_idx = non_general_key(&state, 0);
+        let unit_idx = any_unit_key(&state, 0);
         let dest = offset_to_axial(10, 10);
         state.units[unit_idx].destination = Some(dest);
         state.units[unit_idx].move_cooldown = 5;
@@ -1333,7 +1339,7 @@ mod tests {
     #[test]
     fn unit_clears_destination_on_arrival() {
         let mut state = test_state();
-        let unit_idx = non_general_key(&state, 0);
+        let unit_idx = any_unit_key(&state, 0);
         let start = state.units[unit_idx].pos;
         let dest = *neighbors(start)
             .iter()
@@ -1349,24 +1355,19 @@ mod tests {
     #[test]
     fn trained_population_produces_units() {
         let mut state = test_state();
-        let general_pos = state
-            .units
-            .values()
-            .find(|u| u.owner == 0 && u.is_general)
-            .unwrap()
-            .pos;
+        let start_pos = state.units.values().find(|u| u.owner == 0).unwrap().pos;
         let before = state.units.values().filter(|u| u.owner == 0).count();
         apply_directives(
             &mut state,
             0,
             &[
                 Directive::TrainSoldier {
-                    hex_q: general_pos.q,
-                    hex_r: general_pos.r,
+                    hex_q: start_pos.q,
+                    hex_r: start_pos.r,
                 },
                 Directive::TrainSoldier {
-                    hex_q: general_pos.q,
-                    hex_r: general_pos.r,
+                    hex_q: start_pos.q,
+                    hex_r: start_pos.r,
                 },
             ],
         );
@@ -1386,16 +1387,11 @@ mod tests {
     #[test]
     fn unsupported_frontier_stockpiles_decay() {
         let mut state = test_state();
-        let general_pos = state
-            .units
-            .values()
-            .find(|u| u.owner == 0 && u.is_general)
-            .unwrap()
-            .pos;
-        let frontier = neighbors(general_pos)
+        let start_pos = state.units.values().find(|u| u.owner == 0).unwrap().pos;
+        let frontier = neighbors(start_pos)
             .into_iter()
             .flat_map(neighbors)
-            .find(|ax| state.in_bounds(*ax) && distance(*ax, general_pos) >= 2)
+            .find(|ax| state.in_bounds(*ax) && distance(*ax, start_pos) >= 2)
             .unwrap();
         let cell = state.cell_at_mut(frontier).unwrap();
         cell.stockpile_owner = Some(0);
@@ -1412,16 +1408,11 @@ mod tests {
     #[test]
     fn settler_convoy_can_found_remote_settlement() {
         let mut state = test_state();
-        let general_pos = state
-            .units
-            .values()
-            .find(|u| u.owner == 0 && u.is_general)
-            .unwrap()
-            .pos;
-        let target = neighbors(general_pos)
+        let start_pos = state.units.values().find(|u| u.owner == 0).unwrap().pos;
+        let target = neighbors(start_pos)
             .into_iter()
             .flat_map(neighbors)
-            .find(|ax| state.in_bounds(*ax) && distance(*ax, general_pos) >= 2)
+            .find(|ax| state.in_bounds(*ax) && distance(*ax, start_pos) >= 2)
             .unwrap();
         state.cell_at_mut(target).unwrap().stockpile_owner = Some(0);
 
@@ -1429,8 +1420,8 @@ mod tests {
             &mut state,
             0,
             &[Directive::LoadConvoy {
-                hex_q: general_pos.q,
-                hex_r: general_pos.r,
+                hex_q: start_pos.q,
+                hex_r: start_pos.r,
                 cargo_type: CargoType::Settlers,
                 amount: 10.0,
             }],
@@ -1471,8 +1462,8 @@ mod tests {
     #[test]
     fn stale_engagements_are_removed() {
         let mut state = test_state();
-        let a_idx = non_general_key(&state, 0);
-        let b_idx = non_general_key(&state, 1);
+        let a_idx = any_unit_key(&state, 0);
+        let b_idx = any_unit_key(&state, 1);
         state.units[a_idx]
             .engagements
             .push(crate::v2::state::Engagement {
@@ -1514,7 +1505,7 @@ mod tests {
         let destination = neighbors(convoy_pos)[0];
         let raid_hex = neighbors(destination)[1];
 
-        let general_a = state.units.insert(crate::v2::state::Unit {
+        state.units.insert(crate::v2::state::Unit {
             public_id: 100,
             owner: 0,
             pos: offset_to_axial(1, 1),
@@ -1522,9 +1513,8 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
-            is_general: true,
         });
-        let general_b = state.units.insert(crate::v2::state::Unit {
+        state.units.insert(crate::v2::state::Unit {
             public_id: 200,
             owner: 1,
             pos: offset_to_axial(10, 10),
@@ -1532,7 +1522,6 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
-            is_general: true,
         });
         state.units.insert(crate::v2::state::Unit {
             public_id: 201,
@@ -1542,10 +1531,7 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
-            is_general: false,
         });
-        state.players[0].general_id = general_a;
-        state.players[1].general_id = general_b;
         state.population.insert(Population {
             public_id: 0,
             hex: raid_hex,

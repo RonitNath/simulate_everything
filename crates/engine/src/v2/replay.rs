@@ -24,7 +24,6 @@ pub struct UnitSnapshot {
     pub move_cooldown: u8,
     pub destination: Option<Axial>,
     pub engaged: bool,
-    pub is_general: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,7 +126,6 @@ fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
             move_cooldown: u.move_cooldown,
             destination: u.destination,
             engaged: !u.engagements.is_empty(),
-            is_general: u.is_general,
         })
         .collect()
 }
@@ -312,11 +310,10 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         .collect();
 
     let mut units = SlotMap::with_key();
-    let mut general_keys = vec![None; replay.num_players];
     let mut next_unit_id = 0;
     for s in &frame.units {
         next_unit_id = next_unit_id.max(s.id + 1);
-        let key = units.insert(Unit {
+        units.insert(Unit {
             public_id: s.id,
             owner: s.owner,
             pos: Axial::new(s.q, s.r),
@@ -324,11 +321,7 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
             move_cooldown: s.move_cooldown,
             engagements: Vec::new(),
             destination: s.destination,
-            is_general: s.is_general,
         });
-        if s.is_general {
-            general_keys[s.owner as usize] = Some(key);
-        }
     }
 
     let players: Vec<Player> = frame
@@ -339,7 +332,6 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
             id: i as u8,
             food: frame.player_food.get(i).copied().unwrap_or(0.0),
             material: frame.player_material.get(i).copied().unwrap_or(0.0),
-            general_id: general_keys[i].expect("replay frame missing general"),
             alive,
         })
         .collect();

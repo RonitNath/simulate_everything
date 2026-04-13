@@ -149,7 +149,6 @@ fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
             move_cooldown: u.move_cooldown,
             destination: u.destination,
             engaged: !u.engagements.is_empty(),
-            is_general: u.is_general,
         })
         .collect()
 }
@@ -219,7 +218,11 @@ fn run_scenario(scenario: Scenario) {
     }
 
     let mut metrics = ScenarioMetrics {
-        game_start_bytes: serialize_len(&game_start_message(&state, scenario.players, &agent_names)),
+        game_start_bytes: serialize_len(&game_start_message(
+            &state,
+            scenario.players,
+            &agent_names,
+        )),
         ..ScenarioMetrics::default()
     };
 
@@ -326,7 +329,6 @@ fn inflate_units(state: &mut GameState, target_units: usize) {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
-            is_general: false,
         });
         state.next_unit_id += 1;
     }

@@ -472,13 +472,6 @@ fn run_postmortem_game(
     });
     state.game_log = Some(GameLog::new());
 
-    let general_positions: Vec<(u8, simulate_everything_engine::v2::hex::Axial)> = state
-        .players
-        .iter()
-        .filter(|p| p.alive)
-        .filter_map(|p| state.units.get(p.general_id).map(|u| (p.id, u.pos)))
-        .collect();
-
     let mut agents: Vec<Box<dyn V2Agent>> = agent_names
         .iter()
         .map(|name| v2_agent::agent_by_name(name).unwrap())
@@ -492,7 +485,7 @@ fn run_postmortem_game(
     let names: Vec<String> = agent_names.iter().map(|s| s.to_string()).collect();
 
     if let Some(log) = state.game_log.take() {
-        let summary = log.summarize(&names, winner, state.tick, timed_out, &general_positions);
+        let summary = log.summarize(&names, winner, state.tick, timed_out);
         println!("{}", summary.render());
     }
 }
@@ -624,15 +617,8 @@ fn run_ascii_game(
                         .map(|d| format!(" -> ({},{})", d.q, d.r))
                         .unwrap_or_default();
                     eprintln!(
-                        "  P{} unit {} str={:.0} at ({},{}){}{}{}",
-                        u.owner,
-                        u.public_id,
-                        u.strength,
-                        u.pos.q,
-                        u.pos.r,
-                        if u.is_general { " [GEN]" } else { "" },
-                        dest,
-                        engaged,
+                        "  P{} unit {} str={:.0} at ({},{}){}{}",
+                        u.owner, u.public_id, u.strength, u.pos.q, u.pos.r, dest, engaged,
                     );
                 }
                 eprintln!();
@@ -722,13 +708,6 @@ fn run_bench_game(
     if log_enabled {
         state.game_log = Some(GameLog::new());
     }
-
-    let general_positions: Vec<(u8, simulate_everything_engine::v2::hex::Axial)> = state
-        .players
-        .iter()
-        .filter(|p| p.alive)
-        .filter_map(|p| state.units.get(p.general_id).map(|u| (p.id, u.pos)))
-        .collect();
 
     let mut agents: Vec<Box<dyn V2Agent>> = agent_names
         .iter()
@@ -822,7 +801,7 @@ fn run_bench_game(
 
     let (loss_category, loss_explanation) = if let Some(log) = state.game_log.take() {
         let timed_out = sim::reached_timeout(&state, sim::timeout_limit(max_ticks));
-        let summary = log.summarize(&ids, winner_idx, state.tick, timed_out, &general_positions);
+        let summary = log.summarize(&ids, winner_idx, state.tick, timed_out);
         let loser = winner_idx.and_then(|w| (0..num_players).find(|&i| i != w));
         if let Some(l) = loser {
             (

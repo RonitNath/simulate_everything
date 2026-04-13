@@ -196,7 +196,10 @@ fn manage_auto_settlers(state: &mut GameState, player_id: u8) {
         .values()
         .filter(|s| {
             s.owner == player_id
-                && matches!(s.settlement_type, SettlementType::Village | SettlementType::City)
+                && matches!(
+                    s.settlement_type,
+                    SettlementType::Village | SettlementType::City
+                )
         })
         .map(|s| (s.hex, s.settlement_type))
         .collect();
@@ -334,8 +337,6 @@ fn pick_settler_target(state: &GameState, player_id: u8, origin: Axial) -> Optio
 // ---------------------------------------------------------------------------
 
 fn manage_resource_convoys(state: &mut GameState, player_id: u8) {
-    let general_hex: Option<Axial> = state.general_pos(player_id);
-
     // Collect surplus non-settlement hexes
     let surplus: Vec<(usize, f32, f32)> = state
         .territory_cache
@@ -377,10 +378,9 @@ fn manage_resource_convoys(state: &mut GameState, player_id: u8) {
             continue;
         }
 
-        // Find nearest settlement or general as destination.
+        // Find nearest settlement as destination.
         let dest = settlement_hexes
             .iter()
-            .chain(general_hex.iter())
             .min_by_key(|&&s| hex::distance(hex, s))
             .copied();
 
@@ -530,7 +530,6 @@ fn produce_units_from_settlements(state: &mut GameState, player_id: u8) {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
-            is_general: false,
         });
         state.rebuild_spatial();
     }

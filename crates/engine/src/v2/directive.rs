@@ -32,7 +32,10 @@ pub enum Directive {
     DisengageAll {
         unit_id: UnitKey,
     },
-    Produce { hex_q: i32, hex_r: i32 },
+    Produce {
+        hex_q: i32,
+        hex_r: i32,
+    },
     AssignRole {
         hex_q: i32,
         hex_r: i32,
@@ -339,7 +342,6 @@ fn produce_unit(state: &mut GameState, player_id: u8, production_hex: Axial) {
         move_cooldown: 0,
         engagements: Vec::new(),
         destination: None,
-        is_general: false,
     });
     debug_assert!(state.units.contains_key(unit_key));
     if let Some(log) = &mut state.game_log {
@@ -351,10 +353,6 @@ fn produce_unit(state: &mut GameState, player_id: u8, production_hex: Axial) {
         });
     }
     state.rebuild_spatial();
-}
-
-fn general_pos(state: &GameState, player_id: u8) -> Option<Axial> {
-    state.general_pos(player_id)
 }
 
 fn load_convoy(
@@ -371,7 +369,13 @@ fn load_convoy(
         let _ = load_settlers(state, player_id, hex);
         return;
     }
-    let Some(destination) = general_pos(state, player_id) else {
+    let destination = state
+        .settlements
+        .values()
+        .filter(|s| s.owner == player_id)
+        .map(|s| s.hex)
+        .min_by_key(|&s| hex::distance(hex, s));
+    let Some(destination) = destination else {
         return;
     };
     let Some(cell) = state.cell_at_mut(hex) else {
@@ -539,7 +543,7 @@ mod tests {
         let general = state
             .units
             .iter()
-            .find(|(_, u)| u.owner == 0 && u.is_general)
+            .find(|(_, u)| u.owner == 0)
             .unwrap()
             .1
             .pos;
@@ -561,7 +565,14 @@ mod tests {
             pop.training = SOLDIER_READY_THRESHOLD;
         }
         let initial = state.units.values().filter(|u| u.owner == 0).count();
-        apply_directives(&mut state, 0, &[Directive::Produce { hex_q: general.q, hex_r: general.r }]);
+        apply_directives(
+            &mut state,
+            0,
+            &[Directive::Produce {
+                hex_q: general.q,
+                hex_r: general.r,
+            }],
+        );
         assert_eq!(
             state.units.values().filter(|u| u.owner == 0).count(),
             initial + 1
@@ -574,7 +585,7 @@ mod tests {
         let general = state
             .units
             .iter()
-            .find(|(_, u)| u.owner == 0 && u.is_general)
+            .find(|(_, u)| u.owner == 0)
             .unwrap()
             .1
             .pos;
@@ -603,7 +614,7 @@ mod tests {
         let general = state
             .units
             .iter()
-            .find(|(_, u)| u.owner == 0 && u.is_general)
+            .find(|(_, u)| u.owner == 0)
             .unwrap()
             .1
             .pos;
