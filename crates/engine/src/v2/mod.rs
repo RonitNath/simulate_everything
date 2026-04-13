@@ -1,4 +1,5 @@
 pub mod ascii;
+pub mod combat;
 pub mod hex;
 pub mod mapgen;
 pub mod pathfinding;

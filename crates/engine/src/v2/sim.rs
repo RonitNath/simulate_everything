@@ -1,13 +1,15 @@
+use super::combat;
 use super::hex::Axial;
+use super::pathfinding;
 use super::state::GameState;
 use super::{BASE_MOVE_COOLDOWN, RESOURCE_RATE, TERRAIN_MOVE_PENALTY};
-use super::pathfinding;
 
 /// Advance the game state by one tick.
 ///
-/// Order: resource generation → movement → cooldown decrement → cleanup → tick increment.
+/// Order: resource generation → combat resolution → movement → cooldown decrement → cleanup → tick increment.
 pub fn tick(state: &mut GameState) {
     generate_resources(state);
+    combat::resolve_combat(state);
     move_units(state);
     decrement_cooldowns(state);
     cleanup(state);
@@ -97,6 +99,8 @@ fn decrement_cooldowns(state: &mut GameState) {
 }
 
 fn cleanup(state: &mut GameState) {
+    // Clear engagements referencing dead units before removing them
+    combat::cleanup_engagements(state);
     // Remove dead units
     state.units.retain(|u| u.strength > 0.0);
 
@@ -121,7 +125,7 @@ fn cleanup(state: &mut GameState) {
 mod tests {
     use super::*;
     use crate::v2::hex::{distance, neighbors, offset_to_axial};
-    use crate::v2::mapgen::{generate, MapConfig};
+    use crate::v2::mapgen::{MapConfig, generate};
 
     fn test_state() -> GameState {
         generate(&MapConfig {
@@ -286,8 +290,7 @@ mod tests {
         }
 
         assert_eq!(
-            state.units[unit_idx].pos,
-            dest,
+            state.units[unit_idx].pos, dest,
             "unit didn't reach destination in 500 ticks"
         );
         assert!(state.units[unit_idx].destination.is_none());
