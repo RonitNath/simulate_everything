@@ -198,8 +198,8 @@ fn has_settlement_support(state: &GameState, owner: u8, ax: Axial) -> bool {
 
 fn add_stockpile(state: &mut GameState, ax: Axial, owner: u8, food: f32, material: f32) {
     let target = supported_settlement(state, owner, ax).unwrap_or(ax);
-    let mut food_overflow = 0.0;
-    let mut material_overflow = 0.0;
+    let mut food_overflow = food;
+    let mut material_overflow = material;
     let mut changed = false;
     if let Some(cell) = state.cell_at_mut(target) {
         if cell.stockpile_owner.is_none() || cell.stockpile_owner == Some(owner) {
@@ -217,7 +217,9 @@ fn add_stockpile(state: &mut GameState, ax: Axial, owner: u8, food: f32, materia
             cell.food_stockpile = next_food;
             cell.material_stockpile = next_material;
         }
+        // else: target hex is enemy-owned; overflow defaults cover the full amount
     }
+    // If cell_at_mut returned None (out of bounds), overflow defaults cover the full amount
     #[cfg(debug_assertions)]
     {
         state.record_food_destroyed(food_overflow);
@@ -823,6 +825,22 @@ fn cleanup(state: &mut GameState) {
             .collect();
         state.units.retain(|_, u| u.owner != pid);
         state.population.retain(|_, p| p.owner != pid);
+        #[cfg(debug_assertions)]
+        {
+            let mut convoy_food = 0.0;
+            let mut convoy_material = 0.0;
+            for (_, convoy) in state.convoys.iter() {
+                if convoy.owner == pid {
+                    match convoy.cargo_type {
+                        CargoType::Food => convoy_food += convoy.cargo_amount,
+                        CargoType::Material => convoy_material += convoy.cargo_amount,
+                        CargoType::Settlers => {}
+                    }
+                }
+            }
+            state.record_food_destroyed(convoy_food);
+            state.record_material_destroyed(convoy_material);
+        }
         state.convoys.retain(|_, c| c.owner != pid);
         let mut cleared = Vec::new();
         let mut destroyed_food = 0.0;
@@ -937,10 +955,9 @@ fn debug_assert_economy_sane(state: &GameState, phase: &str, pre_snapshot: Econo
     let expected_food_delta = acc.food_produced - acc.food_consumed - acc.food_destroyed;
     let expected_material_delta =
         acc.material_produced - acc.material_consumed - acc.material_destroyed;
-    // The accumulator still misses some edge-case transfer/destroy flows, so keep
-    // this debug check strict enough to catch major regressions without tripping
-    // routine long-run simulations.
-    let tolerance = 50.0;
+    // All production/consumption/destruction flows should be ledgered. Tolerance covers
+    // f32 rounding across many operations per tick.
+    let tolerance = 1.0;
     assert!(
         ((snapshot.food_assets - pre_snapshot.food_assets) - expected_food_delta).abs() < tolerance,
         "{phase} tick {}: food conservation violated delta={} expected={}",

@@ -10,6 +10,7 @@ This is an engine internals refactor — no new gameplay systems, no new directi
 3. **Full-grid observation cloning**: 7 vectors of 100k floats/bools cloned per agent per poll. At 4 agents polling every 5 ticks = ~560k entries/tick.
 4. **No terrain fog**: `terrain` and `material_map` sent unmasked — agents see the entire map on tick 0.
 5. **No economic invariant checking**: resource creation/destruction across settlements, convoys, migration, decay, upkeep has no conservation assertion.
+6. **Spectator gets agent-grade data**: WebSocket spectator receives full Observation (grids, exact stockpiles, population details) when it only needs render data (positions, ownership, engagement pairs). At 10 ticks/sec on 100k tiles this is ~1MB/s per spectator instead of ~10KB/s.
 
 ## Phase 1: SlotMap Entity Storage
 
@@ -46,12 +47,13 @@ Unit, Population, Convoy structs drop their `id: u32` field. The SlotMap key IS 
 
 **All lookup sites**: Replace `state.units.iter().find(|u| u.id == id)` with `state.units.get(key)`. Replace `state.units.iter().position(...)` + index access with direct key access. Grep for `.iter().find(|u| u.id` and `.iter().position(|u| u.id` across all v2/ files.
 
-**Serialization**: SlotMap keys serialize as `(u32, u32)` (index + generation). Replay format changes — this is a breaking change to replays, acceptable at this stage.
+**Serialization**: SlotMap keys are internal only. At serialization boundaries (replay payloads, WebSocket spectator snapshots, `UnitInfo`/`ConvoyInfo` in observations), map `UnitKey → u32` using a per-tick key-to-id table. Frontend and replay consumers continue to see stable numeric IDs. This avoids breaking the existing `V2UnitSnapshot.id: number` contract.
 
 ### Verification
 - `cargo test` passes
 - No `.iter().find(|u| u.id` or `.iter().position(|u| u.id` remaining in v2/ code
-- Replay record/reconstruct test still passes with new key types
+- Replay record/reconstruct test still passes with stable numeric IDs
+- Frontend `V2UnitSnapshot.id` type unchanged
 
 ## Phase 2: Spatial Index
 
@@ -186,7 +188,102 @@ pub trait Agent: Send {
 - Test: only changed hexes appear in hex_changes
 - Profile: observation construction time proportional to changes, not grid size
 
-## Phase 5: Economic Conservation Assertion
+## Phase 5: Spectator/Agent Observation Split
+
+Separate the WebSocket spectator payload from the AI agent observation. They have fundamentally different needs: the spectator renders sprites, the agent makes decisions.
+
+### Three observation types
+
+**`SpectatorInit`** — sent once on WebSocket connect:
+```rust
+pub struct SpectatorInit {
+    pub width: usize,
+    pub height: usize,
+    pub terrain: Vec<f32>,       // full grid — spectators see everything
+    pub material_map: Vec<f32>,
+    pub height_map: Vec<f32>,
+    pub region_ids: Vec<u16>,
+    pub player_count: u8,
+}
+```
+
+**`SpectatorSnapshot`** — sent every tick over WebSocket. Render-focused, small:
+```rust
+pub struct SpectatorSnapshot {
+    pub tick: u64,
+    pub units: Vec<SpectatorUnit>,        // id, owner, q, r, strength, is_general
+    pub engagements: Vec<(u32, u32)>,     // (unit_a_id, unit_b_id) pairs
+    pub convoys: Vec<SpectatorConvoy>,    // id, owner, q, r, cargo_type
+    pub hex_ownership: Vec<Option<u8>>,   // stockpile_owner grid (or delta)
+    pub road_levels: Vec<u8>,             // or delta of changed hexes
+    pub settlements: Vec<(i32, i32, u8)>, // (q, r, owner) for settlement markers
+    pub players: Vec<SpectatorPlayer>,    // id, alive, score
+}
+
+pub struct SpectatorUnit {
+    pub id: u32,
+    pub owner: u8,
+    pub q: i32,
+    pub r: i32,
+    pub strength: f32,
+    pub is_general: bool,
+    pub engaged: bool,
+}
+
+pub struct SpectatorConvoy {
+    pub id: u32,
+    pub owner: u8,
+    pub q: i32,
+    pub r: i32,
+    pub cargo_type: CargoType,
+}
+
+pub struct SpectatorPlayer {
+    pub id: u8,
+    pub alive: bool,
+    pub population: u16,         // total pop count
+    pub territory: u16,          // owned hex count
+    pub food_level: u8,          // 0-3 bucket (starving/low/ok/surplus), not exact float
+    pub material_level: u8,      // same
+}
+```
+
+**`Observation` / `ObservationDelta`** — the existing agent interface from Phase 4. Fog-masked, detailed. Never touches the WebSocket.
+
+### What spectators DON'T get
+- Exact stockpile floats per hex (just ownership color + food/material level buckets on player HUD)
+- Population role breakdowns per hex
+- Training progress on soldier cohorts
+- Convoy cargo amounts or destinations
+- The `scouted` bitmask (spectators see everything — fog is for agents)
+
+### Changes
+
+**New file `crates/engine/src/v2/spectator.rs`**: `SpectatorInit`, `SpectatorSnapshot`, `SpectatorUnit`, `SpectatorConvoy`, `SpectatorPlayer` structs + `fn snapshot(state: &GameState) -> SpectatorSnapshot` builder.
+
+**`crates/web/src/v2_roundrobin.rs`**: Replace current observation serialization over WebSocket with `SpectatorInit` on connect + `SpectatorSnapshot` per tick.
+
+**`crates/web/src/v2_protocol.rs`**: Update WebSocket message types to distinguish `Init` and `Snapshot` frames.
+
+**Frontend**: Update `V2UnitSnapshot` type to match `SpectatorUnit`. Drop fields that no longer arrive. Add `SpectatorPlayer` to HUD rendering.
+
+### Size estimate
+
+On a 30×30 map with 20 units, 5 convoys, 2 players:
+- Current full Observation: ~30KB serialized
+- SpectatorSnapshot: ~1KB serialized
+- At 10 ticks/sec: 300KB/s → 10KB/s per spectator
+
+On a 300×300 map (100k tiles) with 500 units:
+- Full Observation: ~3MB serialized
+- SpectatorSnapshot: ~15KB serialized (units + hex_ownership delta)
+
+### Verification
+- Frontend renders correctly from SpectatorSnapshot (no regressions)
+- WebSocket bandwidth measured before/after
+- Agent behavior unchanged (agents never see SpectatorSnapshot)
+
+## Phase 6: Economic Conservation Assertion
 
 Debug-mode check that resources are conserved across tick boundaries.
 
@@ -229,19 +326,20 @@ This requires threading production/consumption accumulators through the tick. Ad
 ## Phasing and Dependencies
 
 ```
-Phase 1 (SlotMap)     — no dependencies, can start immediately
-Phase 2 (Spatial)     — depends on Phase 1 (uses UnitKey)
-Phase 3 (Terrain fog) — independent of Phase 1-2
-Phase 4 (Delta obs)   — depends on Phase 3 (scouted mask) and Phase 1 (entity keys)
-Phase 5 (Debug econ)  — independent, can land anytime
+Phase 1 (SlotMap)       — no dependencies, can start immediately
+Phase 2 (Spatial)       — depends on Phase 1 (uses UnitKey)
+Phase 3 (Terrain fog)   — independent of Phase 1-2
+Phase 4 (Delta obs)     — depends on Phase 3 (scouted mask) and Phase 1 (entity keys)
+Phase 5 (Spectator)     — depends on Phase 1 (entity key→id mapping)
+Phase 6 (Debug econ)    — independent, can land anytime
 ```
 
-Phases 1+3+5 can run in parallel. Phase 2 follows 1. Phase 4 follows 1+3.
+Phases 1+3+6 can run in parallel. Phase 2 follows 1. Phases 4+5 follow 1+3.
+Phase 5 can also land independently as a quick win before Phase 1 — the spectator split doesn't require SlotMap, it just benefits from the key→id mapping convention if SlotMap is already in.
 
 ## What This Does NOT Cover
 
 - Full ECS framework adoption (not needed — typed SlotMaps with spatial index suffice)
 - Parallel system execution via ECS scheduler (use rayon within hot systems instead)
-- Network protocol changes (delta observations change the wire format but this is internal-only for now)
 - Region-level terrain hints (V4 information layer, not V2)
 - Population or convoy spatial indices (evaluate after profiling; combat is the hot path)
