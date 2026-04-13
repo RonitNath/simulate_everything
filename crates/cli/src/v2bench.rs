@@ -77,11 +77,24 @@ pub fn main(args: &[String]) {
     } else if let Some(agents_str) = flag_value(args, "--agents") {
         vec![agents_str.split(',').collect()]
     } else {
-        vec![vec!["spread", "spread"]]
+        // Default: alternate spread/striker to fill player slots.
+        let agents = ["spread", "striker"];
+        let default: Vec<&str> = (0..num_players as usize)
+            .map(|i| agents[i % agents.len()])
+            .collect();
+        vec![default]
     };
 
-    // Validate agent names.
+    // Validate agent names and matchup length.
     for matchup in &matchups {
+        if matchup.len() != num_players as usize {
+            eprintln!(
+                "error: matchup has {} agents but --players is {}. Each matchup must have exactly --players agents.",
+                matchup.len(),
+                num_players,
+            );
+            std::process::exit(1);
+        }
         for name in matchup {
             if v2_agent::agent_by_name(name).is_none() {
                 eprintln!(
