@@ -1,7 +1,7 @@
 """
-Graph search agent ported from generals-bots for the Rust simulate_everything server.
+Graph-search reference agent for the Rust simulate_everything server.
 
-Key adaptations from the old JAX-based system:
+Key characteristics of this implementation:
 - Multiple orders per turn (no cap) instead of one action
 - Army growth: structures +1/turn, land +1 with 10% probability (not 50-turn cycles)
 - No JAX dependency — pure numpy

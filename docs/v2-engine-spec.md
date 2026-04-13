@@ -2,7 +2,7 @@
 
 ## Context
 
-This spec comes from a design session exploring how to make the game more interesting for AI-vs-AI spectating. The current engine (V1) is a generals.io clone with integer armies on cells, turn-based, fog of war. V2 is a ground-up engine rewrite that keeps the grid substrate but changes nearly everything else.
+This spec comes from a design session exploring how to make the game more interesting for AI-vs-AI spectating. The current engine (V1) is a turn-based territory-control game with integer armies on cells and fog of war. V2 is a ground-up engine rewrite that keeps the grid substrate but changes nearly everything else.
 
 ### Design goals
 - **Hexagonal grid** for uniform distance, natural encirclement, and clean tactical formations

@@ -481,19 +481,19 @@ unit_scaling_bench: vary unit count (50, 200, 500, 1000) → agent latency vs un
 
 ## Research-Informed Design Notes
 
-These findings from studying Halite, Battlecode, Google Ants, and StarCraft bot architectures informed the spec:
+These design notes draw on common patterns from competitive programming game AIs and RTS bot architectures:
 
-**Combat simulation beats threshold heuristics.** Steamhammer (top SC:BW bot) simulates 8 seconds of combat before deciding to engage. At ~0.1ms per simulation, this is cheap and dramatically better than "engage if strength ratio > 1.3." Our tactical layer uses the same approach — simulate 50 ticks of the proposed engagement using the actual damage formula.
+**Combat simulation beats threshold heuristics.** Fast forward simulation is often dramatically better than fixed engage/disengage thresholds. Our tactical layer follows that pattern by simulating 50 ticks of the proposed engagement using the actual damage formula.
 
-**Market-based assignment beats fixed ratios.** Battlecode winning bots use stigmergic coordination — units self-assign to the most-needed role based on shared state. Our task generation + greedy matching is the same pattern, but centralized (the agent sees all units). Fixed percentage ratios (50% producers, 30% expanders) don't adapt to map topology — a map with one rich valley and lots of wasteland needs very different allocation than a uniform map.
+**Market-based assignment beats fixed ratios.** Shared-state coordination lets units flow toward the most-needed role instead of rigid quotas. Our task generation + greedy matching uses that same idea in a centralized form. Fixed percentage ratios (50% producers, 30% expanders) do not adapt to map topology — a map with one rich valley and lots of wasteland needs very different allocation than a uniform map.
 
-**Influence maps are the universal strategic representation.** Every competitive system uses scalar fields. Incremental update (delta when units move) is essential for performance. Our dual influence map (own + enemy) matches the "tension map" pattern from Spring RTS bots.
+**Influence maps are a broadly useful strategic representation.** Scalar fields remain one of the most practical ways to summarize territorial pressure. Incremental update (delta when units move) is essential for performance. Our dual influence map (own + enemy) uses that pressure-map pattern directly.
 
-**Amortization over time is the key performance technique.** Top bots don't have better algorithms — they make better use of their compute budget. Strategic layer running 1/10th as often, pathfinding only on destination change, role assignment only on posture change. The research confirms: this is not a shortcut, it's the correct architecture.
+**Amortization over time is the key performance technique.** Strong agents make careful use of their compute budget. Strategic layer running 1/10th as often, pathfinding only on destination change, role assignment only on posture change. This is not a shortcut; it is the right architecture for this scale.
 
-**Spatial decomposition is non-negotiable at scale.** Every bot above hobby-level uses spatial indexing. Our bucket-based spatial hash (bucket size = 8 hexes) is the standard approach for uniform grids with fixed interaction radius.
+**Spatial decomposition is non-negotiable at scale.** Spatial indexing becomes mandatory once unit counts rise. Our bucket-based spatial hash (bucket size = 8 hexes) is a standard fit for uniform grids with fixed interaction radius.
 
-**The foveated attention model works.** Process the full map at low resolution (region summaries), process hotspots at full resolution. SC:BW bots spend milliseconds on combat micro near fights, nothing on distant quiet areas. Our tactical layer only activating for units near enemies is the same pattern.
+**The foveated attention model works.** Process the full map at low resolution (region summaries), then spend detailed work on hotspots. Our tactical layer only activates at full fidelity for units near enemies, which follows that pattern directly.
 
 ---
 
