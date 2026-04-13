@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::SETTLEMENT_THRESHOLD;
@@ -8,7 +9,7 @@ use super::state::{GameState, Role};
 // Event types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GameEvent {
     UnitProduced {
         tick: u64,
@@ -53,7 +54,7 @@ impl GameEvent {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnitPositionSample {
     pub tick: u64,
     pub player: u8,
@@ -64,7 +65,7 @@ pub struct UnitPositionSample {
     pub engaged: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EconomySample {
     pub tick: u64,
     pub player: u8,
@@ -79,7 +80,7 @@ pub struct EconomySample {
     pub settlements: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPollRecord {
     pub tick: u64,
     pub player: u8,

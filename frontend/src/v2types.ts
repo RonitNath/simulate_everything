@@ -157,6 +157,59 @@ export interface V2Replay {
   timed_out: boolean;
 }
 
+export interface V2OverlapAnomaly {
+  tick: number;
+  q: number;
+  r: number;
+  owners: number[];
+  unit_ids: number[];
+}
+
+export interface V2ReviewLogWindow {
+  events: Array<Record<string, unknown>>;
+  agent_polls: Array<Record<string, unknown>>;
+  economy_samples: Array<Record<string, unknown>>;
+  unit_positions: Array<Record<string, unknown>>;
+}
+
+export interface V2ReviewBundleSummary {
+  id: string;
+  created_at: number;
+  game_number: number;
+  seed: number;
+  agent_names: string[];
+  flagged_ticks: number[];
+  range_start: number;
+  range_end: number;
+  complete: boolean;
+  saved: boolean;
+  anomaly_count: number;
+  event_count: number;
+}
+
+export interface V2ReviewBundle {
+  id: string;
+  created_at: number;
+  game_number: number;
+  seed: number;
+  agent_names: string[];
+  flagged_ticks: number[];
+  range_start: number;
+  range_end: number;
+  complete: boolean;
+  saved: boolean;
+  anomaly_count: number;
+  event_count: number;
+  replay: V2Replay;
+  anomalies: V2OverlapAnomaly[];
+  log: V2ReviewLogWindow;
+}
+
+export interface V2ReviewListResponse {
+  pending: V2ReviewBundleSummary[];
+  saved: V2ReviewBundleSummary[];
+}
+
 export interface BoardStaticData {
   width: number;
   height: number;

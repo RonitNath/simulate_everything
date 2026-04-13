@@ -186,6 +186,7 @@ SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on de
 | `GENERALS_PLAYERS` | 2 | Live lobby size |
 | `GENERALS_TICK_MS` | 250 | Live tick speed |
 | `GENERALS_SEED` | 42 | Live first game seed |
+| `GENERALS_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Persisted flagged V2 RR review bundles |
 | `GENERALS_STATIC_DIR` | — | Path to `frontend/dist/` |
 | `GENERALS_PYTHON_CLIENT` | — | Path to Python agent dir |
 | `RUST_LOG` | — | Tracing level |
@@ -296,7 +297,11 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `POST /api/v2/rr/pause` | HTTP | Pause V2 RR loop |
 | `POST /api/v2/rr/resume` | HTTP | Resume V2 RR loop |
 | `POST /api/v2/rr/reset` | HTTP | Reset current game and start a new one |
-| `GET /api/v2/rr/status` | HTTP | Health metrics |
+| `POST /api/v2/rr/flags` | HTTP | Flag a viewed RR tick for capture (`{"game_number": N, "tick": N}`) |
+| `GET /api/v2/rr/reviews` | HTTP | List pending and saved RR review bundles |
+| `GET /api/v2/rr/reviews/{id}` | HTTP | Load one saved RR review bundle |
+| `DELETE /api/v2/rr/reviews/{id}` | HTTP | Delete one saved RR review bundle |
+| `GET /api/v2/rr/status` | HTTP | RR state including current tick and capturable review range |
 
 ### V2 WebSocket Protocol
 
@@ -323,10 +328,11 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 - Seeds increment from 1000 each game.
 - Max 3000 ticks per game before forced `game_end` and score-based winner selection.
 - Agents are polled every `AGENT_POLL_INTERVAL` (5) ticks.
-- Currently runs **SpreadAgent vs SpreadAgent** — both players use the same placeholder agent.
+- Currently runs **SpreadAgent vs StrikerAgent**.
 - Supports pause / resume / reset without process restart.
 - Spectators receive a broadcast from a `tokio::broadcast::Sender<V2ServerToSpectator>` (capacity 512).
 - The RR loop maintains a full current snapshot for reconnect catchup even though live traffic is delta-based.
+- RR also keeps a rolling server-side review buffer (600 ticks by default) plus lightweight diagnostic logs for the active game. Only flagged windows are persisted to disk under `GENERALS_V2_RR_REVIEW_DIR`.
 
 ### V2 Agents
 

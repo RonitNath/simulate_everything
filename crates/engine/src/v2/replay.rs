@@ -201,7 +201,7 @@ fn snapshot_settlements(state: &GameState) -> Vec<SettlementSnapshot> {
         .collect()
 }
 
-fn snapshot_static_cells(state: &GameState) -> Vec<StaticCellSnapshot> {
+pub fn snapshot_static_cells(state: &GameState) -> Vec<StaticCellSnapshot> {
     state
         .grid
         .iter()
@@ -218,7 +218,7 @@ fn snapshot_static_cells(state: &GameState) -> Vec<StaticCellSnapshot> {
         .collect()
 }
 
-fn capture_frame(state: &GameState) -> Frame {
+pub fn capture_frame(state: &GameState) -> Frame {
     Frame {
         tick: state.tick,
         units: snapshot_units(state),

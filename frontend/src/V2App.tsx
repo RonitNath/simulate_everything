@@ -8,10 +8,14 @@ import type {
   V2Frame,
   V2GameInfo,
   V2HexDelta,
+  V2ReviewBundle,
+  V2ReviewBundleSummary,
+  V2ReviewListResponse,
   V2Settlement,
   V2SpectatorPlayer,
+  V2UnitSnapshot,
 } from "./v2types";
-import { normalizeGameInfoStatic, normalizeWsFrame } from "./v2types";
+import { normalizeGameInfoStatic, normalizeReplayFrame, normalizeReplayStatic, normalizeWsFrame } from "./v2types";
 import * as styles from "./styles/app.css";
 
 const PLAYER_COLORS = [
@@ -106,6 +110,15 @@ const V2App: Component = () => {
   const [tickMs, setTickMs] = createSignal(250);
   const [showNumbers, setShowStrength] = createSignal(true);
   const [gameNumber, setGameNumber] = createSignal(0);
+  const [liveTick, setLiveTick] = createSignal<number | null>(null);
+  const [capturableStartTick, setCapturableStartTick] = createSignal<number | null>(null);
+  const [capturableEndTick, setCapturableEndTick] = createSignal<number | null>(null);
+  const [pendingReviews, setPendingReviews] = createSignal<V2ReviewBundleSummary[]>([]);
+  const [savedReviews, setSavedReviews] = createSignal<V2ReviewBundleSummary[]>([]);
+  const [reviewBundle, setReviewBundle] = createSignal<V2ReviewBundle | null>(null);
+  const [reviewFrameIdx, setReviewFrameIdx] = createSignal(0);
+  const [reviewLoading, setReviewLoading] = createSignal(false);
+  const [flagError, setFlagError] = createSignal<string | null>(null);
   const [layers, setLayers] = createSignal<Set<RenderLayer>>(
     new Set(["territory", "roads", "settlements", "convoys"]),
   );
@@ -129,6 +142,72 @@ const V2App: Component = () => {
   const restartGame = () => {
     fetch("/api/v2/rr/reset", { method: "POST" });
     setServerPaused(false);
+  };
+
+  const refreshStatus = async () => {
+    const res = await fetch("/api/v2/rr/status");
+    const data = await res.json();
+    setServerPaused(!!data.paused);
+    if (data.tick_ms != null) setTickMs(data.tick_ms);
+    setLiveTick(data.current_tick ?? null);
+    setCapturableStartTick(data.capturable_start_tick ?? null);
+    setCapturableEndTick(data.capturable_end_tick ?? null);
+  };
+
+  const refreshReviews = async () => {
+    const res = await fetch("/api/v2/rr/reviews");
+    const data: V2ReviewListResponse = await res.json();
+    setPendingReviews(data.pending ?? []);
+    setSavedReviews(data.saved ?? []);
+  };
+
+  const flagViewedTick = async () => {
+    const frame = currentLiveFrame();
+    if (!frame) return;
+    setFlagError(null);
+    const res = await fetch("/api/v2/rr/flags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_number: gameNumber(), tick: frame.tick }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setFlagError(data.error ?? "Failed to flag tick");
+      return;
+    }
+    await Promise.all([refreshStatus(), refreshReviews()]);
+  };
+
+  const openReview = async (id: string) => {
+    setReviewLoading(true);
+    try {
+      const res = await fetch(`/api/v2/rr/reviews/${id}`);
+      if (!res.ok) {
+        setFlagError("Failed to load review bundle");
+        return;
+      }
+      const data: V2ReviewBundle = await res.json();
+      setReviewBundle(data);
+      setReviewFrameIdx(0);
+      setFollowing(false);
+      setPlaying(false);
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const deleteReview = async (id: string) => {
+    await fetch(`/api/v2/rr/reviews/${id}`, { method: "DELETE" });
+    if (reviewBundle()?.id === id) {
+      setReviewBundle(null);
+      setReviewFrameIdx(0);
+    }
+    await refreshReviews();
+  };
+
+  const leaveReview = () => {
+    setReviewBundle(null);
+    setReviewFrameIdx(0);
   };
 
   createEffect(() => {
@@ -284,8 +363,15 @@ const V2App: Component = () => {
     }
 
     connect();
+    void refreshStatus();
+    void refreshReviews();
+    const poll = setInterval(() => {
+      void refreshStatus();
+      void refreshReviews();
+    }, 2000);
     onCleanup(() => {
       dead = true;
+      clearInterval(poll);
       wsRef?.close();
       wsRef = null;
     });
@@ -297,9 +383,19 @@ const V2App: Component = () => {
     if (!playing() && !following()) return;
     const interval = following() ? 33 : Math.max(tickMs(), 16);
     const id = setInterval(() => {
-      const max = frames().length - 1;
+      const max = reviewBundle() ? reviewBundle()!.replay.frames.length - 1 : frames().length - 1;
       if (max < 0) return;
-      if (following()) {
+      if (reviewBundle()) {
+        if (playing()) {
+          setReviewFrameIdx((t) => {
+            if (t >= max) {
+              setPlaying(false);
+              return t;
+            }
+            return t + 1;
+          });
+        }
+      } else if (following()) {
         // Live mode: catch up quickly.
         if (viewIdx() < max) {
           const behind = max - viewIdx();
@@ -319,8 +415,14 @@ const V2App: Component = () => {
     onCleanup(() => clearInterval(id));
   });
 
-  const currentFrame = () => frames()[viewIdx()];
-  const maxIdx = () => Math.max(0, frames().length - 1);
+  const currentLiveFrame = () => frames()[viewIdx()];
+  const currentReviewFrame = () => reviewBundle()?.replay.frames[reviewFrameIdx()];
+  const currentFrame = () => reviewBundle() ? currentReviewFrame() : currentLiveFrame();
+  const maxIdx = () => {
+    const review = reviewBundle();
+    if (review) return Math.max(0, review.replay.frames.length - 1);
+    return Math.max(0, frames().length - 1);
+  };
 
   const gameInfo = (): V2GameInfo | null => {
     const p = phase();
@@ -329,17 +431,48 @@ const V2App: Component = () => {
   };
 
   const staticData = createMemo((): BoardStaticData | null => {
+    const review = reviewBundle();
+    if (review) return normalizeReplayStatic(review.replay);
     const g = gameInfo();
     return g ? normalizeGameInfoStatic(g) : null;
   });
 
   const currentFrameData = createMemo((): BoardFrameData | null => {
-    const f = currentFrame();
+    const review = reviewBundle();
+    if (review) {
+      const frame = currentReviewFrame();
+      return frame ? normalizeReplayFrame(frame) : null;
+    }
+    const f = currentLiveFrame();
     return f ? normalizeWsFrame(f) : null;
   });
 
   const playerStats = () => {
-    const frame = currentFrame();
+    const review = reviewBundle();
+    if (review) {
+      const frame = currentReviewFrame();
+      const replay = review.replay;
+      if (!frame) return [];
+      return Array.from({ length: replay.num_players }, (_, id) => {
+        const pops = frame.population.filter((p) => p.owner === id);
+        const totalPop = pops.reduce((sum, p) => sum + p.count, 0);
+        const territory = frame.cells.filter((c) => c.stockpile_owner === id).length;
+        const convoyCount = frame.convoys.filter((c) => c.owner === id).length;
+        return {
+          id,
+          alive: frame.alive[id] ?? false,
+          units: frame.units.filter((u) => u.owner === id).length,
+          convoys: convoyCount,
+          population: totalPop,
+          territory,
+          foodLevel: frame.player_food[id] > 20 ? 3 : frame.player_food[id] > 5 ? 2 : frame.player_food[id] > 0 ? 1 : 0,
+          materialLevel:
+            frame.player_material[id] > 20 ? 3 : frame.player_material[id] > 5 ? 2 : frame.player_material[id] > 0 ? 1 : 0,
+        };
+      });
+    }
+
+    const frame = currentLiveFrame();
     const game = gameInfo();
     if (!frame || !game) return [];
     return Array.from({ length: game.num_players }, (_, id) => {
@@ -356,6 +489,15 @@ const V2App: Component = () => {
       };
     });
   };
+
+  const viewedTickCapturable = createMemo(() => {
+    const frame = currentLiveFrame();
+    if (reviewBundle() || !frame) return false;
+    const start = capturableStartTick();
+    const end = capturableEndTick();
+    if (start == null || end == null) return false;
+    return frame.tick >= start && frame.tick <= end;
+  });
 
   const levelLabel = (level: number) => ["starving", "low", "ok", "surplus"][level] ?? "unknown";
 
@@ -390,10 +532,36 @@ const V2App: Component = () => {
       <Show when={(phase().kind === "playing" || phase().kind === "game_over") && currentFrame() && gameInfo() && staticData() && currentFrameData()}>
         <div class={styles.controls}>
           <span class={styles.turnLabel}>Tick {currentFrame()!.tick}</span>
-          <button class={styles.btn} onClick={() => { setFollowing(false); setPlaying(false); setViewIdx(0); }}>&#x23EE;</button>
-          <button class={styles.btn} onClick={() => { setFollowing(false); setPlaying(false); setViewIdx((t) => Math.max(t - 1, 0)); }}>&#x23F4;</button>
+          <button
+            class={styles.btn}
+            onClick={() => {
+              setPlaying(false);
+              if (reviewBundle()) setReviewFrameIdx(0);
+              else {
+                setFollowing(false);
+                setViewIdx(0);
+              }
+            }}
+          >
+            &#x23EE;
+          </button>
+          <button
+            class={styles.btn}
+            onClick={() => {
+              setPlaying(false);
+              if (reviewBundle()) setReviewFrameIdx((t) => Math.max(t - 1, 0));
+              else {
+                setFollowing(false);
+                setViewIdx((t) => Math.max(t - 1, 0));
+              }
+            }}
+          >
+            &#x23F4;
+          </button>
           <button class={styles.btn} onClick={() => {
-            if (following()) {
+            if (reviewBundle()) {
+              setPlaying((p) => !p);
+            } else if (following()) {
               // Currently live — pause playback.
               setFollowing(false);
               setPlaying(false);
@@ -407,19 +575,71 @@ const V2App: Component = () => {
           }}>
             {(following() || playing()) ? "\u23F8" : "\u25B6"}
           </button>
-          <button class={styles.btn} onClick={() => { setFollowing(false); setPlaying(false); setViewIdx((t) => Math.min(t + 1, maxIdx())); }}>&#x23F5;</button>
-          <button class={styles.btn} onClick={() => { setFollowing(true); setPlaying(false); setViewIdx(maxIdx()); }}>&#x23ED;</button>
+          <button
+            class={styles.btn}
+            onClick={() => {
+              setPlaying(false);
+              if (reviewBundle()) setReviewFrameIdx((t) => Math.min(t + 1, maxIdx()));
+              else {
+                setFollowing(false);
+                setViewIdx((t) => Math.min(t + 1, maxIdx()));
+              }
+            }}
+          >
+            &#x23F5;
+          </button>
+          <button
+            class={styles.btn}
+            onClick={() => {
+              setPlaying(false);
+              if (reviewBundle()) setReviewFrameIdx(maxIdx());
+              else {
+                setFollowing(true);
+                setViewIdx(maxIdx());
+              }
+            }}
+          >
+            &#x23ED;
+          </button>
           <input
             type="range"
             class={styles.slider}
             min={0}
             max={maxIdx()}
-            value={viewIdx()}
-            onInput={(e) => { setFollowing(false); setViewIdx(parseInt(e.currentTarget.value)); }}
+            value={reviewBundle() ? reviewFrameIdx() : viewIdx()}
+            onInput={(e) => {
+              const next = parseInt(e.currentTarget.value);
+              setPlaying(false);
+              if (reviewBundle()) setReviewFrameIdx(next);
+              else {
+                setFollowing(false);
+                setViewIdx(next);
+              }
+            }}
           />
         </div>
 
         <div class={styles.speedControls}>
+          <Show when={!reviewBundle()}>
+            <button
+              class={styles.btnPrimary}
+              style={{ padding: "2px 8px", "font-size": "10px" }}
+              disabled={!viewedTickCapturable()}
+              onClick={() => void flagViewedTick()}
+              title={viewedTickCapturable() ? "Flag the currently viewed tick" : "Viewed tick is outside the server capture window"}
+            >
+              Flag Tick
+            </button>
+          </Show>
+          <Show when={reviewBundle()}>
+            <button
+              class={styles.btnPrimary}
+              style={{ padding: "2px 8px", "font-size": "10px" }}
+              onClick={leaveReview}
+            >
+              Back To Live
+            </button>
+          </Show>
           <span>Server speed:</span>
           <For each={SPEED_PRESETS}>
             {(preset) => (
@@ -436,24 +656,26 @@ const V2App: Component = () => {
               </button>
             )}
           </For>
-          <button
-            class={styles.btn}
-            style={{ "font-size": "10px", padding: "2px 6px" }}
-            onClick={restartGame}
-          >
-            Restart
-          </button>
-          <button
-            class={styles.btn}
-            style={{
-              "font-size": "10px",
-              padding: "2px 6px",
-              "font-weight": serverPaused() ? "bold" : "normal",
-            }}
-            onClick={toggleServerPause}
-          >
-            {serverPaused() ? "Resume Server" : "Pause Server"}
-          </button>
+          <Show when={!reviewBundle()}>
+            <button
+              class={styles.btn}
+              style={{ "font-size": "10px", padding: "2px 6px" }}
+              onClick={restartGame}
+            >
+              Restart
+            </button>
+            <button
+              class={styles.btn}
+              style={{
+                "font-size": "10px",
+                padding: "2px 6px",
+                "font-weight": serverPaused() ? "bold" : "normal",
+              }}
+              onClick={toggleServerPause}
+            >
+              {serverPaused() ? "Resume Server" : "Pause Server"}
+            </button>
+          </Show>
           <span style={{ "margin-left": "auto" }} />
           <button
             class={styles.btn}
@@ -474,6 +696,29 @@ const V2App: Component = () => {
             )}
           </For>
         </div>
+        <div class={styles.configBar} style={{ "font-size": "10px", padding: "4px 12px" }}>
+          <Show
+            when={!reviewBundle()}
+            fallback={
+              <>
+                <span>Review: {reviewBundle()!.id}</span>
+                <span>Range: {reviewBundle()!.range_start}..{reviewBundle()!.range_end}</span>
+                <span>Flags: {reviewBundle()!.flagged_ticks.join(", ")}</span>
+                <span>{reviewBundle()!.complete ? "complete" : "partial"}</span>
+              </>
+            }
+          >
+            <>
+              <span>Live tick: {liveTick() ?? "?"}</span>
+              <span>Capturable: {capturableStartTick() ?? "?"}..{capturableEndTick() ?? "?"}</span>
+              <span>Viewed: {currentLiveFrame()?.tick ?? "?"}</span>
+              <span>{viewedTickCapturable() ? "capturable" : "not capturable"}</span>
+              <Show when={flagError()}>
+                {(err) => <span style={{ color: "#ff8080", "margin-left": "auto" }}>{err()}</span>}
+              </Show>
+            </>
+          </Show>
+        </div>
 
         <div class={styles.main}>
           <div class={styles.boardContainer}>
@@ -488,12 +733,43 @@ const V2App: Component = () => {
 
           <div class={styles.sidebar}>
             <div class={styles.statsPanel}>
+              <div class={styles.playerPanel}>
+                <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+                  <span>Review Bundles</span>
+                  <span class={styles.statValue}>{pendingReviews().length + savedReviews().length}</span>
+                </div>
+                <Show when={reviewLoading()}>
+                  <div class={styles.statRow}>Loading review bundle...</div>
+                </Show>
+                <For each={pendingReviews()}>
+                  {(review) => (
+                    <div class={styles.statRow}>
+                      Pending {review.range_start}-{review.range_end} ({review.flagged_ticks.join(",")})
+                    </div>
+                  )}
+                </For>
+                <For each={savedReviews().slice(0, 8)}>
+                  {(review) => (
+                    <div class={styles.statRow} style={{ display: "flex", gap: "6px", "align-items": "center" }}>
+                      <span style={{ flex: 1, overflow: "hidden", "text-overflow": "ellipsis" }}>
+                        {review.range_start}-{review.range_end} ({review.flagged_ticks.join(",")})
+                      </span>
+                      <button class={styles.btn} style={{ padding: "1px 4px", "font-size": "10px" }} onClick={() => void openReview(review.id)}>
+                        Open
+                      </button>
+                      <button class={styles.btn} style={{ padding: "1px 4px", "font-size": "10px" }} onClick={() => void deleteReview(review.id)}>
+                        Del
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </div>
               <For each={playerStats()}>
                 {(stat) => (
                   <div class={`${styles.playerPanel} ${!stat.alive ? styles.eliminated : ""}`}>
                     <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
                       <div class={styles.playerDot} style={{ background: PLAYER_COLORS[stat.id % PLAYER_COLORS.length] }} />
-                      <span>{gameInfo()!.agent_names[stat.id] ?? `Player ${stat.id + 1}`}</span>
+                      <span>{reviewBundle()?.agent_names[stat.id] ?? gameInfo()!.agent_names[stat.id] ?? `Player ${stat.id + 1}`}</span>
                     </div>
                     <div class={styles.statRow}>
                       <span class={styles.statValue}>{stat.units} units &middot; {stat.convoys} convoys</span>

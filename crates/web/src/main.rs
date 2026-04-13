@@ -3,14 +3,16 @@ mod protocol;
 mod roundrobin;
 mod v2_protocol;
 mod v2_roundrobin;
+mod v2_rr_review;
 
 use askama::Template;
 use axum::{
     Router,
     extract::{
-        Query, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
+    http::StatusCode,
     response::{Html, IntoResponse, Json},
     routing::get,
 };
@@ -641,6 +643,12 @@ struct V2RrConfigUpdate {
     tick_ms: Option<u64>,
 }
 
+#[derive(Deserialize)]
+struct V2RrFlagRequest {
+    game_number: u64,
+    tick: u64,
+}
+
 async fn api_v2_rr_config(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<V2RrConfigUpdate>,
@@ -668,10 +676,89 @@ async fn api_v2_rr_reset(State(state): State<Arc<AppState>>) -> impl IntoRespons
 }
 
 async fn api_v2_rr_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let review = state.v2_rr.review_status().await;
     Json(serde_json::json!({
         "paused": state.v2_rr.is_paused(),
         "tick_ms": state.v2_rr.get_tick_ms(),
+        "game_number": review.game_number,
+        "current_tick": review.current_tick,
+        "capturable_start_tick": review.capturable_start_tick,
+        "capturable_end_tick": review.capturable_end_tick,
+        "pending_capture_count": review.pending_capture_count,
+        "review_dir": review.review_dir,
     }))
+}
+
+async fn api_v2_rr_flag(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V2RrFlagRequest>,
+) -> impl IntoResponse {
+    match state.v2_rr.flag_tick(body.game_number, body.tick).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "summary": result.summary,
+                "capturable_start_tick": result.capturable_start_tick,
+                "capturable_end_tick": result.capturable_end_tick,
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v2_rr_reviews(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.v2_rr.list_reviews().await {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v2_rr_review(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.v2_rr.load_review(&id).await {
+        Ok(Some(bundle)) => (StatusCode::OK, Json(bundle)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "review bundle not found" })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v2_rr_delete_review(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.v2_rr.delete_review(&id).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "review bundle not found" })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 // ============================================================
@@ -704,6 +791,10 @@ async fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(42);
+    let review_dir = std::env::var("GENERALS_V2_RR_REVIEW_DIR").unwrap_or_else(|_| {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        format!("{}/../../var/v2_rr_reviews", manifest)
+    });
 
     let scoreboard = Arc::new(Mutex::new(Scoreboard::new()));
 
@@ -719,7 +810,7 @@ async fn main() {
         rr_loop.run_loop().await;
     });
 
-    let v2_rr = Arc::new(V2RoundRobin::new(tick_ms));
+    let v2_rr = Arc::new(V2RoundRobin::new(tick_ms, review_dir.into()));
     let v2_rr_loop = v2_rr.clone();
     tokio::spawn(async move {
         v2_rr_loop.run_loop().await;
@@ -769,6 +860,12 @@ async fn main() {
         .route("/api/v2/rr/pause", axum::routing::post(api_v2_rr_pause))
         .route("/api/v2/rr/resume", axum::routing::post(api_v2_rr_resume))
         .route("/api/v2/rr/reset", axum::routing::post(api_v2_rr_reset))
+        .route("/api/v2/rr/flags", axum::routing::post(api_v2_rr_flag))
+        .route("/api/v2/rr/reviews", get(api_v2_rr_reviews))
+        .route(
+            "/api/v2/rr/reviews/{id}",
+            get(api_v2_rr_review).delete(api_v2_rr_delete_review),
+        )
         .route("/api/v2/rr/status", get(api_v2_rr_status))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);

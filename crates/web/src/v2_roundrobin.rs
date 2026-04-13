@@ -2,16 +2,21 @@ use simulate_everything_engine::v2::{
     AGENT_POLL_INTERVAL, TIMEOUT_TICKS,
     agent::{Agent, SpreadAgent, StrikerAgent},
     directive,
+    gamelog::GameLog,
     mapgen::{self, MapConfig},
     observation::{self, ObservationSession},
     sim, spectator,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, Notify, broadcast};
 use tracing::info;
 
 use crate::v2_protocol::V2ServerToSpectator;
+use crate::v2_rr_review::{
+    FlagResponse, ReviewBundle, ReviewListResponse, ReviewRecorder, ReviewStatus, ReviewStore,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct V2RrSnapshot {
@@ -23,18 +28,23 @@ pub struct V2RoundRobin {
     pub tick_ms: AtomicU64,
     spectator_tx: broadcast::Sender<V2ServerToSpectator>,
     snapshot: Arc<Mutex<V2RrSnapshot>>,
+    review: Arc<Mutex<ReviewRecorder>>,
+    review_store: ReviewStore,
     paused: AtomicBool,
     resume_notify: Notify,
     reset_flag: AtomicBool,
 }
 
 impl V2RoundRobin {
-    pub fn new(tick_ms: u64) -> Self {
+    pub fn new(tick_ms: u64, review_dir: PathBuf) -> Self {
         let (spectator_tx, _) = broadcast::channel(512);
+        let review_store = ReviewStore::new(review_dir);
         Self {
             tick_ms: AtomicU64::new(tick_ms),
             spectator_tx,
             snapshot: Arc::new(Mutex::new(V2RrSnapshot::default())),
+            review: Arc::new(Mutex::new(ReviewRecorder::new(review_store.clone()))),
+            review_store,
             paused: AtomicBool::new(false),
             resume_notify: Notify::new(),
             reset_flag: AtomicBool::new(false),
@@ -121,6 +131,28 @@ impl V2RoundRobin {
             .await;
     }
 
+    pub async fn review_status(&self) -> ReviewStatus {
+        self.review.lock().await.status()
+    }
+
+    pub async fn flag_tick(&self, game_number: u64, tick: u64) -> Result<FlagResponse, String> {
+        self.review.lock().await.flag_tick(game_number, tick)
+    }
+
+    pub async fn list_reviews(&self) -> std::io::Result<ReviewListResponse> {
+        let pending = self.review.lock().await.pending_summaries();
+        let saved = self.review_store.list_summaries().await?;
+        Ok(ReviewListResponse { pending, saved })
+    }
+
+    pub async fn load_review(&self, id: &str) -> std::io::Result<Option<ReviewBundle>> {
+        self.review_store.load_bundle(id).await
+    }
+
+    pub async fn delete_review(&self, id: &str) -> std::io::Result<bool> {
+        self.review_store.delete_bundle(id).await
+    }
+
     async fn wait_if_paused(&self) {
         while self.paused.load(Ordering::Relaxed) {
             self.resume_notify.notified().await;
@@ -158,11 +190,16 @@ impl V2RoundRobin {
                 .collect();
 
             let mut state = mapgen::generate(&config);
+            state.game_log = Some(GameLog::new());
             let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let init = observation::initial_observation(&state, pid as u8);
                 agent.reset();
                 agent.init(&init);
+            }
+            {
+                let mut review = self.review.lock().await;
+                review.start_game(game_number, &config, &state, &agent_names);
             }
 
             info!(
@@ -216,6 +253,12 @@ impl V2RoundRobin {
                 }
 
                 sim::tick(&mut state);
+                let ready_reviews = {
+                    let mut review = self.review.lock().await;
+                    review.record_tick(&state);
+                    review.collect_ready_bundles(&state)
+                };
+                persist_reviews(self.review_store.clone(), ready_reviews);
 
                 self.broadcast(V2ServerToSpectator::Snapshot {
                     snapshot: spectator::snapshot_delta(&state),
@@ -247,11 +290,27 @@ impl V2RoundRobin {
             } else {
                 info!("V2 RR game aborted (reset)");
             }
+            let remaining_reviews = {
+                let mut review = self.review.lock().await;
+                review.finalize_all(&state)
+            };
+            persist_reviews(self.review_store.clone(), remaining_reviews);
 
             seed += 1;
             if !aborted {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
         }
+    }
+}
+
+fn persist_reviews(store: ReviewStore, bundles: Vec<ReviewBundle>) {
+    for bundle in bundles {
+        let store = store.clone();
+        tokio::spawn(async move {
+            if let Err(err) = store.save_bundle(bundle).await {
+                tracing::warn!(?err, "failed to persist V2 RR review bundle");
+            }
+        });
     }
 }

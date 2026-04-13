@@ -60,6 +60,7 @@ docs/            — detailed documentation
 | `GENERALS_PLAYERS` | (varies) | Number of players |
 | `GENERALS_TICK_MS` | (varies) | Tick interval in milliseconds |
 | `GENERALS_SEED` | (random) | RNG seed |
+| `GENERALS_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Directory for persisted flagged V2 RR review bundles |
 | `RUST_LOG` | `info` | Tracing filter (e.g. `simulate_everything_engine::v2=debug`) |
 
 ## Commits and docs hygiene
@@ -104,4 +105,6 @@ curl -s -X POST http://localhost:3333/api/v2/rr/config -H 'Content-Type: applica
 curl -s -X POST http://localhost:3333/api/v2/rr/pause
 curl -s -X POST http://localhost:3333/api/v2/rr/resume
 curl -s -X POST http://localhost:3333/api/v2/rr/reset
+curl -s -X POST http://localhost:3333/api/v2/rr/flags -H 'Content-Type: application/json' -d '{"game_number":1,"tick":123}'
+curl -s http://localhost:3333/api/v2/rr/reviews
 ```
