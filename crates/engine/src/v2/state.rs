@@ -91,7 +91,6 @@ pub struct Unit {
     pub move_cooldown: u8,
     pub engagements: Vec<Engagement>,
     pub destination: Option<Axial>,
-    pub is_general: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,7 +138,6 @@ pub struct Player {
     pub id: u8,
     pub food: f32,
     pub material: f32,
-    pub general_id: UnitKey,
     pub alive: bool,
 }
 
@@ -310,11 +308,6 @@ impl GameState {
         self.convoys
             .iter()
             .find_map(|(key, convoy)| (convoy.public_id == public_id).then_some(key))
-    }
-
-    pub fn general_pos(&self, player_id: u8) -> Option<Axial> {
-        let general_id = self.players.iter().find(|p| p.id == player_id)?.general_id;
-        Some(self.units.get(general_id)?.pos)
     }
 
     pub fn has_unit_at(&self, ax: Axial) -> bool {

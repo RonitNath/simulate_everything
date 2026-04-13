@@ -77,12 +77,7 @@ pub fn render_state(state: &GameState) -> String {
             let cell_str = match unit {
                 None => "....".to_string(),
                 Some(u) => {
-                    let base = player_label(u.owner);
-                    let label: String = if u.is_general {
-                        base.to_uppercase().to_string()
-                    } else {
-                        base.to_string()
-                    };
+                    let label = player_label(u.owner);
                     let engaged = !u.engagements.is_empty();
                     let strength = u.strength.round() as i32;
                     if engaged {

@@ -35,7 +35,6 @@ pub struct SpectatorUnit {
     pub q: i32,
     pub r: i32,
     pub strength: f32,
-    pub is_general: bool,
     pub engaged: bool,
 }
 
@@ -108,7 +107,6 @@ fn build_snapshot(state: &GameState, full_state: bool) -> SpectatorSnapshot {
                 q: u.pos.q,
                 r: u.pos.r,
                 strength: u.strength,
-                is_general: u.is_general,
                 engaged: !u.engagements.is_empty(),
             })
             .collect(),

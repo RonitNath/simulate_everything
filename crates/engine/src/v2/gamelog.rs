@@ -22,7 +22,6 @@ pub enum GameEvent {
         unit_id: u32,
         pos: Axial,
         killer: Option<u8>,
-        was_general: bool,
     },
     EngagementCreated {
         tick: u64,
@@ -63,7 +62,6 @@ pub struct UnitPositionSample {
     pub r: i32,
     pub strength: f32,
     pub engaged: bool,
-    pub is_general: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -253,7 +251,6 @@ impl GameLog {
         winner: Option<u8>,
         final_tick: u64,
         timed_out: bool,
-        general_positions: &[(u8, Axial)],
     ) -> PostmortemSummary {
         let num_players = agent_names.len();
         let mut timeline = Vec::new();
@@ -269,14 +266,6 @@ impl GameLog {
                 settlements_founded: 0,
             })
             .collect();
-
-        // Game start
-        for &(pid, pos) in general_positions {
-            timeline.push(format!(
-                "  t={:<6} P{} ({}) general at ({},{})",
-                0, pid, agent_names[pid as usize], pos.q, pos.r
-            ));
-        }
 
         // Track first events per player
         let mut first_produced: Vec<bool> = vec![false; num_players];
@@ -307,7 +296,6 @@ impl GameLog {
                     player,
                     pos,
                     killer,
-                    was_general,
                     ..
                 } => {
                     let pid = *player as usize;
@@ -344,12 +332,6 @@ impl GameLog {
                             HashMap::from([(*player, 1)]),
                             killer.map(|k| HashMap::from([(k, 1)])).unwrap_or_default(),
                             *pos,
-                        ));
-                    }
-                    if *was_general {
-                        timeline.push(format!(
-                            "  t={:<6} P{} general killed at ({},{})",
-                            tick, player, pos.q, pos.r
                         ));
                     }
                 }
@@ -482,7 +464,7 @@ impl GameLog {
         let end_reason = if timed_out {
             "timeout"
         } else {
-            "general killed"
+            "last settlement lost"
         };
         timeline.push(format!("  t={:<6} Game ends ({})", final_tick, end_reason));
 
@@ -614,7 +596,7 @@ impl PostmortemSummary {
                 let reason = if self.timed_out {
                     "timeout"
                 } else {
-                    "general killed"
+                    "last settlement lost"
                 };
                 format!("P{} ({}) at tick {} ({})", w, name, self.final_tick, reason)
             }

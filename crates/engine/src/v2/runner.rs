@@ -110,7 +110,6 @@ pub fn run_loop<F>(
                     r: u.pos.r,
                     strength: u.strength,
                     engaged: !u.engagements.is_empty(),
-                    is_general: u.is_general,
                 })
                 .collect();
             if let Some(log) = &mut state.game_log {

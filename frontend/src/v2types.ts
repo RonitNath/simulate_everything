@@ -12,7 +12,6 @@ export interface V2UnitSnapshot {
   move_cooldown?: number;
   destination?: { q: number; r: number } | null;
   engaged: boolean;
-  is_general: boolean;
   _dead?: boolean;
   _deadTick?: number;
 }

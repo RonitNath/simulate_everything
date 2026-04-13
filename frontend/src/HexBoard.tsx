@@ -299,11 +299,8 @@ const HexBoard: Component<HexBoardProps> = (props) => {
 
         if (entry) {
           const t = stackBrightness(entry.totalStrength, maxStr);
-          fill = playerRgbDim(entry.unit.owner, entry.unit.is_general ? Math.max(t, 0.85) : t);
-          if (entry.unit.is_general) {
-            baseStroke = "#ffffff";
-            baseStrokeWidth = Math.max(2, s * 0.1);
-          } else if (entry.unit.engaged) {
+          fill = playerRgbDim(entry.unit.owner, t);
+          if (entry.unit.engaged) {
             baseStroke = "#ff6644";
             baseStrokeWidth = Math.max(1, s * 0.06);
           }
@@ -622,26 +619,10 @@ const HexBoard: Component<HexBoardProps> = (props) => {
               />
             )}
 
-            {cell.entry && cell.entry.unit.is_general && (() => {
-              const gs = s * 0.3;
-              const gy = cell.cy + (showNums ? -s * 0.15 : s * 0.05);
-              // Crown shape: 3-point crown
-              const crownPath = `M${cell.cx - gs},${gy + gs * 0.4} L${cell.cx - gs * 0.5},${gy - gs * 0.3} L${cell.cx},${gy + gs * 0.1} L${cell.cx + gs * 0.5},${gy - gs * 0.3} L${cell.cx + gs},${gy + gs * 0.4} Z`;
-              return (
-                <path
-                  d={crownPath}
-                  fill="#fff"
-                  stroke="#000"
-                  stroke-width={Math.max(0.5, s * 0.03)}
-                  style={{ "pointer-events": "none" }}
-                />
-              );
-            })()}
-
             {cell.entry && showNums && s > 8 && (
               <text
                 x={cell.cx}
-                y={cell.cy + (cell.entry.unit.is_general ? s * 0.3 : s * 0.1)}
+                y={cell.cy + s * 0.1}
                 text-anchor="middle"
                 dominant-baseline="middle"
                 font-size={`${Math.max(7, s * 0.35)}`}

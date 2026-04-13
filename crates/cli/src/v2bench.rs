@@ -598,7 +598,7 @@ fn check_spatial_diversity(
         let positions_at_tick: Vec<_> = log
             .unit_positions
             .iter()
-            .filter(|s| s.tick >= tick.saturating_sub(10) && s.tick <= tick + 10 && !s.is_general)
+            .filter(|s| s.tick >= tick.saturating_sub(10) && s.tick <= tick + 10)
             .collect();
 
         if positions_at_tick.is_empty() {
@@ -636,11 +636,10 @@ fn check_retreat_rate(log: &simulate_everything_engine::v2::gamelog::GameLog) ->
         .filter_map(|e| {
             if let GameEvent::UnitKilled {
                 unit_id,
-                was_general,
                 ..
             } = e
             {
-                if !was_general { Some(*unit_id) } else { None }
+                Some(*unit_id)
             } else {
                 None
             }
@@ -650,7 +649,7 @@ fn check_retreat_rate(log: &simulate_everything_engine::v2::gamelog::GameLog) ->
     // Find units that hit critical strength while engaged.
     let mut critical_unit_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for sample in &log.unit_positions {
-        if !sample.is_general && sample.engaged && sample.strength <= 30.0 {
+        if sample.engaged && sample.strength <= 30.0 {
             critical_unit_ids.insert(sample.unit_id);
         }
     }
@@ -709,7 +708,6 @@ fn check_force_concentration(
             .filter(|s| {
                 s.tick == snap_tick
                     && s.player == *attacker_owner
-                    && !s.is_general
                     && s.unit_id != *attacker
                     && hex::distance(Axial::new(s.q, s.r), attacker_hex) <= 2
             })
@@ -769,13 +767,6 @@ fn run_postmortem_game(
     });
     state.game_log = Some(GameLog::new());
 
-    let general_positions: Vec<(u8, simulate_everything_engine::v2::hex::Axial)> = state
-        .players
-        .iter()
-        .filter(|p| p.alive)
-        .filter_map(|p| state.units.get(p.general_id).map(|u| (p.id, u.pos)))
-        .collect();
-
     let mut agents: Vec<Box<dyn V2Agent>> = agent_names
         .iter()
         .map(|name| v2_agent::agent_by_name(name).unwrap())
@@ -789,7 +780,7 @@ fn run_postmortem_game(
     let names: Vec<String> = agent_names.iter().map(|s| s.to_string()).collect();
 
     if let Some(log) = state.game_log.take() {
-        let summary = log.summarize(&names, winner, state.tick, timed_out, &general_positions);
+        let summary = log.summarize(&names, winner, state.tick, timed_out);
         println!("{}", summary.render());
     }
 }
@@ -921,15 +912,8 @@ fn run_ascii_game(
                         .map(|d| format!(" -> ({},{})", d.q, d.r))
                         .unwrap_or_default();
                     eprintln!(
-                        "  P{} unit {} str={:.0} at ({},{}){}{}{}",
-                        u.owner,
-                        u.public_id,
-                        u.strength,
-                        u.pos.q,
-                        u.pos.r,
-                        if u.is_general { " [GEN]" } else { "" },
-                        dest,
-                        engaged,
+                        "  P{} unit {} str={:.0} at ({},{}){}{}",
+                        u.owner, u.public_id, u.strength, u.pos.q, u.pos.r, dest, engaged,
                     );
                 }
                 eprintln!();
@@ -1019,13 +1003,6 @@ fn run_bench_game(
     if log_enabled {
         state.game_log = Some(GameLog::new());
     }
-
-    let general_positions: Vec<(u8, simulate_everything_engine::v2::hex::Axial)> = state
-        .players
-        .iter()
-        .filter(|p| p.alive)
-        .filter_map(|p| state.units.get(p.general_id).map(|u| (p.id, u.pos)))
-        .collect();
 
     let mut agents: Vec<Box<dyn V2Agent>> = agent_names
         .iter()
@@ -1119,7 +1096,7 @@ fn run_bench_game(
 
     let (loss_category, loss_explanation) = if let Some(log) = state.game_log.take() {
         let timed_out = sim::reached_timeout(&state, sim::timeout_limit(max_ticks));
-        let summary = log.summarize(&ids, winner_idx, state.tick, timed_out, &general_positions);
+        let summary = log.summarize(&ids, winner_idx, state.tick, timed_out);
         let loser = winner_idx.and_then(|w| (0..num_players).find(|&i| i != w));
         if let Some(l) = loser {
             (

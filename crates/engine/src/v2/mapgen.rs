@@ -109,7 +109,7 @@ pub fn generate(config: &MapConfig) -> GameState {
 
     let strategic_values = compute_strategic_values(&grid, config.width, config.height);
     let margin = (config.width.max(config.height) / 8).max(5);
-    let general_positions = place_generals(config, &grid, &strategic_values, margin, &mut rng);
+    let start_positions = place_start_positions(config, &grid, &strategic_values, margin, &mut rng);
 
     let mut units = SlotMap::with_key();
     let mut players: Vec<Player> = Vec::new();
@@ -119,28 +119,27 @@ pub fn generate(config: &MapConfig) -> GameState {
     let mut next_pop_id: u32 = 0;
     let mut next_settlement_id: u32 = 0;
 
-    for (player_idx, &gen_pos) in general_positions.iter().enumerate() {
+    for (player_idx, &start_pos) in start_positions.iter().enumerate() {
         let owner = player_idx as u8;
 
-        // Spawn the general unit
-        let general_id = next_id;
+        // Spawn the starting unit
+        let start_unit_id = next_id;
         next_id += 1;
-        let general_key = units.insert(Unit {
-            public_id: general_id,
+        units.insert(Unit {
+            public_id: start_unit_id,
             owner,
-            pos: gen_pos,
+            pos: start_pos,
             strength: INITIAL_STRENGTH,
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
-            is_general: true,
         });
 
         // Spawn INITIAL_UNITS nearby units
         let mut placed = 0;
-        let mut candidates: Vec<_> = within_radius(gen_pos, 3)
+        let mut candidates: Vec<_> = within_radius(start_pos, 3)
             .into_iter()
-            .filter(|&ax| ax != gen_pos)
+            .filter(|&ax| ax != start_pos)
             .collect();
         // Shuffle candidates for determinism
         for i in (1..candidates.len()).rev() {
@@ -162,7 +161,6 @@ pub fn generate(config: &MapConfig) -> GameState {
                 move_cooldown: 0,
                 engagements: Vec::new(),
                 destination: None,
-                is_general: false,
             });
             next_id += 1;
             placed += 1;
@@ -172,14 +170,13 @@ pub fn generate(config: &MapConfig) -> GameState {
             id: owner,
             food: 0.0,
             material: 0.0,
-            general_id: general_key,
             alive: true,
         });
 
         let mut push_pop = |count: u16, role: Role| {
             population.insert(Population {
                 public_id: next_pop_id,
-                hex: gen_pos,
+                hex: start_pos,
                 owner,
                 count,
                 role,
@@ -191,17 +188,17 @@ pub fn generate(config: &MapConfig) -> GameState {
         push_pop(5, Role::Farmer);
         push_pop(3, Role::Worker);
 
-        if let Some(cell) = grid_at_mut(&mut grid, config.width, gen_pos) {
+        if let Some(cell) = grid_at_mut(&mut grid, config.width, start_pos) {
             cell.stockpile_owner = Some(owner);
             cell.food_stockpile = 80.0;
             cell.material_stockpile = 50.0;
         }
 
-        // Each player starts with a Village settlement at their general's hex.
+        // Each player starts with a Village settlement at their starting hex.
         // Pop is 28 (Idle 20 + Farmer 5 + Worker 3) which is >= VILLAGE_THRESHOLD.
         settlements.insert(Settlement {
             public_id: next_settlement_id,
-            hex: gen_pos,
+            hex: start_pos,
             owner,
             settlement_type: SettlementType::Village,
         });
@@ -412,7 +409,7 @@ fn compute_strategic_values(grid: &[Cell], width: usize, height: usize) -> Vec<f
     sv
 }
 
-fn place_generals(
+fn place_start_positions(
     config: &MapConfig,
     grid: &[Cell],
     strategic_values: &[f32],
@@ -433,13 +430,13 @@ fn place_generals(
         .collect();
 
     if config.num_players == 2 {
-        place_generals_2p(config, grid, strategic_values, &candidates, rng)
+        place_start_positions_2p(config, grid, strategic_values, &candidates, rng)
     } else {
-        place_generals_np(config, grid, strategic_values, &candidates, rng)
+        place_start_positions_np(config, grid, strategic_values, &candidates, rng)
     }
 }
 
-fn place_generals_2p(
+fn place_start_positions_2p(
     config: &MapConfig,
     _grid: &[Cell],
     strategic_values: &[f32],
@@ -491,7 +488,7 @@ fn place_generals_2p(
     vec![best_pair.0, best_pair.1]
 }
 
-fn place_generals_np(
+fn place_start_positions_np(
     config: &MapConfig,
     _grid: &[Cell],
     strategic_values: &[f32],
@@ -631,32 +628,38 @@ mod tests {
     }
 
     #[test]
-    fn generals_placed_on_valid_terrain() {
+    fn start_units_placed_on_valid_terrain() {
         let state = default_state();
         for player in &state.players {
-            let general = state.units.get(player.general_id).unwrap();
-            let cell = state.cell_at(general.pos).unwrap();
+            // The first unit for each player is placed on strategic terrain.
+            let unit = state.units.values().find(|u| u.owner == player.id).unwrap();
+            let cell = state.cell_at(unit.pos).unwrap();
             assert!(
                 cell.terrain_value > 1.0,
-                "general at terrain_value {}",
+                "start unit at terrain_value {}",
                 cell.terrain_value
             );
         }
     }
 
     #[test]
-    fn generals_far_apart() {
+    fn start_positions_far_apart() {
         let state = default_state();
-        let generals: Vec<_> = state
+        let start_positions: Vec<_> = state
             .players
             .iter()
-            .map(|p| state.units.get(p.general_id).unwrap().pos)
+            .map(|p| state.units.values().find(|u| u.owner == p.id).unwrap().pos)
             .collect();
-        for i in 0..generals.len() {
-            for j in (i + 1)..generals.len() {
-                let d = distance(generals[i], generals[j]);
+        for i in 0..start_positions.len() {
+            for j in (i + 1)..start_positions.len() {
+                let d = distance(start_positions[i], start_positions[j]);
                 let min_dist = MapConfig::default().width as i32 / 4;
-                assert!(d > min_dist, "generals only {} apart (min {})", d, min_dist);
+                assert!(
+                    d > min_dist,
+                    "start positions only {} apart (min {})",
+                    d,
+                    min_dist
+                );
             }
         }
     }
@@ -666,17 +669,17 @@ mod tests {
         let config = MapConfig::default();
         let state = generate(&config);
         let sv = compute_strategic_values(&state.grid, config.width, config.height);
-        let gen_svs: Vec<f32> = state
+        let start_svs: Vec<f32> = state
             .players
             .iter()
             .map(|p| {
-                let g = state.units.get(p.general_id).unwrap();
-                let (row, col) = axial_to_offset(g.pos);
+                let u = state.units.values().find(|u| u.owner == p.id).unwrap();
+                let (row, col) = axial_to_offset(u.pos);
                 sv[(row as usize) * config.width + (col as usize)]
             })
             .collect();
-        let max_sv = gen_svs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let min_sv = gen_svs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_sv = start_svs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let min_sv = start_svs.iter().cloned().fold(f32::INFINITY, f32::min);
         // Within 30%
         assert!(
             (max_sv - min_sv) / max_sv < 0.30,
@@ -693,7 +696,7 @@ mod tests {
                 .values()
                 .filter(|u| u.owner == player.id)
                 .count();
-            // INITIAL_UNITS normal units + 1 general
+            // INITIAL_UNITS additional units + 1 starting unit
             assert_eq!(
                 count,
                 INITIAL_UNITS + 1,
@@ -705,22 +708,20 @@ mod tests {
     }
 
     #[test]
-    fn initial_units_near_general() {
+    fn initial_units_near_start() {
         let state = default_state();
         for player in &state.players {
-            let general_pos = state.units.get(player.general_id).unwrap().pos;
-            for unit in state
+            let units: Vec<_> = state
                 .units
                 .values()
-                .filter(|u| u.owner == player.id && !u.is_general)
-            {
-                let d = distance(general_pos, unit.pos);
-                assert!(
-                    d <= 3,
-                    "unit for player {} is distance {} from general",
-                    player.id,
-                    d
-                );
+                .filter(|u| u.owner == player.id)
+                .collect();
+            // All units should be within radius 3 of each other (they spawn near the start pos).
+            for unit in &units {
+                for other in &units {
+                    let d = distance(unit.pos, other.pos);
+                    assert!(d <= 6, "units for player {} are {} apart", player.id, d);
+                }
             }
         }
     }

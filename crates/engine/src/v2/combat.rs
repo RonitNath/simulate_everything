@@ -231,20 +231,12 @@ mod tests {
                 id: 0,
                 food: 0.0,
                 material: 0.0,
-                general_id: unit_map
-                    .iter()
-                    .find_map(|(key, unit)| (unit.public_id == 100).then_some(key))
-                    .unwrap_or(UnitKey::null()),
                 alive: true,
             },
             Player {
                 id: 1,
                 food: 0.0,
                 material: 0.0,
-                general_id: unit_map
-                    .iter()
-                    .find_map(|(key, unit)| (unit.public_id == 200).then_some(key))
-                    .unwrap_or(UnitKey::null()),
                 alive: true,
             },
         ];
@@ -287,7 +279,6 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
-            is_general: false,
         }
     }
 
