@@ -11,8 +11,9 @@ use super::{
     BASE_MOVE_COOLDOWN, BASE_STORAGE_CAP, CITY_AI_INTERVAL, CITY_RADIUS, CITY_THRESHOLD,
     CONVOY_MOVE_COOLDOWN, DEPOT_STORAGE_CAP, FARM_RADIUS, FARM_THRESHOLD, FARMER_RATE, FOOD_RATE,
     FRONTIER_DECAY_RATE, MATERIAL_RATE, MIGRATION_DIVISOR, POPULATION_GROWTH_RATE,
-    SETTLEMENT_THRESHOLD, SOLDIER_READY_THRESHOLD, STARVATION_DAMAGE, TERRAIN_MOVE_PENALTY,
-    TIMEOUT_TICKS, TRAINING_RATE, UPKEEP_PER_UNIT, VILLAGE_RADIUS, VILLAGE_THRESHOLD, WORKER_RATE,
+    ROUT_THRESHOLD, SETTLEMENT_THRESHOLD, SOLDIER_READY_THRESHOLD, STARVATION_DAMAGE,
+    TERRAIN_MOVE_PENALTY, TIMEOUT_TICKS, TRAINING_RATE, UPKEEP_PER_UNIT, VILLAGE_RADIUS,
+    VILLAGE_THRESHOLD, WORKER_RATE,
 };
 use serde::{Deserialize, Serialize};
 use slotmap::Key;
@@ -36,6 +37,7 @@ pub fn tick(state: &mut GameState) {
     migrate_population(state);
     consume_upkeep(state);
     combat::resolve_combat(state);
+    rout_weakened_units(state);
     move_convoys(state);
     move_units(state);
     decay_frontier_stockpiles(state);
@@ -956,6 +958,47 @@ fn decrement_cooldowns(state: &mut GameState) {
     for (_, convoy) in &mut state.convoys {
         if convoy.move_cooldown > 0 {
             convoy.move_cooldown -= 1;
+        }
+    }
+}
+
+/// Auto-disengage units whose strength drops below ROUT_THRESHOLD.
+/// Runs every tick (not just on agent polls), so weakened units escape
+/// before dying in the gap between polls. Overrides the 3+ edge
+/// surrounding rule — routing is involuntary panic, not orderly retreat.
+fn rout_weakened_units(state: &mut GameState) {
+    // Collect routers and their nearest friendly settlement for flee destination
+    let routers: Vec<(super::state::UnitKey, u8, Axial)> = state
+        .units
+        .iter()
+        .filter(|(_, u)| !u.engagements.is_empty() && u.strength <= ROUT_THRESHOLD && u.strength > 0.0)
+        .map(|(id, u)| (id, u.owner, u.pos))
+        .collect();
+
+    for (unit_id, owner, pos) in routers {
+        let engagements: Vec<_> = state.units[unit_id].engagements.clone();
+        // Rout penalty: 10% of current strength (lighter than voluntary disengage at 30%)
+        state.units[unit_id].strength *= 0.9;
+        state.units[unit_id].engagements.clear();
+
+        // Flee toward nearest own settlement
+        let flee_dest = state
+            .settlements
+            .values()
+            .filter(|s| s.owner == owner)
+            .map(|s| s.hex)
+            .min_by_key(|s| hex::distance(*s, pos));
+        if let Some(dest) = flee_dest {
+            state.units[unit_id].destination = Some(dest);
+        }
+
+        for eng in &engagements {
+            let opposite_edge = (eng.edge + 3) % 6;
+            if let Some(enemy) = state.units.get_mut(eng.enemy_id) {
+                enemy
+                    .engagements
+                    .retain(|e| !(e.enemy_id == unit_id && e.edge == opposite_edge));
+            }
         }
     }
 }

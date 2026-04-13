@@ -66,6 +66,8 @@ pub const TIMEOUT_TICKS: u64 = 3000;
 pub const INITIAL_STRENGTH: f32 = 100.0;
 pub const DAMAGE_RATE: f32 = 0.05;
 pub const DISENGAGE_PENALTY: f32 = 0.3;
+/// Units below this strength auto-rout (disengage from all combat).
+pub const ROUT_THRESHOLD: f32 = 30.0;
 pub const BASE_MOVE_COOLDOWN: u8 = 1;
 pub const TERRAIN_MOVE_PENALTY: f32 = 0.5;
 pub const VISION_RADIUS: i32 = 5;
