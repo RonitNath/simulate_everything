@@ -417,7 +417,8 @@ fn run_profile_game(
 
     let np = num_players as usize;
 
-    while state.tick < max_ticks && !sim::is_over(&state) {
+    let tick_limit = sim::timeout_limit(max_ticks);
+    while state.tick < tick_limit && !sim::is_over(&state) {
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             let mut poll_us = vec![0u64; np];
             for (pid, agent) in agents.iter_mut().enumerate() {
@@ -447,7 +448,7 @@ fn run_profile_game(
         sim::tick(&mut state);
     }
 
-    let winner = sim::winner(&state);
+    let winner = sim::winner_at_limit(&state, max_ticks);
     eprintln!("---");
     eprintln!(
         "Game ended at tick {} — winner: {}",
@@ -484,7 +485,8 @@ fn run_ascii_game(
         .map(|name| v2_agent::agent_by_name(name).unwrap())
         .collect();
 
-    while state.tick < max_ticks && !sim::is_over(&state) {
+    let tick_limit = sim::timeout_limit(max_ticks);
+    while state.tick < tick_limit && !sim::is_over(&state) {
         // Render snapshot before this tick's agent poll.
         if let Some(ticks) = snapshot_ticks {
             if ticks.contains(&state.tick) {
@@ -521,7 +523,7 @@ fn run_ascii_game(
     // Always render final state.
     println!("{}", ascii::render_state(&state));
 
-    let winner = sim::winner(&state);
+    let winner = sim::winner_at_limit(&state, max_ticks);
     eprintln!("---");
     eprintln!(
         "Game ended at tick {} — winner: {}",
@@ -585,7 +587,8 @@ fn run_bench_game(
     // Snapshot interval: every 50 ticks.
     let snap_interval: u64 = 50;
 
-    while state.tick < max_ticks && !sim::is_over(&state) {
+    let tick_limit = sim::timeout_limit(max_ticks);
+    while state.tick < tick_limit && !sim::is_over(&state) {
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let p = pid as u8;
@@ -630,7 +633,7 @@ fn run_bench_game(
         }
     }
 
-    let winner_idx = sim::winner(&state);
+    let winner_idx = sim::winner_at_limit(&state, max_ticks);
     let winner = winner_idx.map(|wi| ids[wi as usize].clone());
 
     let compute_mean: Vec<f64> = compute_total
