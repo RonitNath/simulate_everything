@@ -180,10 +180,14 @@ async fn api_v2_game(Query(params): Query<V2GameParams>) -> impl IntoResponse {
         seed: params.seed.unwrap_or_else(|| rand::random()),
     };
     let max_ticks = params.ticks.unwrap_or(2000);
-    let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
-        .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
-        .collect();
-    let replay = v2::replay::record_game(&config, &mut agents, max_ticks, 10);
+    let replay = tokio::task::spawn_blocking(move || {
+        let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
+            .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
+            .collect();
+        v2::replay::record_game(&config, &mut agents, max_ticks, 10)
+    })
+    .await
+    .unwrap();
     Json(replay)
 }
 
@@ -205,27 +209,32 @@ async fn api_v2_ascii(Query(params): Query<V2AsciiParams>) -> impl IntoResponse 
         seed: params.seed.unwrap_or(42),
     };
     let max_ticks = params.ticks.unwrap_or(2000);
-    let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
-        .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
-        .collect();
-    let replay = v2::replay::record_game(&config, &mut agents, max_ticks, 10);
+    let at = params.at;
+    tokio::task::spawn_blocking(move || {
+        let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
+            .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
+            .collect();
+        let replay = v2::replay::record_game(&config, &mut agents, max_ticks, 10);
 
-    let frame = match params.at {
-        Some(at) => replay
-            .frames
-            .iter()
-            .min_by_key(|f| (f.tick as i64 - at as i64).unsigned_abs())
-            .or(replay.frames.last()),
-        None => replay.frames.last(),
-    };
+        let frame = match at {
+            Some(at) => replay
+                .frames
+                .iter()
+                .min_by_key(|f| (f.tick as i64 - at as i64).unsigned_abs())
+                .or(replay.frames.last()),
+            None => replay.frames.last(),
+        };
 
-    match frame {
-        Some(f) => {
-            let state = v2::replay::reconstruct_state(&replay, f);
-            v2::ascii::render_state(&state)
+        match frame {
+            Some(f) => {
+                let state = v2::replay::reconstruct_state(&replay, f);
+                v2::ascii::render_state(&state)
+            }
+            None => "No frames captured".to_string(),
         }
-        None => "No frames captured".to_string(),
-    }
+    })
+    .await
+    .unwrap()
 }
 
 // ============================================================
