@@ -187,8 +187,8 @@ pub fn generate(config: &MapConfig) -> GameState {
 
         if let Some(cell) = grid_at_mut(&mut grid, config.width, gen_pos) {
             cell.stockpile_owner = Some(owner);
-            cell.food_stockpile = 40.0;
-            cell.material_stockpile = 25.0;
+            cell.food_stockpile = 80.0;
+            cell.material_stockpile = 50.0;
         }
     }
 

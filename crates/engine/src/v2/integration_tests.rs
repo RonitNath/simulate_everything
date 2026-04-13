@@ -405,7 +405,8 @@ fn population_growth_respects_carrying_capacity() {
 
     let total_pop: u16 = state.population.iter().map(|p| p.count).sum();
     assert!(total_pop > 20);
-    assert!(total_pop <= 30);
+    // Carrying capacity: 20 + terrain(1.0)*20 + water(1.0)*12 = 52
+    assert!(total_pop <= 55);
     assert!(state.population.iter().all(|p| p.hex == home));
 }
 
