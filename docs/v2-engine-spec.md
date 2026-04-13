@@ -102,12 +102,12 @@ struct Engagement {
 struct Unit {
     id: u32,
     owner: u8,
-    q: i32,              // axial coordinate
-    r: i32,              // axial coordinate
+    pos: Axial,              // axial coordinate
     strength: f32,           // 100.0 = full company, degrades in combat, <=0 = dead
     move_cooldown: u8,       // ticks remaining until this unit can move again
     engagements: Vec<Engagement>,  // active engagements, one per hex edge (max 6)
-    destination: Option<(i32, i32)>,  // pathfinding target (axial coords), unit moves toward this automatically
+    destination: Option<Axial>,  // pathfinding target, unit moves toward this automatically
+    is_general: bool,        // true for the player's general unit
 }
 ```
 
@@ -136,8 +136,10 @@ struct GameState {
     units: Vec<Unit>,        // all units in the game
     players: Vec<Player>,
     tick: u64,               // current simulation tick
-    ticks_per_second: u32,   // simulation speed (e.g., 10)
+    next_unit_id: u32,       // monotonically increasing counter for assigning unique unit IDs
 }
+
+// TICKS_PER_SECOND is a module-level constant (not a field on GameState)
 ```
 
 The grid is stored using offset coordinates for cache-friendly access. Hex math (neighbors, distance, pathfinding) uses axial/cube coordinates, converting as needed.
@@ -518,17 +520,20 @@ crates/engine/src/
     agent.rs        — V1 agents (keep)
     ascii.rs        — V1 ascii (keep)
     v2/
-        mod.rs
-        hex.rs      — hex coordinate system, neighbor calculation, distance, conversions
-        state.rs    — V2 Cell, Unit, Player, GameState
-        sim.rs      — V2 simulation loop (tick-based)
-        mapgen.rs   — V2 Perlin noise terrain generation on hex grid
-        combat.rs   — V2 engagement/disengagement/damage
-        vision.rs   — V2 fog of war (3-hex radius)
-        economy.rs  — V2 resource generation and unit production
-        agent.rs    — V2 agent trait, Observation, Directive
-        ascii.rs    — V2 hex ASCII representation
-        pathfinding.rs — BFS/A* on hex grid
+        mod.rs          — module re-exports and tuning constants
+        hex.rs          — hex coordinate system, neighbor calculation, distance, conversions
+        state.rs        — V2 Cell, Unit, Player, GameState
+        sim.rs          — V2 simulation loop (tick-based); economy (resource gen + production) is inline here
+        mapgen.rs       — V2 Perlin noise terrain generation on hex grid
+        combat.rs       — V2 engagement/disengagement/damage
+        vision.rs       — V2 fog of war (3-hex radius)
+        directive.rs    — directive enum and apply_directives
+        observation.rs  — player-scoped observation with fog of war filtering
+        agent.rs        — V2 agent trait and built-in agents (e.g., spread agent)
+        ascii.rs        — V2 hex ASCII representation
+        pathfinding.rs  — BFS/A* on hex grid
+        runner.rs       — game runner with agent polling loop
+        replay.rs       — frame capture and game recording
 ```
 
 V1 continues to work (the TV keeps showing games). V2 is developed alongside and gets its own web endpoints and frontend mode when ready.
