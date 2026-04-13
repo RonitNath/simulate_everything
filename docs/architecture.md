@@ -227,7 +227,7 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `INITIAL_STRENGTH` | 100.0 | Starting strength for a new unit |
 | `DAMAGE_RATE` | 0.05 | Fraction of strength dealt per tick in combat |
 | `DISENGAGE_PENALTY` | 0.3 | Strength loss on breaking engagement |
-| `BASE_MOVE_COOLDOWN` | 2 ticks | Minimum ticks between moves |
+| `BASE_MOVE_COOLDOWN` | 1 tick | Minimum ticks between moves |
 | `TERRAIN_MOVE_PENALTY` | 0.5 | Additional cooldown scaling per terrain point |
 | `VISION_RADIUS` | 5 hexes | Base fog-of-war visibility range before height bonus |
 | `INITIAL_UNITS` | 5 | Units each player starts with |
@@ -256,6 +256,9 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 
 - Units, population, and convoys are stored in `SlotMap`s keyed by opaque engine IDs (`UnitKey`, `PopKey`, `ConvoyKey`) so hot paths can do direct lookups instead of scanning vectors.
 - `GameState` maintains a rebuilt-per-tick `SpatialIndex` cache for unit occupancy lookups on a hex and its adjacent ring.
+- Unit movement resolves simultaneously per tick: one-step intents are gathered first, same-target conflicts are resolved deterministically, and only winning moves are committed.
+- Normal military movement no longer produces same-hex stacking. Enemy swap attempts, enemy same-target contests, and blocked advances into occupied enemy hexes create limited auto-engagement instead.
+- A light movement-facing zone-of-control rule prevents a unit that is already enemy-adjacent from sliding deeper through another enemy-adjacent hex unless it is actually increasing distance from its current threats.
 - Replay and spectator payloads keep stable numeric `id` fields for frontend compatibility even though the engine uses slotmap keys internally.
 - Agent polling now uses `InitialObservation` plus per-poll `ObservationDelta`; the engine keeps a lightweight dirty-cell mask and each caller owns an `ObservationSession` to track prior visibility/scouted state.
 - `observe()` still exists as a convenience for tests, replay reconstruction, and benchmarking; it materializes a full observation from the same delta-oriented internals.

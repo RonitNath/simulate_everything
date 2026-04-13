@@ -6,18 +6,19 @@ use super::pathfinding;
 use super::state::TickAccumulator;
 use super::state::{
     CargoType, Convoy, ConvoyKey, GameState, PopKey, Population, Role, Settlement, SettlementType,
+    UnitKey,
 };
 use super::{
     BASE_MOVE_COOLDOWN, BASE_STORAGE_CAP, CITY_AI_INTERVAL, CITY_RADIUS, CITY_THRESHOLD,
     CONVOY_MOVE_COOLDOWN, DEPOT_STORAGE_CAP, FARM_RADIUS, FARM_THRESHOLD, FARMER_RATE, FOOD_RATE,
-    FRONTIER_DECAY_RATE, MATERIAL_RATE, MIGRATION_DIVISOR, POPULATION_GROWTH_RATE,
-    ROUT_THRESHOLD, SETTLEMENT_THRESHOLD, SOLDIER_READY_THRESHOLD, STARVATION_DAMAGE,
-    TERRAIN_MOVE_PENALTY, TIMEOUT_TICKS, TRAINING_RATE, UPKEEP_PER_UNIT, VILLAGE_RADIUS,
-    VILLAGE_THRESHOLD, WORKER_RATE,
+    FRONTIER_DECAY_RATE, MATERIAL_RATE, MIGRATION_DIVISOR, POPULATION_GROWTH_RATE, ROUT_THRESHOLD,
+    SETTLEMENT_THRESHOLD, SOLDIER_READY_THRESHOLD, STARVATION_DAMAGE, TERRAIN_MOVE_PENALTY,
+    TIMEOUT_TICKS, TRAINING_RATE, UPKEEP_PER_UNIT, VILLAGE_RADIUS, VILLAGE_THRESHOLD, WORKER_RATE,
 };
 use serde::{Deserialize, Serialize};
 use slotmap::Key;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 pub fn tick(state: &mut GameState) {
     #[cfg(debug_assertions)]
@@ -715,8 +716,20 @@ fn movement_cooldown(state: &GameState, from: Axial, to: Axial, convoy: bool) ->
     adjusted.max(1.0).round() as u8
 }
 
-fn move_units(state: &mut GameState) {
-    let moves: Vec<(super::state::UnitKey, Axial, u8, bool)> = state
+#[derive(Debug, Clone, Copy)]
+struct MoveIntent {
+    unit_id: UnitKey,
+    owner: u8,
+    public_id: u32,
+    from: Axial,
+    to: Axial,
+    cooldown: u8,
+    clear_dest: bool,
+    support_score: f32,
+}
+
+fn gather_move_intents(state: &GameState) -> Vec<MoveIntent> {
+    state
         .units
         .iter()
         .filter_map(|(key, u)| {
@@ -726,21 +739,251 @@ fn move_units(state: &mut GameState) {
             }
 
             match pathfinding::next_step(state, u.pos, dest) {
-                Some(next_pos) => {
-                    let cooldown = movement_cooldown(state, u.pos, next_pos, false);
-                    Some((key, next_pos, cooldown, next_pos == dest))
-                }
-                None => Some((key, u.pos, 0, true)),
+                Some(next_pos) => Some(MoveIntent {
+                    unit_id: key,
+                    owner: u.owner,
+                    public_id: u.public_id,
+                    from: u.pos,
+                    to: next_pos,
+                    cooldown: movement_cooldown(state, u.pos, next_pos, false),
+                    clear_dest: next_pos == dest,
+                    support_score: local_support_score(state, u.owner, next_pos),
+                }),
+                None => Some(MoveIntent {
+                    unit_id: key,
+                    owner: u.owner,
+                    public_id: u.public_id,
+                    from: u.pos,
+                    to: u.pos,
+                    cooldown: 0,
+                    clear_dest: true,
+                    support_score: local_support_score(state, u.owner, u.pos),
+                }),
             }
         })
-        .collect();
+        .collect()
+}
 
-    for (i, new_pos, cooldown, clear_dest) in moves {
-        state.units[i].pos = new_pos;
-        state.units[i].move_cooldown = cooldown;
-        if clear_dest {
-            state.units[i].destination = None;
+fn local_support_score(state: &GameState, owner: u8, hex: Axial) -> f32 {
+    state
+        .units
+        .values()
+        .filter(|u| hex::distance(u.pos, hex) <= 1)
+        .map(|u| {
+            if u.owner == owner {
+                u.strength
+            } else {
+                -u.strength
+            }
+        })
+        .sum()
+}
+
+fn intent_priority(a: &MoveIntent, b: &MoveIntent) -> Ordering {
+    b.support_score
+        .total_cmp(&a.support_score)
+        .then_with(|| a.public_id.cmp(&b.public_id))
+}
+
+fn enemy_adjacent_units(state: &GameState, owner: u8, hex: Axial) -> Vec<UnitKey> {
+    let mut enemies: Vec<_> = state
+        .spatial
+        .units_adjacent(hex)
+        .filter(|enemy_id| state.units.get(*enemy_id).is_some_and(|u| u.owner != owner))
+        .collect();
+    enemies.sort_by_key(|enemy_id| state.units[*enemy_id].public_id);
+    enemies
+}
+
+fn primary_enemy_adjacent(state: &GameState, owner: u8, hex: Axial) -> Option<UnitKey> {
+    enemy_adjacent_units(state, owner, hex).into_iter().next()
+}
+
+fn blocked_by_enemy_zoc(state: &GameState, intent: &MoveIntent) -> bool {
+    let from_threats = enemy_adjacent_units(state, intent.owner, intent.from);
+    if from_threats.is_empty() {
+        return false;
+    }
+
+    let to_threats = enemy_adjacent_units(state, intent.owner, intent.to);
+    if to_threats.is_empty() {
+        return false;
+    }
+
+    !from_threats.into_iter().all(|enemy_id| {
+        let enemy_pos = state.units[enemy_id].pos;
+        hex::distance(intent.to, enemy_pos) > hex::distance(intent.from, enemy_pos)
+    })
+}
+
+fn record_auto_engagement(
+    pairs: &mut Vec<(UnitKey, UnitKey)>,
+    seen: &mut HashSet<(u64, u64)>,
+    a: UnitKey,
+    b: UnitKey,
+) {
+    let a_raw = a.data().as_ffi();
+    let b_raw = b.data().as_ffi();
+    let pair = if a_raw < b_raw {
+        (a_raw, b_raw)
+    } else {
+        (b_raw, a_raw)
+    };
+    if seen.insert(pair) {
+        pairs.push((a, b));
+    }
+}
+
+fn move_units(state: &mut GameState) {
+    let intents = gather_move_intents(state);
+    if intents.is_empty() {
+        return;
+    }
+
+    let occupied: HashMap<Axial, Vec<UnitKey>> =
+        state
+            .units
+            .iter()
+            .fold(HashMap::new(), |mut acc, (key, unit)| {
+                acc.entry(unit.pos).or_default().push(key);
+                acc
+            });
+    let intents_by_from: HashMap<Axial, Vec<MoveIntent>> =
+        intents
+            .iter()
+            .copied()
+            .fold(HashMap::new(), |mut acc, intent| {
+                acc.entry(intent.from).or_default().push(intent);
+                acc
+            });
+
+    let mut blocked_units: HashSet<UnitKey> = HashSet::new();
+    let mut auto_engagements = Vec::new();
+    let mut seen_pairs = HashSet::new();
+
+    for intent in &intents {
+        if blocked_units.contains(&intent.unit_id) {
+            continue;
         }
+        let Some(candidates) = intents_by_from.get(&intent.to) else {
+            continue;
+        };
+        for other in candidates {
+            if other.to != intent.from
+                || other.owner == intent.owner
+                || other.unit_id == intent.unit_id
+            {
+                continue;
+            }
+            blocked_units.insert(intent.unit_id);
+            blocked_units.insert(other.unit_id);
+            record_auto_engagement(
+                &mut auto_engagements,
+                &mut seen_pairs,
+                intent.unit_id,
+                other.unit_id,
+            );
+        }
+    }
+
+    let mut target_groups: HashMap<Axial, Vec<MoveIntent>> = HashMap::new();
+    for intent in intents {
+        if blocked_units.contains(&intent.unit_id) {
+            continue;
+        }
+        if intent.to == intent.from {
+            state.units[intent.unit_id].destination = None;
+            continue;
+        }
+
+        if let Some(occupants) = occupied.get(&intent.to) {
+            let mut friendly_block = false;
+            let mut enemy_occupants: Vec<_> = occupants
+                .iter()
+                .copied()
+                .filter(|occupant| state.units[*occupant].owner != intent.owner)
+                .collect();
+            if enemy_occupants.is_empty() {
+                friendly_block = true;
+            } else {
+                enemy_occupants.sort_by_key(|occupant| state.units[*occupant].public_id);
+                record_auto_engagement(
+                    &mut auto_engagements,
+                    &mut seen_pairs,
+                    intent.unit_id,
+                    enemy_occupants[0],
+                );
+            }
+
+            if friendly_block {
+                blocked_units.insert(intent.unit_id);
+            } else {
+                blocked_units.insert(intent.unit_id);
+            }
+            continue;
+        }
+
+        target_groups.entry(intent.to).or_default().push(intent);
+    }
+
+    let mut resolved_moves = Vec::new();
+    for contenders in target_groups.values_mut() {
+        contenders.sort_by(intent_priority);
+        let mixed_owners = contenders
+            .windows(2)
+            .any(|pair| pair[0].owner != pair[1].owner);
+
+        if mixed_owners {
+            for idx in 0..contenders.len() {
+                for jdx in (idx + 1)..contenders.len() {
+                    let a = contenders[idx];
+                    let b = contenders[jdx];
+                    if a.owner == b.owner || hex::shared_edge(a.from, b.from).is_none() {
+                        continue;
+                    }
+                    record_auto_engagement(
+                        &mut auto_engagements,
+                        &mut seen_pairs,
+                        a.unit_id,
+                        b.unit_id,
+                    );
+                }
+            }
+            continue;
+        }
+
+        let winner = contenders[0];
+        if blocked_by_enemy_zoc(state, &winner) {
+            if let Some(blocker) = primary_enemy_adjacent(state, winner.owner, winner.from) {
+                record_auto_engagement(
+                    &mut auto_engagements,
+                    &mut seen_pairs,
+                    winner.unit_id,
+                    blocker,
+                );
+            }
+            continue;
+        }
+        resolved_moves.push(winner);
+    }
+
+    resolved_moves.sort_by_key(|intent| intent.public_id);
+    for intent in resolved_moves {
+        state.units[intent.unit_id].pos = intent.to;
+        state.units[intent.unit_id].move_cooldown = intent.cooldown;
+        if intent.clear_dest {
+            state.units[intent.unit_id].destination = None;
+        }
+    }
+
+    auto_engagements.sort_by_key(|(a, b)| {
+        (
+            state.units[*a].public_id.min(state.units[*b].public_id),
+            state.units[*a].public_id.max(state.units[*b].public_id),
+        )
+    });
+    for (a, b) in auto_engagements {
+        combat::engage(state, a, b);
     }
 }
 
@@ -1017,7 +1260,9 @@ fn rout_weakened_units(state: &mut GameState) {
     let routers: Vec<(super::state::UnitKey, u8, Axial)> = state
         .units
         .iter()
-        .filter(|(_, u)| !u.engagements.is_empty() && u.strength <= ROUT_THRESHOLD && u.strength > 0.0)
+        .filter(|(_, u)| {
+            !u.engagements.is_empty() && u.strength <= ROUT_THRESHOLD && u.strength > 0.0
+        })
         .map(|(id, u)| (id, u.owner, u.pos))
         .collect();
 
@@ -1332,6 +1577,13 @@ mod tests {
     use crate::v2::directive::{Directive, apply_directives};
     use crate::v2::hex::{distance, neighbors, offset_to_axial};
     use crate::v2::mapgen::{MapConfig, generate};
+    use crate::v2::spatial::SpatialIndex;
+    use crate::v2::state::{
+        Biome, Cell, Player, Population, Role, Settlement, SettlementType, TickAccumulator, Unit,
+    };
+    use bitvec::vec::BitVec;
+    use slotmap::SlotMap;
+
     fn test_state() -> GameState {
         generate(&MapConfig {
             width: 20,
@@ -1339,6 +1591,106 @@ mod tests {
             num_players: 2,
             seed: 42,
         })
+    }
+
+    fn flat_cell() -> Cell {
+        Cell {
+            terrain_value: 1.0,
+            material_value: 1.0,
+            food_stockpile: 0.0,
+            material_stockpile: 0.0,
+            has_depot: false,
+            road_level: 0,
+            height: 0.5,
+            moisture: 0.5,
+            biome: Biome::Grassland,
+            is_river: false,
+            water_access: 0.5,
+            region_id: 0,
+            stockpile_owner: None,
+        }
+    }
+
+    fn unit(public_id: u32, owner: u8, pos: Axial) -> Unit {
+        Unit {
+            public_id,
+            owner,
+            pos,
+            strength: 100.0,
+            move_cooldown: 0,
+            engagements: Vec::new(),
+            destination: None,
+            rations: crate::v2::MAX_RATIONS,
+            half_rations: false,
+        }
+    }
+
+    fn blank_state(width: usize, height: usize, num_players: u8) -> GameState {
+        let total_cells = width * height;
+        let mut players = Vec::new();
+        let mut settlements = SlotMap::with_key();
+        let mut population = SlotMap::with_key();
+
+        for player_id in 0..num_players {
+            let start_pos = offset_to_axial(0, player_id as i32);
+            players.push(Player {
+                id: player_id,
+                food: 0.0,
+                material: 0.0,
+                alive: true,
+            });
+            settlements.insert(Settlement {
+                public_id: player_id as u32,
+                hex: start_pos,
+                owner: player_id,
+                settlement_type: SettlementType::Farm,
+            });
+            population.insert(Population {
+                public_id: player_id as u32,
+                hex: start_pos,
+                owner: player_id,
+                count: 5,
+                role: Role::Idle,
+                training: 0.0,
+            });
+        }
+
+        let mut state = GameState {
+            width,
+            height,
+            grid: vec![flat_cell(); total_cells],
+            units: SlotMap::with_key(),
+            players,
+            population,
+            convoys: SlotMap::with_key(),
+            settlements,
+            regions: Vec::new(),
+            tick: 0,
+            next_unit_id: 1000,
+            next_pop_id: num_players as u32,
+            next_convoy_id: 0,
+            next_settlement_id: num_players as u32,
+            scouted: vec![vec![true; total_cells]; num_players as usize],
+            spatial: SpatialIndex::new(width, height),
+            dirty_hexes: BitVec::repeat(false, total_cells),
+            hex_revisions: vec![0; total_cells],
+            next_hex_revision: 0,
+            territory_cache: vec![None; total_cells],
+            #[cfg(debug_assertions)]
+            tick_accumulator: Some(TickAccumulator::default()),
+            game_log: None,
+        };
+        state.rebuild_spatial();
+        state
+    }
+
+    fn set_units(state: &mut GameState, units: Vec<Unit>) {
+        let mut slotmap = SlotMap::with_key();
+        for unit in units {
+            slotmap.insert(unit);
+        }
+        state.units = slotmap;
+        state.rebuild_spatial();
     }
 
     fn any_unit_key(state: &GameState, owner: u8) -> crate::v2::state::UnitKey {
@@ -1445,7 +1797,6 @@ mod tests {
     fn trained_population_produces_units() {
         let mut state = test_state();
         let start_pos = state.units.values().find(|u| u.owner == 0).unwrap().pos;
-        let before = state.units.values().filter(|u| u.owner == 0).count();
         apply_directives(
             &mut state,
             0,
@@ -1669,5 +2020,94 @@ mod tests {
         let raid_cell = state.cell_at(raid_hex).unwrap();
         assert_eq!(raid_cell.stockpile_owner, Some(1));
         assert_eq!(raid_cell.food_stockpile, 9.0);
+    }
+
+    #[test]
+    fn same_target_enemy_move_contest_auto_engages_without_stacking() {
+        let mut state = blank_state(12, 12, 2);
+        let target = offset_to_axial(5, 5);
+        let west = neighbors(target)[4];
+        let northwest = neighbors(target)[5];
+        set_units(
+            &mut state,
+            vec![unit(100, 0, west), unit(200, 1, northwest)],
+        );
+        state.units.iter_mut().for_each(|(_, unit)| {
+            unit.destination = Some(target);
+        });
+        state.rebuild_spatial();
+
+        tick(&mut state);
+
+        let a = state.unit_by_public_id(100).unwrap();
+        let b = state.unit_by_public_id(200).unwrap();
+        assert_eq!(a.pos, west);
+        assert_eq!(b.pos, northwest);
+        assert_eq!(a.engagements.len(), 1);
+        assert_eq!(b.engagements.len(), 1);
+        assert_ne!(a.owner, b.owner);
+    }
+
+    #[test]
+    fn enemy_swap_attempt_auto_engages() {
+        let mut state = blank_state(12, 12, 2);
+        let a_pos = offset_to_axial(5, 5);
+        let b_pos = neighbors(a_pos)[1];
+        set_units(&mut state, vec![unit(100, 0, a_pos), unit(200, 1, b_pos)]);
+        state.unit_by_public_id_mut(100).unwrap().destination = Some(b_pos);
+        state.unit_by_public_id_mut(200).unwrap().destination = Some(a_pos);
+        state.rebuild_spatial();
+
+        tick(&mut state);
+
+        let a = state.unit_by_public_id(100).unwrap();
+        let b = state.unit_by_public_id(200).unwrap();
+        assert_eq!(a.pos, a_pos);
+        assert_eq!(b.pos, b_pos);
+        assert_eq!(a.engagements.len(), 1);
+        assert_eq!(b.engagements.len(), 1);
+    }
+
+    #[test]
+    fn friendly_same_target_move_picks_one_winner() {
+        let mut state = blank_state(12, 12, 1);
+        let target = offset_to_axial(5, 5);
+        let west = neighbors(target)[4];
+        let northwest = neighbors(target)[5];
+        set_units(
+            &mut state,
+            vec![unit(100, 0, west), unit(101, 0, northwest)],
+        );
+        state.unit_by_public_id_mut(100).unwrap().destination = Some(target);
+        state.unit_by_public_id_mut(101).unwrap().destination = Some(target);
+        state.rebuild_spatial();
+
+        tick(&mut state);
+
+        let occupant_count = state.units.values().filter(|u| u.pos == target).count();
+        assert_eq!(occupant_count, 1);
+        assert_eq!(state.units.values().filter(|u| u.owner == 0).count(), 2);
+    }
+
+    #[test]
+    fn zone_of_control_blocks_sliding_deeper_through_front() {
+        let mut state = blank_state(12, 12, 2);
+        let enemy_pos = offset_to_axial(5, 5);
+        let friendly_pos = neighbors(enemy_pos)[4];
+        let side_step = neighbors(enemy_pos)[5];
+        set_units(
+            &mut state,
+            vec![unit(100, 0, friendly_pos), unit(200, 1, enemy_pos)],
+        );
+        state.unit_by_public_id_mut(100).unwrap().destination = Some(side_step);
+        state.rebuild_spatial();
+
+        tick(&mut state);
+
+        let friendly = state.unit_by_public_id(100).unwrap();
+        let enemy = state.unit_by_public_id(200).unwrap();
+        assert_eq!(friendly.pos, friendly_pos);
+        assert_eq!(friendly.engagements.len(), 1);
+        assert_eq!(enemy.engagements.len(), 1);
     }
 }

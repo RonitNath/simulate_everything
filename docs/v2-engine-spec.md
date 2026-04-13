@@ -209,10 +209,12 @@ The simulation runs as a loop of discrete ticks. Each tick:
 3. **Combat resolution**: for each unit with engagements, compute effectiveness = `1/sqrt(N)` where N = number of engaged edges. For each engagement, apply damage: `damage_to_unit += enemy.strength * DAMAGE_RATE`, `damage_to_enemy += unit.strength * DAMAGE_RATE * effectiveness`. When a unit hits strength <= 0, it dies and all its engagements are cleared.
 
 4. **Movement**: for each unit with a destination and move_cooldown == 0:
-   - Compute next hex step toward destination (pathfinding — BFS or A* on hex grid)
-   - Move to the next hex
-   - Set move_cooldown based on terrain (base + terrain modifier)
-   - If destination reached, clear destination
+   - Gather one-step movement intents first; do not mutate positions immediately
+   - Resolve same-target conflicts deterministically
+   - Block movement into occupied hexes unless future explicit displacement rules say otherwise
+   - Auto-create engagement for obvious movement contact cases: enemy swap attempts, enemy contests over the same destination, and blocked advances into an occupied enemy hex
+   - Apply a light movement-facing zone-of-control rule so units already adjacent to an enemy cannot slide deeper through another enemy-adjacent hex unless the move increases distance from every current threat
+   - Commit only the winning moves, then set move_cooldown from terrain and clear destination on arrival
    
 5. **Cooldown decrement**: all units with move_cooldown > 0 decrement by 1.
 
@@ -310,7 +312,7 @@ When a unit's strength reaches 0 or below, it is removed from the game. All its 
 
 ### No engagement = no combat
 
-Units cannot damage each other without engaging. Moving adjacent to an enemy does NOT automatically start combat. The agent must explicitly order engagement. This means:
+Units still cannot damage each other without engaging, and simple adjacency does NOT automatically start combat. The main tactical API remains explicit `Engage` / `Disengage`. The engine now adds a narrow movement-contact exception: some blocked movement conflicts auto-create engagement so enemies do not overlap or pass through each other unrealistically. In ordinary positioning, the agent must still order engagement. This means:
 - Scouts can move past enemies without fighting (if the enemy doesn't engage them)
 - Either side can initiate engagement when adjacent
 - Positioning matters — you want to be adjacent on YOUR terms, not theirs
@@ -586,7 +588,7 @@ These will need playtesting and adjustment:
 
 ## Open Questions
 
-1. **Crowding/stacking**: V2 launch allows multiple units on one hex. Should there be a soft cap (attrition above capacity) or is that a future mechanic?
+1. **Crowding/stacking**: Normal movement no longer allows same-hex military stacking. If future layers want crowding again, it should be a deliberate mechanic (for example garrisons, transports, or siege layering), not a default movement outcome.
 
 2. **Auto-production vs agent-triggered**: should unit production happen automatically when resources >= 10, or only when the agent issues a `Produce` directive? Recommendation: agent-triggered (more strategic control).
 

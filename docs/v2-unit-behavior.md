@@ -161,6 +161,8 @@ Applied to V2:
 
 ## Recommended Direction
 
+Status: Phase 1 of this direction is now implemented in the engine. V2 movement uses simultaneous one-step intent resolution, prevents same-hex overlap through normal movement, auto-locks obvious movement-contact cases, and applies a light movement-facing zone of control.
+
 ### 1. Add simultaneous movement resolution
 
 Introduce a movement phase with three stages:
