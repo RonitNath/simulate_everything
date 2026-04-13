@@ -2,16 +2,24 @@ use crate::action::Action;
 use crate::agent::Observation;
 use crate::event::{Event, PlayerAction, PlayerStats};
 use crate::state::{GameState, Tile};
+use rand::Rng;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 
 /// Runs the game loop. Manages turn execution, army growth, and win conditions.
 pub struct Game {
     pub state: GameState,
     pub max_turns: u32,
     pub events: Vec<Event>,
+    rng: StdRng,
 }
 
 impl Game {
     pub fn new(state: GameState, max_turns: u32) -> Self {
+        Self::with_seed(state, max_turns, 0)
+    }
+
+    pub fn with_seed(state: GameState, max_turns: u32, seed: u64) -> Self {
         let start_event = Event::GameStart {
             width: state.width,
             height: state.height,
@@ -22,6 +30,7 @@ impl Game {
             state,
             max_turns,
             events: vec![start_event],
+            rng: StdRng::seed_from_u64(seed),
         }
     }
 
@@ -29,33 +38,43 @@ impl Game {
         self.state.winner.is_some() || self.state.turn >= self.max_turns
     }
 
-    /// Get observations for all alive players.
     pub fn observations(&self) -> Vec<Observation> {
         (0..self.state.num_players)
             .map(|p| Observation::from_state(&self.state, p))
             .collect()
     }
 
-    /// Execute one turn: collect actions, resolve moves, grow armies, check wins.
-    pub fn step(&mut self, actions: &[(u8, Action)]) {
+    /// Execute one turn. Each player submits a Vec of actions (multiple orders per turn).
+    /// Actions are interleaved round-robin: player0[0], player1[0], player0[1], player1[1], ...
+    pub fn step(&mut self, player_orders: &[(u8, Vec<Action>)]) {
         let mut player_actions = Vec::new();
+        let mut executed_counts: Vec<usize> = vec![0; player_orders.len()];
 
-        // Execute each player's action.
-        for &(player, action) in actions {
-            if !self.state.alive[player as usize] {
-                player_actions.push(PlayerAction {
-                    player,
-                    action,
-                    valid: false,
-                });
-                continue;
+        // Find max number of orders any player submitted.
+        let max_orders = player_orders.iter().map(|(_, acts)| acts.len()).max().unwrap_or(0);
+
+        // Interleave execution round-robin.
+        for order_idx in 0..max_orders {
+            for (pi, (player, actions)) in player_orders.iter().enumerate() {
+                if order_idx >= actions.len() {
+                    continue;
+                }
+                if !self.state.alive[*player as usize] {
+                    continue;
+                }
+                let action = actions[order_idx];
+                if self.execute_action(*player, action) {
+                    executed_counts[pi] += 1;
+                }
             }
+        }
 
-            let valid = self.execute_action(player, action);
+        // Build event records.
+        for (pi, (player, actions)) in player_orders.iter().enumerate() {
             player_actions.push(PlayerAction {
-                player,
-                action,
-                valid,
+                player: *player,
+                actions: actions.clone(),
+                executed: executed_counts[pi],
             });
         }
 
@@ -91,7 +110,7 @@ impl Game {
             split,
         } = action
         else {
-            return true; // Pass is always valid.
+            return true;
         };
 
         let s = &self.state;
@@ -117,7 +136,6 @@ impl Game {
             return false;
         }
 
-        // Calculate armies to send.
         let src_armies = self.state.cell(row, col).armies;
         let send = if split {
             src_armies / 2
@@ -129,41 +147,32 @@ impl Game {
             return false;
         }
 
-        // Deduct from source.
         self.state.cell_mut(row, col).armies -= send;
 
-        // Resolve at destination.
         let dst = self.state.cell(nr, nc);
         let dst_owner = dst.owner;
         let dst_armies = dst.armies;
 
         match dst_owner {
             Some(owner) if owner == player => {
-                // Reinforce.
                 self.state.cell_mut(nr, nc).armies += send;
             }
             Some(defender) => {
-                // Combat.
                 if send > dst_armies {
-                    // Attacker wins.
                     let remaining = send - dst_armies;
                     let dst_cell = self.state.cell_mut(nr, nc);
                     dst_cell.armies = remaining;
                     dst_cell.owner = Some(player);
 
-                    // Check if we captured a general.
                     if dst_cell.tile == Tile::General {
                         self.eliminate(defender, player);
                     }
                 } else {
-                    // Defender holds.
                     self.state.cell_mut(nr, nc).armies = dst_armies - send;
                 }
             }
             None => {
-                // Capture neutral.
                 if dst.tile == Tile::City {
-                    // Must overcome city garrison.
                     if send > dst_armies {
                         let dst_cell = self.state.cell_mut(nr, nc);
                         dst_cell.armies = send - dst_armies;
@@ -172,7 +181,6 @@ impl Game {
                         self.state.cell_mut(nr, nc).armies = dst_armies - send;
                     }
                 } else {
-                    // Empty cell, just take it.
                     let dst_cell = self.state.cell_mut(nr, nc);
                     dst_cell.armies = send;
                     dst_cell.owner = Some(player);
@@ -186,14 +194,12 @@ impl Game {
     fn eliminate(&mut self, loser: u8, winner: u8) {
         self.state.alive[loser as usize] = false;
 
-        // Transfer all loser's cells to winner.
         for cell in &mut self.state.grid {
             if cell.owner == Some(loser) {
                 cell.owner = Some(winner);
             }
         }
 
-        // Turn the captured general into a city (it's now owned by winner).
         let (gr, gc) = self.state.general_positions[loser as usize];
         self.state.cell_mut(gr, gc).tile = Tile::City;
 
@@ -205,25 +211,37 @@ impl Game {
     }
 
     fn grow_armies(&mut self) {
-        let turn = self.state.turn;
+        // Reinforcement wave: every WAVE_INTERVAL turns, all owned land gets +1
+        // and structures get a bonus. Between waves, only structures grow (+1/turn).
+        const WAVE_INTERVAL: u32 = 25;
+        let is_wave = (self.state.turn + 1) % WAVE_INTERVAL == 0;
 
-        // Every 2 turns: owned generals and cities get +1.
-        if turn % 2 == 0 {
-            for cell in &mut self.state.grid {
-                if cell.owner.is_some()
-                    && (cell.tile == Tile::General || cell.tile == Tile::City)
-                {
-                    cell.armies += 1;
-                }
+        for cell in &mut self.state.grid {
+            if cell.owner.is_none() {
+                continue;
             }
-        }
-
-        // Every 50 turns: all owned cells get +1.
-        if turn > 0 && turn % 50 == 0 {
-            for cell in &mut self.state.grid {
-                if cell.owner.is_some() {
+            match cell.tile {
+                // Generals and cities: +1 every turn.
+                // On wave turns, cities get +2 extra (total +3), generals +1 extra (total +2).
+                Tile::City => {
                     cell.armies += 1;
+                    if is_wave {
+                        cell.armies += 2;
+                    }
                 }
+                Tile::General => {
+                    cell.armies += 1;
+                    if is_wave {
+                        cell.armies += 1;
+                    }
+                }
+                // Empty owned land: only grows on wave turns (+1).
+                Tile::Empty => {
+                    if is_wave {
+                        cell.armies += 1;
+                    }
+                }
+                Tile::Mountain => {}
             }
         }
     }

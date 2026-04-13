@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generals - Live</title>
+    <link rel="stylesheet" href="/static/index.css?v={{ build_ver }}">
+</head>
+<body>
+    <div id="app"></div>
+    <script>
+        window.__MODE__ = "live";
+        window.__PAGE__ = "live";
+        window.__WS_PATH__ = "/ws/spectate";
+        window.__BUILD_VER__ = "{{ build_ver }}";
+    </script>
+    <script type="module" src="/static/index.js?v={{ build_ver }}"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+[Unit]
+Description=Generals Game Visualizer
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=./
+
+# Rebuild frontend + Rust binary on every (re)start
+ExecStartPre=/bin/bash -lc "cd frontend && bun install && bun run vite build"
+ExecStartPre=/bin/bash -lc "cargo build --release --bin simulate_everything"
+
+ExecStart=.//target/release/simulate_everything
+
+Environment=GENERALS_STATIC_DIR=.//frontend/dist
+Environment=RUST_LOG=info
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

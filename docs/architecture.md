@@ -1,0 +1,105 @@
+# simulate_everything — Architecture
+
+## Modes
+
+### Simulator
+Pregenerated replays. Runs a full game synchronously and returns JSON.
+
+- `GET /` — HTML page
+- `GET /api/game?seed=N&players=N&turns=N&width=N&height=N` — Run game, return `Replay` JSON (seed random if omitted)
+- `GET /api/ascii?seed=N&players=N&turns=N&at=N&width=N&height=N` — ASCII board at specific turn (final if `at` omitted)
+
+Uses `all_builtin_agents()` shuffled by seed. Frontend: `App.tsx`.
+
+### Live PVP
+WebSocket-based multiplayer. External agents connect, spectators watch.
+
+- `GET /live` — HTML page
+- `ws /ws/agent` — Agent connection (send `Join`, receive `Observation`, send `Actions`)
+- `ws /ws/spectate` — Spectator stream
+- `POST /api/live/config` — `{"tick_ms": N, "show_numbers": bool}`
+
+Lobby waits for N players (env `GENERALS_PLAYERS`, default 2). Auto-rematches. Frontend: `LiveApp.tsx` with `__WS_PATH__="/ws/spectate"`.
+
+### Round-Robin
+Continuous automated tournament. Built-in agents play 1v1 on 23x23 maps.
+
+- `GET /rr` — HTML page
+- `ws /ws/rr` — Spectator stream
+- `POST /api/rr/config` — `{"tick_ms": N, "show_numbers": bool}`
+- `POST /api/rr/pause` / `POST /api/rr/resume` / `POST /api/rr/reset`
+- `GET /api/rr/status` — Health metrics (avg/max compute, overrun %, headroom %)
+
+Uses `rr_agents()` (separate pool from simulator). Records to in-memory scoreboard. Frontend: `LiveApp.tsx` with `__WS_PATH__="/ws/rr"`.
+
+### Scoreboard
+- `GET /scoreboard` — HTML page
+- `GET /api/scoreboard` — JSON `{total_games, agents: [{id, wins, losses, draws, ...}]}`
+
+Frontend: `ScoreboardApp.tsx`, polls every 3s.
+
+## WebSocket Protocol
+
+**Spectator -> Server:** `{"type": "set_speed", "tick_ms": N}`
+
+**Server -> Spectator:** `game_start` (width, height, num_players, agent_names), `frame` (turn, grid, stats, compute_us), `game_end` (winner, turns), `config` (show_numbers, tick_ms)
+
+**Agent -> Server (Live):** `{"type": "join", "name": "..."}`, `{"type": "actions", "actions": [...]}`
+
+**Server -> Agent (Live):** `lobby`, `game_start`, `observation` (fog-of-war applied), `game_end`, `error`
+
+## Engine
+
+### Game Rules
+- 2-8 players, fog of war (1-tile radius from owned cells)
+- Capture enemy general = eliminate player, inherit territory
+- Structures (generals, cities): +1 army/turn. Empty owned land: +1 with 10% probability
+- Combat: attacker sends army-1 (or army/2 if split). Attacker > defender = capture with remainder
+- Mountains: impassable. Cities: neutral garrison, capturable, then +1/turn
+- Actions: unlimited orders per turn, executed interleaved round-robin across players
+
+### Agents
+Implement `trait Agent: Send` with `act(&mut self, obs: &Observation, rng: &mut dyn RngCore) -> Vec<Action>`.
+
+| Agent | ID | Strategy |
+|-------|----|----------|
+| ExpanderAgent | expander-v1 | BFS frontier distance, expand outward, consolidate interior |
+| SwarmAgent | swarm-v2 | BFS toward nearest enemy, directional early expansion |
+| PressureAgent | pressure-v1 | Pressure-field based, FOW memory, player modeling |
+| SubprocessAgent | graph-search-v1 | Bridges to Python process via stdin/stdout (env `GENERALS_PYTHON_CLIENT`) |
+
+Two pools: `all_builtin_agents()` (simulator, includes all + Python) and `rr_agents()` (round-robin, curated subset).
+
+### Map Generation
+`MapConfig::for_size(w, h, players)` derives all params from dimensions:
+- Mountains: 20% density, placed in clusters (random walk ridges + scattered singles)
+- Cities: ~3% of cells, garrison scales with distance from generals (closer = cheaper)
+- Generals: margin from edges (~15% of smaller dim), min Manhattan distance (~40% of smaller dim)
+- BFS connectivity verified; retries if generals disconnected
+
+### ASCII Renderer
+Cell encoding: `....` empty, `####` mountain, `c 42` neutral city, `a  5` player a, `A 38` general, `a~12` owned city.
+
+`screenshot(width, height, grid, turn, stats) -> String` or `frame.ascii(w, h)` for Display.
+
+## Frontend
+
+SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on deploy.
+
+| File | Mode | Notes |
+|------|------|-------|
+| `App.tsx` | Simulator | Fetches replay JSON, playback controls |
+| `LiveApp.tsx` | Live + RR | WebSocket spectator, shared via `__WS_PATH__` / `__PAGE__` globals |
+| `ScoreboardApp.tsx` | Scoreboard | Polls JSON every 3s |
+| `Board.tsx` | All | Grid renderer, army brightness, player colors |
+| `Nav.tsx` | All | Mode navigation links |
+
+## Environment Variables
+| Var | Default | Used by |
+|-----|---------|---------|
+| `GENERALS_PLAYERS` | 2 | Live lobby size |
+| `GENERALS_TICK_MS` | 250 | Live tick speed |
+| `GENERALS_SEED` | 42 | Live first game seed |
+| `GENERALS_STATIC_DIR` | — | Path to `frontend/dist/` |
+| `GENERALS_PYTHON_CLIENT` | — | Path to Python agent dir |
+| `RUST_LOG` | — | Tracing level |

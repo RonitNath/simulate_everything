@@ -41,9 +41,9 @@ pub enum Event {
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayerAction {
     pub player: u8,
-    pub action: Action,
-    /// Whether the action was valid and executed.
-    pub valid: bool,
+    pub actions: Vec<Action>,
+    /// How many of the actions were valid and executed.
+    pub executed: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
