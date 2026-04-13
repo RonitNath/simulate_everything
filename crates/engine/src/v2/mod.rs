@@ -1,6 +1,8 @@
 pub mod ascii;
 pub mod hex;
 pub mod mapgen;
+pub mod pathfinding;
+pub mod sim;
 pub mod state;
 
 pub const RESOURCE_RATE: f32 = 0.1;
