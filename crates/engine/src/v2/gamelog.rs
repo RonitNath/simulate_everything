@@ -31,6 +31,14 @@ pub enum GameEvent {
         attacker_owner: u8,
         target_owner: u8,
     },
+    EngagementEnded {
+        tick: u64,
+        unit_a: u32,
+        unit_b: u32,
+        unit_a_owner: u8,
+        unit_b_owner: u8,
+        reason: EngagementEndReason,
+    },
     SettlementFounded {
         tick: u64,
         player: u8,
@@ -42,16 +50,14 @@ pub enum GameEvent {
     },
 }
 
-impl GameEvent {
-    fn tick(&self) -> u64 {
-        match self {
-            GameEvent::UnitProduced { tick, .. }
-            | GameEvent::UnitKilled { tick, .. }
-            | GameEvent::EngagementCreated { tick, .. }
-            | GameEvent::SettlementFounded { tick, .. }
-            | GameEvent::PlayerEliminated { tick, .. } => *tick,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EngagementEndReason {
+    DisengageEdge,
+    DisengageAll,
+    Rout,
+    Death,
+    PlayerEliminated,
+    Stale,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +69,7 @@ pub struct UnitPositionSample {
     pub r: i32,
     pub strength: f32,
     pub engaged: bool,
+    pub engagement_count: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +132,30 @@ impl GameLog {
 
     pub fn record_poll(&mut self, poll: AgentPollRecord) {
         self.agent_polls.push(poll);
+    }
+
+    pub fn record_engagement_ended(
+        &mut self,
+        tick: u64,
+        unit_a: u32,
+        unit_b: u32,
+        unit_a_owner: u8,
+        unit_b_owner: u8,
+        reason: EngagementEndReason,
+    ) {
+        let (unit_a, unit_b, unit_a_owner, unit_b_owner) = if unit_a <= unit_b {
+            (unit_a, unit_b, unit_a_owner, unit_b_owner)
+        } else {
+            (unit_b, unit_a, unit_b_owner, unit_a_owner)
+        };
+        self.record(GameEvent::EngagementEnded {
+            tick,
+            unit_a,
+            unit_b,
+            unit_a_owner,
+            unit_b_owner,
+            reason,
+        });
     }
 
     /// Build an economy sample for one player from current game state.
@@ -350,6 +381,7 @@ impl GameLog {
                         ));
                     }
                 }
+                GameEvent::EngagementEnded { .. } => {}
                 GameEvent::SettlementFounded { tick, player, pos } => {
                     let pid = *player as usize;
                     if pid < num_players {

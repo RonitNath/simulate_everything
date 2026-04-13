@@ -20,6 +20,26 @@ use slotmap::Key;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
+fn record_engagement_end(
+    state: &mut GameState,
+    unit_public_id: u32,
+    unit_owner: u8,
+    enemy_public_id: u32,
+    enemy_owner: u8,
+    reason: super::gamelog::EngagementEndReason,
+) {
+    if let Some(log) = &mut state.game_log {
+        log.record_engagement_ended(
+            state.tick,
+            unit_public_id,
+            enemy_public_id,
+            unit_owner,
+            enemy_owner,
+            reason,
+        );
+    }
+}
+
 pub fn tick(state: &mut GameState) {
     #[cfg(debug_assertions)]
     if state.tick_accumulator.is_none() {
@@ -1268,6 +1288,7 @@ fn rout_weakened_units(state: &mut GameState) {
 
     for (unit_id, owner, pos) in routers {
         let engagements: Vec<_> = state.units[unit_id].engagements.clone();
+        let unit_public_id = state.units[unit_id].public_id;
         // Rout penalty: 10% of current strength (lighter than voluntary disengage at 30%)
         state.units[unit_id].strength *= 0.9;
         state.units[unit_id].engagements.clear();
@@ -1285,6 +1306,20 @@ fn rout_weakened_units(state: &mut GameState) {
 
         for eng in &engagements {
             let opposite_edge = (eng.edge + 3) % 6;
+            let enemy_meta = state
+                .units
+                .get(eng.enemy_id)
+                .map(|enemy| (enemy.public_id, enemy.owner));
+            if let Some((enemy_public_id, enemy_owner)) = enemy_meta {
+                record_engagement_end(
+                    state,
+                    unit_public_id,
+                    owner,
+                    enemy_public_id,
+                    enemy_owner,
+                    super::gamelog::EngagementEndReason::Rout,
+                );
+            }
             if let Some(enemy) = state.units.get_mut(eng.enemy_id) {
                 enemy
                     .engagements
@@ -1350,6 +1385,35 @@ fn cleanup(state: &mut GameState) {
             .filter(|(_, u)| u.owner == pid)
             .map(|(key, _)| key)
             .collect();
+        let elimination_pairs: Vec<_> = state
+            .units
+            .iter()
+            .filter(|(_, u)| u.owner == pid)
+            .flat_map(|(_, unit)| {
+                unit.engagements
+                    .iter()
+                    .filter_map(|eng| {
+                        state.units.get(eng.enemy_id).map(|enemy| {
+                            (
+                                unit.public_id,
+                                unit.owner,
+                                enemy.public_id,
+                                enemy.owner,
+                            )
+                        })
+                    })
+            })
+            .collect();
+        for (unit_public_id, unit_owner, enemy_public_id, enemy_owner) in elimination_pairs {
+            record_engagement_end(
+                state,
+                unit_public_id,
+                unit_owner,
+                enemy_public_id,
+                enemy_owner,
+                super::gamelog::EngagementEndReason::PlayerEliminated,
+            );
+        }
         state.units.retain(|_, u| u.owner != pid);
         state.population.retain(|_, p| p.owner != pid);
         #[cfg(debug_assertions)]
@@ -1423,6 +1487,39 @@ fn refresh_player_totals(state: &mut GameState) {
 
 fn cleanup_stale_engagements(state: &mut GameState) {
     let unit_positions: HashMap<_, _> = state.units.iter().map(|(key, u)| (key, u.pos)).collect();
+    let mut stale_pairs = Vec::new();
+    for (_unit_id, unit) in state.units.iter() {
+        for engagement in &unit.engagements {
+            let is_stale = match unit_positions.get(&engagement.enemy_id) {
+                None => true,
+                Some(&enemy_pos) => hex::shared_edge(unit.pos, enemy_pos).is_none(),
+            };
+            if !is_stale {
+                continue;
+            }
+            let Some(enemy) = state.units.get(engagement.enemy_id) else {
+                continue;
+            };
+            let pair = if unit.public_id <= enemy.public_id {
+                (unit.public_id, unit.owner, enemy.public_id, enemy.owner)
+            } else {
+                (enemy.public_id, enemy.owner, unit.public_id, unit.owner)
+            };
+            if !stale_pairs.contains(&pair) {
+                stale_pairs.push(pair);
+            }
+        }
+    }
+    for (unit_public_id, unit_owner, enemy_public_id, enemy_owner) in stale_pairs {
+        record_engagement_end(
+            state,
+            unit_public_id,
+            unit_owner,
+            enemy_public_id,
+            enemy_owner,
+            super::gamelog::EngagementEndReason::Stale,
+        );
+    }
 
     for (_, unit) in &mut state.units {
         unit.engagements

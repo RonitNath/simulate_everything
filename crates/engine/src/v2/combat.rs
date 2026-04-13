@@ -2,8 +2,35 @@ use slotmap::Key;
 use std::collections::HashMap;
 
 use super::hex;
+use super::gamelog::EngagementEndReason;
 use super::state::{GameState, UnitKey};
 use super::{DAMAGE_RATE, DISENGAGE_PENALTY};
+
+fn record_engagement_end(
+    state: &mut GameState,
+    unit_id: UnitKey,
+    enemy_id: UnitKey,
+    reason: EngagementEndReason,
+) {
+    let Some(unit) = state.units.get(unit_id) else {
+        return;
+    };
+    let Some(enemy) = state.units.get(enemy_id) else {
+        return;
+    };
+    let (unit_public_id, unit_owner) = (unit.public_id, unit.owner);
+    let (enemy_public_id, enemy_owner) = (enemy.public_id, enemy.owner);
+    if let Some(log) = &mut state.game_log {
+        log.record_engagement_ended(
+            state.tick,
+            unit_public_id,
+            enemy_public_id,
+            unit_owner,
+            enemy_owner,
+            reason,
+        );
+    }
+}
 
 /// Engage unit `attacker_id` with `target_id`. Both must be adjacent and the shared
 /// edge must be free on both units. Returns true if engagement was created.
@@ -98,6 +125,7 @@ pub fn disengage_edge(state: &mut GameState, unit_id: UnitKey, edge: u8) -> bool
 
     state.units[unit_id].strength *= 1.0 - DISENGAGE_PENALTY;
 
+    record_engagement_end(state, unit_id, enemy_id, EngagementEndReason::DisengageEdge);
     state.units[unit_id].engagements.remove(engagement_pos);
 
     if let Some(enemy) = state.units.get_mut(enemy_id) {
@@ -124,6 +152,9 @@ pub fn disengage_all(state: &mut GameState, unit_id: UnitKey) -> bool {
 
     let engagements: Vec<_> = state.units[unit_id].engagements.clone();
 
+    for eng in &engagements {
+        record_engagement_end(state, unit_id, eng.enemy_id, EngagementEndReason::DisengageAll);
+    }
     state.units[unit_id].engagements.clear();
 
     for eng in &engagements {
@@ -186,6 +217,29 @@ pub fn cleanup_engagements(state: &mut GameState) {
         .map(|(id, _)| id)
         .collect();
 
+    let mut stale_pairs = Vec::new();
+    for (unit_id, unit) in state.units.iter() {
+        for engagement in &unit.engagements {
+            if !dead_ids.contains(&engagement.enemy_id) {
+                continue;
+            }
+            let Some(enemy) = state.units.get(engagement.enemy_id) else {
+                continue;
+            };
+            let pair = if unit.public_id <= enemy.public_id {
+                (unit_id, engagement.enemy_id)
+            } else {
+                (engagement.enemy_id, unit_id)
+            };
+            if !stale_pairs.contains(&pair) {
+                stale_pairs.push(pair);
+            }
+        }
+    }
+    for (unit_id, enemy_id) in stale_pairs {
+        record_engagement_end(state, unit_id, enemy_id, EngagementEndReason::Death);
+    }
+
     for (_, unit) in &mut state.units {
         unit.engagements.retain(|e| !dead_ids.contains(&e.enemy_id));
     }
@@ -194,6 +248,7 @@ pub fn cleanup_engagements(state: &mut GameState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::v2::gamelog::{EngagementEndReason, GameEvent, GameLog};
     use crate::v2::INITIAL_STRENGTH;
     use crate::v2::hex::Axial;
     use crate::v2::spatial::SpatialIndex;
@@ -466,6 +521,7 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
+        state.game_log = Some(GameLog::new());
         let a = unit_key(&state, 1);
         let b = unit_key(&state, 2);
         engage(&mut state, a, b);
@@ -484,6 +540,19 @@ mod tests {
         let b = unit_ref(&state, 2);
         assert!(b.engagements.is_empty()); // opponent freed too
         assert!((b.strength - 100.0).abs() < 0.01); // opponent not penalized
+        assert!(state.game_log.as_ref().is_some_and(|log| {
+            log.events.iter().any(|event| {
+                matches!(
+                    event,
+                    GameEvent::EngagementEnded {
+                        unit_a,
+                        unit_b,
+                        reason: EngagementEndReason::DisengageEdge,
+                        ..
+                    } if (*unit_a, *unit_b) == (1, 2)
+                )
+            })
+        }));
     }
 
     #[test]
@@ -550,6 +619,7 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
+        state.game_log = Some(GameLog::new());
         let a = unit_key(&state, 1);
         let b = unit_key(&state, 2);
         engage(&mut state, a, b);
@@ -562,5 +632,18 @@ mod tests {
 
         let b = unit_ref(&state, 2);
         assert!(b.engagements.is_empty());
+        assert!(state.game_log.as_ref().is_some_and(|log| {
+            log.events.iter().any(|event| {
+                matches!(
+                    event,
+                    GameEvent::EngagementEnded {
+                        unit_a,
+                        unit_b,
+                        reason: EngagementEndReason::Death,
+                        ..
+                    } if (*unit_a, *unit_b) == (1, 2)
+                )
+            })
+        }));
     }
 }

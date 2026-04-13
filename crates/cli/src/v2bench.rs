@@ -315,6 +315,38 @@ impl V2MatchupStats {
     }
 }
 
+const LONG_ENGAGEMENT_THRESHOLD_TICKS: u64 = 100;
+const LONG_DUEL_SAMPLE_RATIO: f64 = 0.8;
+
+#[derive(Debug, Clone)]
+struct ActiveEngagement {
+    unit_a: u32,
+    unit_b: u32,
+    unit_a_owner: u8,
+    unit_b_owner: u8,
+    start_tick: u64,
+}
+
+#[derive(Debug, Clone)]
+struct EngagementInterval {
+    unit_a: u32,
+    unit_b: u32,
+    unit_a_owner: u8,
+    unit_b_owner: u8,
+    start_tick: u64,
+    end_tick: u64,
+    end_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct EngagementAnalysis {
+    interval: EngagementInterval,
+    sample_count: u64,
+    isolated_sample_count: u64,
+    isolated_duel: bool,
+    approx_location: Option<(i32, i32)>,
+}
+
 // ---------------------------------------------------------------------------
 // Fixed-seed mode
 // ---------------------------------------------------------------------------
@@ -464,7 +496,161 @@ fn run_convergence(
 }
 
 // ---------------------------------------------------------------------------
-// Diagnose mode: 4 automated behavioral health checks
+// Engagement analysis
+// ---------------------------------------------------------------------------
+
+fn canonical_pair(unit_a: u32, unit_b: u32) -> (u32, u32) {
+    if unit_a <= unit_b {
+        (unit_a, unit_b)
+    } else {
+        (unit_b, unit_a)
+    }
+}
+
+fn end_reason_label(reason: simulate_everything_engine::v2::gamelog::EngagementEndReason) -> &'static str {
+    use simulate_everything_engine::v2::gamelog::EngagementEndReason;
+
+    match reason {
+        EngagementEndReason::DisengageEdge => "disengage_edge",
+        EngagementEndReason::DisengageAll => "disengage_all",
+        EngagementEndReason::Rout => "rout",
+        EngagementEndReason::Death => "death",
+        EngagementEndReason::PlayerEliminated => "player_eliminated",
+        EngagementEndReason::Stale => "stale",
+    }
+}
+
+fn analyze_engagements(
+    log: &simulate_everything_engine::v2::gamelog::GameLog,
+    final_tick: u64,
+) -> Vec<EngagementAnalysis> {
+    use simulate_everything_engine::v2::gamelog::GameEvent;
+
+    let mut active: HashMap<(u32, u32), ActiveEngagement> = HashMap::new();
+    let mut intervals = Vec::new();
+
+    for event in &log.events {
+        match event {
+            GameEvent::EngagementCreated {
+                tick,
+                attacker,
+                target,
+                attacker_owner,
+                target_owner,
+            } => {
+                let (unit_a, unit_b) = canonical_pair(*attacker, *target);
+                active.entry((unit_a, unit_b)).or_insert_with(|| {
+                    let (unit_a_owner, unit_b_owner) = if unit_a == *attacker {
+                        (*attacker_owner, *target_owner)
+                    } else {
+                        (*target_owner, *attacker_owner)
+                    };
+                    ActiveEngagement {
+                        unit_a,
+                        unit_b,
+                        unit_a_owner,
+                        unit_b_owner,
+                        start_tick: *tick,
+                    }
+                });
+            }
+            GameEvent::EngagementEnded {
+                tick,
+                unit_a,
+                unit_b,
+                reason,
+                ..
+            } => {
+                let pair = canonical_pair(*unit_a, *unit_b);
+                if let Some(active_interval) = active.remove(&pair) {
+                    intervals.push(EngagementInterval {
+                        unit_a: active_interval.unit_a,
+                        unit_b: active_interval.unit_b,
+                        unit_a_owner: active_interval.unit_a_owner,
+                        unit_b_owner: active_interval.unit_b_owner,
+                        start_tick: active_interval.start_tick,
+                        end_tick: *tick,
+                        end_reason: Some(end_reason_label(*reason).to_string()),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    intervals.extend(active.into_values().map(|open| EngagementInterval {
+        unit_a: open.unit_a,
+        unit_b: open.unit_b,
+        unit_a_owner: open.unit_a_owner,
+        unit_b_owner: open.unit_b_owner,
+        start_tick: open.start_tick,
+        end_tick: final_tick,
+        end_reason: None,
+    }));
+
+    intervals.sort_by_key(|interval| (interval.start_tick, interval.unit_a, interval.unit_b));
+
+    intervals
+        .into_iter()
+        .map(|interval| {
+            let midpoint = interval.start_tick + (interval.end_tick - interval.start_tick) / 2;
+            let relevant_samples: Vec<_> = log
+                .unit_positions
+                .iter()
+                .filter(|sample| {
+                    sample.tick >= interval.start_tick
+                        && sample.tick <= interval.end_tick
+                        && (sample.unit_id == interval.unit_a || sample.unit_id == interval.unit_b)
+                })
+                .collect();
+            let mut grouped: HashMap<u64, Vec<&simulate_everything_engine::v2::gamelog::UnitPositionSample>> =
+                HashMap::new();
+            for sample in relevant_samples {
+                grouped.entry(sample.tick).or_default().push(sample);
+            }
+
+            let mut sample_count = 0u64;
+            let mut isolated_sample_count = 0u64;
+            let mut approx_location = None;
+            let mut best_location_distance = u64::MAX;
+
+            for (tick, pair_samples) in grouped {
+                if pair_samples.len() != 2 {
+                    continue;
+                }
+                sample_count += 1;
+                let a = pair_samples.iter().find(|sample| sample.unit_id == interval.unit_a);
+                let b = pair_samples.iter().find(|sample| sample.unit_id == interval.unit_b);
+                let (Some(a), Some(b)) = (a, b) else {
+                    continue;
+                };
+                if a.engagement_count == 1 && b.engagement_count == 1 {
+                    isolated_sample_count += 1;
+                }
+
+                let tick_distance = tick.abs_diff(midpoint);
+                if tick_distance < best_location_distance {
+                    best_location_distance = tick_distance;
+                    approx_location = Some(((a.q + b.q) / 2, (a.r + b.r) / 2));
+                }
+            }
+
+            let isolated_duel = sample_count > 0
+                && (isolated_sample_count as f64 / sample_count as f64) >= LONG_DUEL_SAMPLE_RATIO;
+
+            EngagementAnalysis {
+                interval,
+                sample_count,
+                isolated_sample_count,
+                isolated_duel,
+                approx_location,
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Diagnose mode: 5 automated behavioral health checks
 // ---------------------------------------------------------------------------
 
 fn run_diagnose(
@@ -488,6 +674,9 @@ fn run_diagnose(
     let mut retreat_scores: Vec<f64> = Vec::new();
     let mut concentration_scores: Vec<f64> = Vec::new();
     let mut production_ticks: Vec<u64> = Vec::new();
+    let mut long_engagement_counts: Vec<f64> = Vec::new();
+    let mut isolated_long_duel_counts: Vec<f64> = Vec::new();
+    let mut longest_engagement_ticks: Vec<u64> = Vec::new();
 
     for &seed in seeds {
         let mut state = v2_mapgen::generate(&V2MapConfig {
@@ -517,6 +706,33 @@ fn run_diagnose(
                 concentration_scores.push(s);
             }
             check_production_speed(&log, num_players, &mut production_ticks);
+            let analyses = analyze_engagements(&log, state.tick);
+            let long_engagements: Vec<_> = analyses
+                .iter()
+                .filter(|analysis| {
+                    analysis.interval.end_tick.saturating_sub(analysis.interval.start_tick)
+                        >= LONG_ENGAGEMENT_THRESHOLD_TICKS
+                })
+                .collect();
+            long_engagement_counts.push(long_engagements.len() as f64);
+            isolated_long_duel_counts.push(
+                long_engagements
+                    .iter()
+                    .filter(|analysis| analysis.isolated_duel)
+                    .count() as f64,
+            );
+            if let Some(longest) = analyses
+                .iter()
+                .map(|analysis| {
+                    analysis
+                        .interval
+                        .end_tick
+                        .saturating_sub(analysis.interval.start_tick)
+                })
+                .max()
+            {
+                longest_engagement_ticks.push(longest);
+            }
         }
     }
 
@@ -539,6 +755,9 @@ fn run_diagnose(
     let retreat_avg = avg(&retreat_scores);
     let concentration_avg = avg(&concentration_scores);
     let production_avg = avg_tick(&production_ticks);
+    let long_engagement_avg = avg(&long_engagement_counts);
+    let isolated_long_duel_avg = avg(&isolated_long_duel_counts);
+    let longest_engagement_avg = avg_tick(&longest_engagement_ticks);
 
     eprintln!("--- CHECK 1: Spatial Diversity (target >= 4.0 distinct hexes) ---");
     match spatial_avg {
@@ -577,6 +796,28 @@ fn run_diagnose(
             eprintln!("  avg tick of first unit produced: {:.1}  [{}]", v, status);
         }
         None => eprintln!("  no units produced observed"),
+    }
+
+    eprintln!(
+        "\n--- CHECK 5: Long Engagement Rate (target 0 isolated duels, <=1 long engagement/game) ---"
+    );
+    match (
+        long_engagement_avg,
+        isolated_long_duel_avg,
+        longest_engagement_avg,
+    ) {
+        (Some(long_avg), Some(duel_avg), Some(longest_avg)) => {
+            let status = if duel_avg == 0.0 && long_avg <= 1.0 {
+                "PASS"
+            } else {
+                "FAIL"
+            };
+            eprintln!(
+                "  avg long engagements/game: {:.2}, isolated long duels/game: {:.2}, avg longest duration: {:.1} ticks  [{}]",
+                long_avg, duel_avg, longest_avg, status
+            );
+        }
+        _ => eprintln!("  no engagement duration data"),
     }
 
     eprintln!();
@@ -746,6 +987,53 @@ fn check_production_speed(
     }
 }
 
+fn print_long_engagements(analyses: &[EngagementAnalysis]) {
+    let mut ranked: Vec<_> = analyses.iter().collect();
+    ranked.sort_by_key(|analysis| {
+        std::cmp::Reverse(
+            analysis
+                .interval
+                .end_tick
+                .saturating_sub(analysis.interval.start_tick),
+        )
+    });
+
+    println!("\n--- LONGEST ENGAGEMENTS ---");
+    if ranked.is_empty() {
+        println!("no engagements observed");
+        return;
+    }
+
+    for analysis in ranked.into_iter().take(3) {
+        let duration = analysis
+            .interval
+            .end_tick
+            .saturating_sub(analysis.interval.start_tick);
+        let location = analysis
+            .approx_location
+            .map(|(q, r)| format!("({}, {})", q, r))
+            .unwrap_or_else(|| "unknown".to_string());
+        let reason = analysis
+            .interval
+            .end_reason
+            .as_deref()
+            .unwrap_or("game_end");
+        println!(
+            "P{}:{} vs P{}:{} for {} ticks at {} [{}; isolated_duel={}; samples={}/{}]",
+            analysis.interval.unit_a_owner,
+            analysis.interval.unit_a,
+            analysis.interval.unit_b_owner,
+            analysis.interval.unit_b,
+            duration,
+            location,
+            reason,
+            if analysis.isolated_duel { "yes" } else { "no" },
+            analysis.isolated_sample_count,
+            analysis.sample_count,
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Postmortem mode (single game, full analysis)
 // ---------------------------------------------------------------------------
@@ -781,7 +1069,9 @@ fn run_postmortem_game(
 
     if let Some(log) = state.game_log.take() {
         let summary = log.summarize(&names, winner, state.tick, timed_out);
-        println!("{}", summary.render());
+        let analyses = analyze_engagements(&log, state.tick);
+        print!("{}", summary.render());
+        print_long_engagements(&analyses);
     }
 }
 
@@ -1581,6 +1871,105 @@ fn parse_size(s: &str) -> (usize, usize) {
         w.parse().expect("bad width"),
         h.parse().expect("bad height"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simulate_everything_engine::v2::gamelog::{
+        EngagementEndReason, GameEvent, GameLog, UnitPositionSample,
+    };
+    use simulate_everything_engine::v2::hex::Axial;
+
+    #[test]
+    fn analyze_engagements_reconstructs_and_classifies_isolated_duel() {
+        let mut log = GameLog::new();
+        log.events.push(GameEvent::EngagementCreated {
+            tick: 100,
+            attacker: 1,
+            target: 2,
+            attacker_owner: 0,
+            target_owner: 1,
+        });
+        log.events.push(GameEvent::EngagementEnded {
+            tick: 230,
+            unit_a: 1,
+            unit_b: 2,
+            unit_a_owner: 0,
+            unit_b_owner: 1,
+            reason: EngagementEndReason::Death,
+        });
+        for tick in [100_u64, 150, 200, 230] {
+            log.unit_positions.push(UnitPositionSample {
+                tick,
+                player: 0,
+                unit_id: 1,
+                q: 5,
+                r: 6,
+                strength: 80.0,
+                engaged: true,
+                engagement_count: 1,
+            });
+            log.unit_positions.push(UnitPositionSample {
+                tick,
+                player: 1,
+                unit_id: 2,
+                q: 6,
+                r: 6,
+                strength: 75.0,
+                engaged: true,
+                engagement_count: 1,
+            });
+        }
+
+        let analyses = analyze_engagements(&log, 300);
+        assert_eq!(analyses.len(), 1);
+        let analysis = &analyses[0];
+        assert_eq!(analysis.interval.start_tick, 100);
+        assert_eq!(analysis.interval.end_tick, 230);
+        assert!(analysis.isolated_duel);
+        assert_eq!(analysis.approx_location, Some((5, 6)));
+    }
+
+    #[test]
+    fn analyze_engagements_closes_open_interval_at_final_tick() {
+        let mut log = GameLog::new();
+        log.events.push(GameEvent::EngagementCreated {
+            tick: 40,
+            attacker: 7,
+            target: 3,
+            attacker_owner: 1,
+            target_owner: 0,
+        });
+        log.unit_positions.push(UnitPositionSample {
+            tick: 50,
+            player: 0,
+            unit_id: 3,
+            q: Axial::new(2, 2).q,
+            r: Axial::new(2, 2).r,
+            strength: 90.0,
+            engaged: true,
+            engagement_count: 2,
+        });
+        log.unit_positions.push(UnitPositionSample {
+            tick: 50,
+            player: 1,
+            unit_id: 7,
+            q: Axial::new(3, 2).q,
+            r: Axial::new(3, 2).r,
+            strength: 95.0,
+            engaged: true,
+            engagement_count: 1,
+        });
+
+        let analyses = analyze_engagements(&log, 120);
+        assert_eq!(analyses.len(), 1);
+        let analysis = &analyses[0];
+        assert_eq!(analysis.interval.start_tick, 40);
+        assert_eq!(analysis.interval.end_tick, 120);
+        assert_eq!(analysis.interval.end_reason, None);
+        assert!(!analysis.isolated_duel);
+    }
 }
 
 fn wilson_ci(successes: u64, total: u64) -> (f64, f64) {
