@@ -16,4 +16,5 @@ docs/research/private/
 # Generated artifacts
 replays/
 docker/replays/
+var/
 *.png
