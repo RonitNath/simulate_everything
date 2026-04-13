@@ -190,17 +190,27 @@ fn manage_infrastructure(state: &mut GameState, player_id: u8) {
 // ---------------------------------------------------------------------------
 
 fn manage_auto_settlers(state: &mut GameState, player_id: u8) {
-    let city_hexes: Vec<Axial> = state
+    // Villages and Cities can dispatch settlers once they have enough population headroom.
+    let eligible: Vec<(Axial, SettlementType)> = state
         .settlements
         .values()
-        .filter(|s| s.owner == player_id && s.settlement_type == SettlementType::City)
-        .map(|s| s.hex)
+        .filter(|s| {
+            s.owner == player_id
+                && matches!(s.settlement_type, SettlementType::Village | SettlementType::City)
+        })
+        .map(|s| (s.hex, s.settlement_type))
         .collect();
 
-    for city_hex in city_hexes {
-        let city_pop = state.population_on_hex(player_id, city_hex);
-        // Only dispatch if city has headroom above settler cost.
-        if city_pop < CITY_THRESHOLD + SETTLER_CONVOY_SIZE + 5 {
+    for (city_hex, stype) in eligible {
+        let pop = state.population_on_hex(player_id, city_hex);
+        // Villages need 25 pop (10 threshold + 10 settlers + 5 buffer)
+        // Cities need 40 pop (30 threshold + 10 settlers + 0 buffer — cities grow fast)
+        let min_pop = match stype {
+            SettlementType::Village => super::VILLAGE_THRESHOLD + SETTLER_CONVOY_SIZE + 5,
+            SettlementType::City => CITY_THRESHOLD + SETTLER_CONVOY_SIZE,
+            _ => unreachable!(),
+        };
+        if pop < min_pop {
             continue;
         }
 
