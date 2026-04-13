@@ -1,8 +1,16 @@
-import { Component, createSignal, createEffect, createMemo, onCleanup, Show, For, batch } from "solid-js";
+import { Component, createEffect, createMemo, createSignal, For, onCleanup, Show, batch } from "solid-js";
 import HexBoard from "./HexBoard";
 import type { RenderLayer } from "./HexBoard";
 import Nav from "./Nav";
-import type { V2Frame, V2GameInfo, BoardStaticData, BoardFrameData, V2ScoreSnapshot } from "./v2types";
+import type {
+  BoardFrameData,
+  BoardStaticData,
+  V2Frame,
+  V2GameInfo,
+  V2HexDelta,
+  V2Settlement,
+  V2SpectatorPlayer,
+} from "./v2types";
 import { normalizeGameInfoStatic, normalizeWsFrame } from "./v2types";
 import * as styles from "./styles/app.css";
 
@@ -25,7 +33,63 @@ const SPEED_PRESETS = [
   { label: "Max", ms: 10 },
 ];
 
-const ALL_LAYERS: RenderLayer[] = ["territory", "roads", "depots", "settlements", "convoys", "destinations"];
+const ALL_LAYERS: RenderLayer[] = ["territory", "roads", "settlements", "convoys", "destinations"];
+
+function emptyFrame(game: V2GameInfo, tick: number): V2Frame {
+  const cellCount = game.width * game.height;
+  return {
+    tick,
+    units: [],
+    convoys: [],
+    territory: Array.from({ length: cellCount }, () => null),
+    roads: Array.from({ length: cellCount }, () => 0),
+    depots: Array.from({ length: cellCount }, () => false),
+    population: [],
+    engagements: [],
+    hex_ownership: Array.from({ length: cellCount }, () => null),
+    road_levels: Array.from({ length: cellCount }, () => 0),
+    settlements: [],
+    players: Array.from({ length: game.num_players }, (_, id) => ({
+      id,
+      alive: true,
+      population: 0,
+      territory: 0,
+      food_level: 0,
+      material_level: 0,
+    })),
+  };
+}
+
+function applyHexChanges(
+  frame: V2Frame,
+  hexChanges: V2HexDelta[],
+  width: number,
+): { territory: (number | null)[]; roads: number[]; settlements: V2Settlement[] } {
+  const territory = (frame.territory ?? frame.hex_ownership ?? []).slice();
+  const roads = (frame.roads ?? frame.road_levels ?? []).slice();
+  const settlementMap = new Map((frame.settlements ?? []).map((s) => [`${s.q},${s.r}`, s] as const));
+
+  for (const hex of hexChanges) {
+    territory[hex.index] = hex.owner;
+    roads[hex.index] = hex.road_level;
+    const row = Math.floor(hex.index / width);
+    const col = hex.index % width;
+    const q = col - Math.floor((row - (row & 1)) / 2);
+    const r = row;
+    const key = `${q},${r}`;
+    if (hex.has_settlement && hex.settlement_owner !== null) {
+      settlementMap.set(key, { q, r, owner: hex.settlement_owner });
+    } else {
+      settlementMap.delete(key);
+    }
+  }
+
+  return {
+    territory,
+    roads,
+    settlements: Array.from(settlementMap.values()),
+  };
+}
 
 const V2App: Component = () => {
   const [phase, setPhase] = createSignal<Phase>({ kind: "connecting" });
@@ -36,7 +100,7 @@ const V2App: Component = () => {
   const [showNumbers, setShowStrength] = createSignal(false);
   const [gameNumber, setGameNumber] = createSignal(0);
   const [layers, setLayers] = createSignal<Set<RenderLayer>>(
-    new Set(["territory", "roads", "depots", "settlements", "convoys"])
+    new Set(["territory", "roads", "settlements", "convoys"]),
   );
 
   let wsRef: WebSocket | null = null;
@@ -67,7 +131,7 @@ const V2App: Component = () => {
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
         switch (msg.type) {
-          case "v2_game_start": {
+          case "v2_init": {
             batch(() => {
               setFrames([]);
               setViewIdx(0);
@@ -80,43 +144,64 @@ const V2App: Component = () => {
                   height: msg.height,
                   terrain: msg.terrain ?? [],
                   material_map: msg.material_map ?? [],
-                  heights: msg.heights ?? [],
-                  moistures: msg.moistures ?? [],
-                  biomes: msg.biomes ?? [],
-                  rivers: msg.rivers ?? [],
-                  num_players: msg.num_players,
-                  agent_names: msg.agent_names,
+                  heights: msg.height_map ?? [],
+                  moistures: [],
+                  biomes: [],
+                  rivers: [],
+                  height_map: msg.height_map ?? [],
+                  region_ids: msg.region_ids ?? [],
+                  num_players: msg.player_count,
+                  agent_names: msg.agent_names ?? [],
                   game_number: msg.game_number ?? 0,
                 },
               });
             });
             break;
           }
-          case "v2_frame": {
-            const frame: V2Frame = {
-              tick: msg.tick,
-              units: msg.units ?? [],
-              player_food: msg.player_food ?? [],
-              player_material: msg.player_material ?? [],
-              alive: msg.alive ?? [],
-              territory: msg.territory ?? [],
-              roads: msg.roads ?? [],
-              depots: msg.depots ?? [],
-              population: msg.population ?? [],
-              convoys: msg.convoys ?? [],
-              scores: msg.scores ?? [],
-            };
-            setFrames((prev) => [...prev, frame]);
+          case "v2_snapshot": {
+            const game = gameInfo();
+            if (!game) break;
+            setFrames((prev) => {
+              const base = msg.full_state || prev.length === 0 ? emptyFrame(game, msg.tick) : prev[prev.length - 1];
+              const patched = applyHexChanges(base, msg.hex_changes ?? [], game.width);
+              const territory = patched.territory;
+              const roads = patched.roads;
+              const next: V2Frame = {
+                tick: msg.tick,
+                units: msg.units ?? [],
+                convoys: msg.convoys ?? [],
+                territory,
+                roads,
+                depots: Array.from({ length: territory.length }, () => false),
+                population: [],
+                engagements: msg.engagements ?? [],
+                hex_ownership: territory,
+                road_levels: roads,
+                settlements: msg.full_state ? (msg.settlements ?? []) : patched.settlements,
+                players: (msg.players ?? []) as V2SpectatorPlayer[],
+              };
+              return [...prev, next];
+            });
             break;
           }
           case "v2_game_end": {
             const p = phase();
             const game = (p.kind === "playing" || p.kind === "game_over")
-              ? (p as any).game as V2GameInfo
+              ? p.game
               : {
-                  width: 0, height: 0, terrain: [], material_map: [],
-                  heights: [], moistures: [], biomes: [], rivers: [],
-                  num_players: 0, agent_names: [], game_number: 0,
+                  width: 0,
+                  height: 0,
+                  terrain: [],
+                  material_map: [],
+                  heights: [],
+                  moistures: [],
+                  biomes: [],
+                  rivers: [],
+                  height_map: [],
+                  region_ids: [],
+                  num_players: 0,
+                  agent_names: [],
+                  game_number: 0,
                 };
             setPhase({
               kind: "game_over",
@@ -148,10 +233,13 @@ const V2App: Component = () => {
     }
 
     connect();
-    onCleanup(() => { dead = true; wsRef?.close(); wsRef = null; });
+    onCleanup(() => {
+      dead = true;
+      wsRef?.close();
+      wsRef = null;
+    });
   });
 
-  // Smooth playback: advance one frame per ~30fps tick when following
   createEffect(() => {
     if (!following()) return;
     const id = setInterval(() => {
@@ -170,9 +258,7 @@ const V2App: Component = () => {
 
   const gameInfo = (): V2GameInfo | null => {
     const p = phase();
-    if (p.kind === "playing" || p.kind === "game_over") {
-      return (p as any).game;
-    }
+    if (p.kind === "playing" || p.kind === "game_over") return p.game;
     return null;
   };
 
@@ -186,43 +272,32 @@ const V2App: Component = () => {
     return f ? normalizeWsFrame(f) : null;
   });
 
-  // Per-player stats derived from current frame
   const playerStats = () => {
-    const f = currentFrame();
-    const g = gameInfo();
-    if (!f || !g) return [];
-    return Array.from({ length: g.num_players }, (_, i) => {
-      const pops = f.population.filter(p => p.owner === i);
-      const totalPop = pops.reduce((s, p) => s + p.count, 0);
-      const farmers = pops.filter(p => p.role === "Farmer").reduce((s, p) => s + p.count, 0);
-      const workers = pops.filter(p => p.role === "Worker").reduce((s, p) => s + p.count, 0);
-      const soldiers = pops.filter(p => p.role === "Soldier").reduce((s, p) => s + p.count, 0);
-      const territoryCount = f.territory.filter(t => t === i).length;
-      const hexPops = new Map<string, number>();
-      for (const p of pops) {
-        const key = `${p.q},${p.r}`;
-        hexPops.set(key, (hexPops.get(key) ?? 0) + p.count);
-      }
-      const settlements = [...hexPops.values()].filter(c => c >= 10).length;
-      const convoyCount = f.convoys.filter(c => c.owner === i).length;
-      const score: V2ScoreSnapshot | undefined = f.scores.find(s => s.player_id === i);
+    const frame = currentFrame();
+    const game = gameInfo();
+    if (!frame || !game) return [];
+    return Array.from({ length: game.num_players }, (_, id) => {
+      const player = frame.players?.find((entry) => entry.id === id);
       return {
-        id: i,
-        units: f.units.filter(u => u.owner === i).length,
-        food: f.player_food[i] ?? 0,
-        material: f.player_material[i] ?? 0,
-        alive: f.alive[i] ?? false,
-        totalPop, farmers, workers, soldiers,
-        territoryCount, settlements, convoyCount,
-        score,
+        id,
+        alive: player?.alive ?? false,
+        units: frame.units.filter((u) => u.owner === id).length,
+        convoys: frame.convoys.filter((c) => c.owner === id).length,
+        population: player?.population ?? 0,
+        territory: player?.territory ?? 0,
+        foodLevel: player?.food_level ?? 0,
+        materialLevel: player?.material_level ?? 0,
       };
     });
   };
 
-  const toggleLayer = (l: RenderLayer) => {
-    const s = new Set(layers());
-    if (s.has(l)) s.delete(l); else s.add(l);
-    setLayers(s);
+  const levelLabel = (level: number) => ["starving", "low", "ok", "surplus"][level] ?? "unknown";
+
+  const toggleLayer = (layer: RenderLayer) => {
+    const next = new Set(layers());
+    if (next.has(layer)) next.delete(layer);
+    else next.add(layer);
+    setLayers(next);
   };
 
   return (
@@ -235,7 +310,7 @@ const V2App: Component = () => {
             {(g) => <>Game #{gameNumber()} &middot; {g().width}x{g().height} hex &middot; {g().num_players} players</>}
           </Show>
           <Show when={phase().kind === "game_over"}>
-            {" "}&middot; {((phase() as any).timedOut ? "Timeout" : "Winner")}: {gameInfo()?.agent_names[(phase() as any).winner] ?? "draw"}
+            {" "}&middot; {((phase() as { timedOut: boolean }).timedOut ? "Timeout" : "Winner")}: {gameInfo()?.agent_names[(phase() as { winner: number | null }).winner ?? -1] ?? "draw"}
           </Show>
         </span>
       </div>
@@ -292,13 +367,13 @@ const V2App: Component = () => {
             {showNumbers() ? "#" : "#\u0338"}
           </button>
           <For each={ALL_LAYERS}>
-            {(l) => (
+            {(layer) => (
               <button
                 class={styles.btn}
-                style={{ "font-size": "10px", padding: "2px 6px", "font-weight": layers().has(l) ? "bold" : "normal" }}
-                onClick={() => toggleLayer(l)}
+                style={{ "font-size": "10px", padding: "2px 6px", "font-weight": layers().has(layer) ? "bold" : "normal" }}
+                onClick={() => toggleLayer(layer)}
               >
-                {l[0].toUpperCase()}
+                {layer[0].toUpperCase()}
               </button>
             )}
           </For>
@@ -322,32 +397,22 @@ const V2App: Component = () => {
                   <div class={`${styles.playerPanel} ${!stat.alive ? styles.eliminated : ""}`}>
                     <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
                       <div class={styles.playerDot} style={{ background: PLAYER_COLORS[stat.id % PLAYER_COLORS.length] }} />
-                      <span>{gameInfo()!.agent_names[stat.id]}</span>
-                    </div>
-                    <Show when={stat.score}>
-                      {(sc) => (
-                        <div class={styles.scoreBar}>
-                          <div style={{ flex: sc().population * 4, background: "#4ac0c0" }} />
-                          <div style={{ flex: sc().territory * 3, background: "#4a80ff" }} />
-                          <div style={{ flex: sc().military * 2, background: "#ff4a6a" }} />
-                          <div style={{ flex: sc().stockpiles * 1, background: "#ffa04a" }} />
-                        </div>
-                      )}
-                    </Show>
-                    <div class={styles.statRow}>
-                      <span class={styles.statValue}>{stat.units} units &middot; {stat.food.toFixed(0)} food / {stat.material.toFixed(0)} mat</span>
+                      <span>{gameInfo()!.agent_names[stat.id] ?? `Player ${stat.id + 1}`}</span>
                     </div>
                     <div class={styles.statRow}>
-                      <span class={styles.statValue}>{stat.totalPop} pop &middot; {stat.farmers}F {stat.workers}W {stat.soldiers}S</span>
+                      <span class={styles.statValue}>{stat.units} units &middot; {stat.convoys} convoys</span>
                     </div>
                     <div class={styles.statRow}>
-                      <span class={styles.statValue}>{stat.territoryCount} hexes &middot; {stat.settlements} settlements &middot; {stat.convoyCount} convoys</span>
+                      <span class={styles.statValue}>{stat.population} pop &middot; {stat.territory} hexes</span>
+                    </div>
+                    <div class={styles.statRow}>
+                      <span class={styles.statValue}>Food {levelLabel(stat.foodLevel)} &middot; Material {levelLabel(stat.materialLevel)}</span>
                     </div>
                   </div>
                 )}
               </For>
             </div>
-            {/* Legend */}
+
             <div class={styles.legend}>
               <div class={styles.legendTitle}>Legend</div>
               <div class={styles.legendGrid}>
@@ -355,14 +420,10 @@ const V2App: Component = () => {
                 <span>Convoy (F/M/S)</span>
                 <svg width="14" height="14"><polygon points="7,2 3,12 11,12" fill="rgba(74,158,255,0.9)" stroke="#fff" stroke-width="0.5" /></svg>
                 <span>Settlement</span>
-                <svg width="14" height="14"><rect x="3" y="3" width="8" height="8" fill="#c0a000" stroke="#8a7200" stroke-width="0.5" /></svg>
-                <span>Depot</span>
                 <svg width="14" height="14"><line x1="3" y1="7" x2="11" y2="7" stroke="rgba(200,200,180,0.6)" stroke-width="2" /><line x1="7" y1="3" x2="7" y2="11" stroke="rgba(200,200,180,0.6)" stroke-width="2" /></svg>
                 <span>Road</span>
                 <svg width="14" height="14"><text x="7" y="11" text-anchor="middle" font-size="12" fill="#ffd700">★</text></svg>
                 <span>General</span>
-                <svg width="14" height="14"><line x1="1" y1="7" x2="13" y2="7" stroke="#ff6644" stroke-width="3" stroke-linecap="round" /></svg>
-                <span>Combat edge</span>
               </div>
               <div class={styles.legendTitle} style={{ "margin-top": "6px" }}>Unit status</div>
               <div class={styles.legendGrid}>
@@ -372,17 +433,6 @@ const V2App: Component = () => {
                 <span>Moving</span>
                 <span style={{ color: "#aaa", "font-weight": "bold", "text-align": "center" }}>◷</span>
                 <span>Cooldown</span>
-              </div>
-              <div class={styles.legendTitle} style={{ "margin-top": "6px" }}>Score bar</div>
-              <div class={styles.legendGrid}>
-                <div style={{ width: "14px", height: "10px", background: "#4ac0c0", "border-radius": "2px" }} />
-                <span>Population</span>
-                <div style={{ width: "14px", height: "10px", background: "#4a80ff", "border-radius": "2px" }} />
-                <span>Territory</span>
-                <div style={{ width: "14px", height: "10px", background: "#ff4a6a", "border-radius": "2px" }} />
-                <span>Military</span>
-                <div style={{ width: "14px", height: "10px", background: "#ffa04a", "border-radius": "2px" }} />
-                <span>Stockpiles</span>
               </div>
             </div>
           </div>

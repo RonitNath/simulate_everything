@@ -7,7 +7,7 @@ use super::state::GameState;
 pub fn visible_cells(state: &GameState, player_id: u8) -> Vec<bool> {
     let mut visible = vec![false; state.width * state.height];
 
-    for unit in state.units.iter().filter(|u| u.owner == player_id) {
+    for unit in state.units.values().filter(|u| u.owner == player_id) {
         let vision_bonus = state
             .cell_at(unit.pos)
             .map(|c| if c.height > 0.7 { 1 } else { 0 })
@@ -46,7 +46,7 @@ mod tests {
     fn unit_own_cell_is_visible() {
         let state = test_state();
         let vis = visible_cells(&state, 0);
-        for unit in state.units.iter().filter(|u| u.owner == 0) {
+        for unit in state.units.values().filter(|u| u.owner == 0) {
             let (row, col) = axial_to_offset(unit.pos);
             assert!(
                 vis[row as usize * state.width + col as usize],
@@ -60,7 +60,7 @@ mod tests {
         let state = test_state();
         let vis = visible_cells(&state, 0);
         // For each owned unit, all cells within radius 3 that are in bounds should be visible
-        for unit in state.units.iter().filter(|u| u.owner == 0) {
+        for unit in state.units.values().filter(|u| u.owner == 0) {
             for ax in within_radius(unit.pos, VISION_RADIUS) {
                 let (row, col) = axial_to_offset(ax);
                 if row >= 0
@@ -94,7 +94,7 @@ mod tests {
     fn no_units_means_no_vision() {
         let mut state = test_state();
         // Remove all player 0 units
-        state.units.retain(|u| u.owner != 0);
+        state.units.retain(|_, u| u.owner != 0);
         let vis = visible_cells(&state, 0);
         assert!(vis.iter().all(|&v| !v), "no units should mean no vision");
     }

@@ -1,76 +1,65 @@
+use slotmap::Key;
 use std::collections::HashMap;
 
 use super::hex;
-use super::state::GameState;
+use super::state::{GameState, UnitKey};
 use super::{DAMAGE_RATE, DISENGAGE_PENALTY};
 
 /// Engage unit `attacker_id` with `target_id`. Both must be adjacent and the shared
 /// edge must be free on both units. Returns true if engagement was created.
-pub fn engage(state: &mut GameState, attacker_id: u32, target_id: u32) -> bool {
-    // Find unit indices
-    let attacker_idx = match state.units.iter().position(|u| u.id == attacker_id) {
-        Some(i) => i,
+pub fn engage(state: &mut GameState, attacker_id: UnitKey, target_id: UnitKey) -> bool {
+    let (attacker_owner, attacker_pos) = match state.units.get(attacker_id) {
+        Some(unit) => (unit.owner, unit.pos),
         None => return false,
     };
-    let target_idx = match state.units.iter().position(|u| u.id == target_id) {
-        Some(i) => i,
+    let target = match state.units.get(target_id) {
+        Some(unit) => unit,
         None => return false,
     };
-
-    // Must belong to different players
-    if state.units[attacker_idx].owner == state.units[target_idx].owner {
+    if attacker_owner == target.owner {
         return false;
     }
+    let target_pos = target.pos;
 
-    let attacker_pos = state.units[attacker_idx].pos;
-    let target_pos = state.units[target_idx].pos;
-
-    // Must be adjacent — shared_edge returns the edge index from attacker to target
     let edge = match hex::shared_edge(attacker_pos, target_pos) {
         Some(e) => e,
         None => return false,
     };
     let opposite_edge = (edge + 3) % 6;
-
-    // Neither unit may already be engaged on that edge
-    let attacker_edge_taken = state.units[attacker_idx]
+    let attacker_edge_taken = state.units[attacker_id]
         .engagements
         .iter()
         .any(|e| e.edge == edge);
-    let target_edge_taken = state.units[target_idx]
-        .engagements
-        .iter()
-        .any(|e| e.edge == opposite_edge);
+    let target_edge_taken = target.engagements.iter().any(|e| e.edge == opposite_edge);
 
     if attacker_edge_taken || target_edge_taken {
         return false;
     }
 
     // Create engagements on both sides
-    state.units[attacker_idx]
+    state.units[attacker_id]
         .engagements
         .push(super::state::Engagement {
             enemy_id: target_id,
             edge,
         });
-    state.units[target_idx]
+    state.units[target_id]
         .engagements
         .push(super::state::Engagement {
             enemy_id: attacker_id,
             edge: opposite_edge,
         });
 
-    // Engaged units cannot move
-    state.units[attacker_idx].destination = None;
-    state.units[target_idx].destination = None;
+    state.units[attacker_id].destination = None;
+    state.units[target_id].destination = None;
 
     tracing::debug!(
         tick = state.tick,
-        attacker = attacker_id,
-        target = target_id,
+        attacker = attacker_id.data().as_ffi(),
+        target = target_id.data().as_ffi(),
         edge,
-        attacker_owner = state.units[attacker_idx].owner,
-        target_owner = state.units[target_idx].owner,
+        attacker_owner = state.units[attacker_id].owner,
+        target_owner = state.units[target_id].owner,
         "engagement created"
     );
 
@@ -79,14 +68,8 @@ pub fn engage(state: &mut GameState, attacker_id: u32, target_id: u32) -> bool {
 
 /// Disengage unit from a specific edge. Costs 50% of current strength.
 /// Returns false if unit isn't engaged on that edge, or is surrounded (3+ edges).
-pub fn disengage_edge(state: &mut GameState, unit_id: u32, edge: u8) -> bool {
-    let unit_idx = match state.units.iter().position(|u| u.id == unit_id) {
-        Some(i) => i,
-        None => return false,
-    };
-
-    // Must be engaged on this specific edge
-    let engagement_pos = match state.units[unit_idx]
+pub fn disengage_edge(state: &mut GameState, unit_id: UnitKey, edge: u8) -> bool {
+    let engagement_pos = match state.units[unit_id]
         .engagements
         .iter()
         .position(|e| e.edge == edge)
@@ -96,22 +79,19 @@ pub fn disengage_edge(state: &mut GameState, unit_id: u32, edge: u8) -> bool {
     };
 
     // Surrounded (3+ engagements) cannot disengage
-    if state.units[unit_idx].engagements.len() >= 3 {
+    if state.units[unit_id].engagements.len() >= 3 {
         return false;
     }
 
-    let enemy_id = state.units[unit_idx].engagements[engagement_pos].enemy_id;
+    let enemy_id = state.units[unit_id].engagements[engagement_pos].enemy_id;
     let opposite_edge = (edge + 3) % 6;
 
-    // Apply 50% strength penalty to the disengaging unit
-    state.units[unit_idx].strength *= 1.0 - DISENGAGE_PENALTY;
+    state.units[unit_id].strength *= 1.0 - DISENGAGE_PENALTY;
 
-    // Remove this engagement from the unit
-    state.units[unit_idx].engagements.remove(engagement_pos);
+    state.units[unit_id].engagements.remove(engagement_pos);
 
-    // Find the opponent and remove their corresponding engagement
-    if let Some(enemy_idx) = state.units.iter().position(|u| u.id == enemy_id) {
-        state.units[enemy_idx]
+    if let Some(enemy) = state.units.get_mut(enemy_id) {
+        enemy
             .engagements
             .retain(|e| !(e.enemy_id == unit_id && e.edge == opposite_edge));
     }
@@ -121,35 +101,25 @@ pub fn disengage_edge(state: &mut GameState, unit_id: u32, edge: u8) -> bool {
 
 /// Disengage unit from ALL edges at once. Costs 50% of current strength total (not per-edge).
 /// Returns false if unit is surrounded (3+ edges engaged).
-pub fn disengage_all(state: &mut GameState, unit_id: u32) -> bool {
-    let unit_idx = match state.units.iter().position(|u| u.id == unit_id) {
-        Some(i) => i,
-        None => return false,
-    };
-
-    if state.units[unit_idx].engagements.is_empty() {
+pub fn disengage_all(state: &mut GameState, unit_id: UnitKey) -> bool {
+    if !state.units.contains_key(unit_id) || state.units[unit_id].engagements.is_empty() {
         return false;
     }
 
-    // Surrounded (3+ engagements) cannot disengage
-    if state.units[unit_idx].engagements.len() >= 3 {
+    if state.units[unit_id].engagements.len() >= 3 {
         return false;
     }
 
-    // Apply 50% strength penalty once
-    state.units[unit_idx].strength *= 1.0 - DISENGAGE_PENALTY;
+    state.units[unit_id].strength *= 1.0 - DISENGAGE_PENALTY;
 
-    // Collect all engagements to clean up opponents
-    let engagements: Vec<_> = state.units[unit_idx].engagements.clone();
+    let engagements: Vec<_> = state.units[unit_id].engagements.clone();
 
-    // Clear all engagements on this unit
-    state.units[unit_idx].engagements.clear();
+    state.units[unit_id].engagements.clear();
 
-    // Remove corresponding engagements from all opponents
     for eng in &engagements {
         let opposite_edge = (eng.edge + 3) % 6;
-        if let Some(enemy_idx) = state.units.iter().position(|u| u.id == eng.enemy_id) {
-            state.units[enemy_idx]
+        if let Some(enemy) = state.units.get_mut(eng.enemy_id) {
+            enemy
                 .engagements
                 .retain(|e| !(e.enemy_id == unit_id && e.edge == opposite_edge));
         }
@@ -164,41 +134,34 @@ pub fn disengage_all(state: &mut GameState, unit_id: u32) -> bool {
 /// Damage received by unit U from opponent E = E.strength * DAMAGE_RATE * E_effectiveness.
 pub fn resolve_combat(state: &mut GameState) {
     // Snapshot strength and engagement count at tick start to avoid mid-tick mutations affecting damage
-    let unit_info: HashMap<u32, (f32, usize)> = state
+    let unit_info: HashMap<UnitKey, (f32, usize, super::hex::Axial)> = state
         .units
         .iter()
-        .map(|u| (u.id, (u.strength, u.engagements.len())))
+        .map(|(id, u)| (id, (u.strength, u.engagements.len(), u.pos)))
         .collect();
 
     // Compute damage received by each unit
     // damage_received[U] = sum over U's engagements of (E.strength * DAMAGE_RATE * E_effectiveness)
     // where E_effectiveness = 1/sqrt(E.engagements.len())
-    let mut damage: HashMap<u32, f32> = HashMap::new();
+    let mut damage: HashMap<UnitKey, f32> = HashMap::new();
 
-    for unit in &state.units {
+    for (unit_id, unit) in &state.units {
         for eng in &unit.engagements {
-            if let Some(&(enemy_str, enemy_n)) = unit_info.get(&eng.enemy_id)
+            if let Some(&(enemy_str, enemy_n, enemy_pos)) = unit_info.get(&eng.enemy_id)
                 && enemy_n > 0
             {
                 let unit_height = state.cell_at(unit.pos).map(|c| c.height).unwrap_or(0.0);
-                let enemy_height = state
-                    .units
-                    .iter()
-                    .find(|u| u.id == eng.enemy_id)
-                    .and_then(|u| state.cell_at(u.pos))
-                    .map(|c| c.height)
-                    .unwrap_or(0.0);
+                let enemy_height = state.cell_at(enemy_pos).map(|c| c.height).unwrap_or(0.0);
                 let enemy_eff = 1.0 / (enemy_n as f32).sqrt();
                 let uphill_penalty = (unit_height - enemy_height).max(0.0) * 0.2;
-                *damage.entry(unit.id).or_insert(0.0) +=
+                *damage.entry(unit_id).or_insert(0.0) +=
                     enemy_str * DAMAGE_RATE * enemy_eff * (1.0 - uphill_penalty).clamp(0.5, 1.0);
             }
         }
     }
 
-    // Apply accumulated damage
-    for unit in &mut state.units {
-        if let Some(&dmg) = damage.get(&unit.id) {
+    for (unit_id, unit) in &mut state.units {
+        if let Some(&dmg) = damage.get(&unit_id) {
             unit.strength -= dmg;
         }
     }
@@ -206,14 +169,14 @@ pub fn resolve_combat(state: &mut GameState) {
 
 /// Clear engagements that reference dead units (strength <= 0) or non-existent units.
 pub fn cleanup_engagements(state: &mut GameState) {
-    let dead_ids: Vec<u32> = state
+    let dead_ids: Vec<UnitKey> = state
         .units
         .iter()
-        .filter(|u| u.strength <= 0.0)
-        .map(|u| u.id)
+        .filter(|(_, u)| u.strength <= 0.0)
+        .map(|(id, _)| id)
         .collect();
 
-    for unit in &mut state.units {
+    for (_, unit) in &mut state.units {
         unit.engagements.retain(|e| !dead_ids.contains(&e.enemy_id));
     }
 }
@@ -221,9 +184,12 @@ pub fn cleanup_engagements(state: &mut GameState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitvec::vec::BitVec;
     use crate::v2::INITIAL_STRENGTH;
     use crate::v2::hex::Axial;
+    use crate::v2::spatial::SpatialIndex;
     use crate::v2::state::*;
+    use slotmap::SlotMap;
 
     fn combat_state(units: Vec<Unit>) -> GameState {
         let width = 10;
@@ -246,41 +212,60 @@ mod tests {
             };
             width * height
         ];
+        let mut unit_map = SlotMap::with_key();
+        for unit in units {
+            unit_map.insert(unit);
+        }
         let players = vec![
             Player {
                 id: 0,
                 food: 0.0,
                 material: 0.0,
-                general_id: 100,
+                general_id: unit_map
+                    .iter()
+                    .find_map(|(key, unit)| (unit.public_id == 100).then_some(key))
+                    .unwrap_or(UnitKey::null()),
                 alive: true,
             },
             Player {
                 id: 1,
                 food: 0.0,
                 material: 0.0,
-                general_id: 200,
+                general_id: unit_map
+                    .iter()
+                    .find_map(|(key, unit)| (unit.public_id == 200).then_some(key))
+                    .unwrap_or(UnitKey::null()),
                 alive: true,
             },
         ];
-        GameState {
+        let mut state = GameState {
             width,
             height,
             grid,
-            units,
+            units: unit_map,
             players,
-            population: Vec::new(),
-            convoys: Vec::new(),
+            population: SlotMap::with_key(),
+            convoys: SlotMap::with_key(),
             regions: Vec::new(),
             tick: 0,
             next_unit_id: 300,
             next_pop_id: 0,
             next_convoy_id: 0,
-        }
+            scouted: vec![vec![true; width * height]; 2],
+            spatial: SpatialIndex::new(width, height),
+            dirty_hexes: BitVec::repeat(false, width * height),
+            hex_revisions: vec![0; width * height],
+            next_hex_revision: 0,
+            #[cfg(debug_assertions)]
+            tick_accumulator: Some(TickAccumulator::default()),
+        };
+        state.rebuild_spatial();
+        state
     }
 
     fn make_unit(id: u32, owner: u8, pos: Axial) -> Unit {
         Unit {
-            id,
+            public_id: id,
             owner,
             pos,
             strength: INITIAL_STRENGTH,
@@ -291,18 +276,32 @@ mod tests {
         }
     }
 
+    fn unit_key(state: &GameState, public_id: u32) -> UnitKey {
+        state.unit_key_by_public_id(public_id).unwrap()
+    }
+
+    fn unit_ref(state: &GameState, public_id: u32) -> &Unit {
+        state.unit_by_public_id(public_id).unwrap()
+    }
+
+    fn unit_mut(state: &mut GameState, public_id: u32) -> &mut Unit {
+        state.unit_by_public_id_mut(public_id).unwrap()
+    }
+
     #[test]
     fn engage_adjacent_units() {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2); // E neighbor of (2,2)
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
 
-        assert!(engage(&mut state, 1, 2));
-        assert_eq!(state.units[0].engagements.len(), 1);
-        assert_eq!(state.units[1].engagements.len(), 1);
+        assert!(engage(&mut state, a, b));
+        assert_eq!(unit_ref(&state, 1).engagements.len(), 1);
+        assert_eq!(unit_ref(&state, 2).engagements.len(), 1);
         // Edges should be opposite
-        let e_a = state.units[0].engagements[0].edge;
-        let e_b = state.units[1].engagements[0].edge;
+        let e_a = unit_ref(&state, 1).engagements[0].edge;
+        let e_b = unit_ref(&state, 2).engagements[0].edge;
         assert_eq!((e_a + 3) % 6, e_b);
     }
 
@@ -311,7 +310,9 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(5, 5);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
-        assert!(!engage(&mut state, 1, 2));
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        assert!(!engage(&mut state, a, b));
     }
 
     #[test]
@@ -322,7 +323,9 @@ mod tests {
             make_unit(1, 0, a_pos),
             make_unit(2, 0, b_pos), // same player
         ]);
-        assert!(!engage(&mut state, 1, 2));
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        assert!(!engage(&mut state, a, b));
     }
 
     #[test]
@@ -330,13 +333,15 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
-        state.units[0].destination = Some(Axial::new(5, 5));
-        state.units[1].destination = Some(Axial::new(0, 0));
+        unit_mut(&mut state, 1).destination = Some(Axial::new(5, 5));
+        unit_mut(&mut state, 2).destination = Some(Axial::new(0, 0));
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
 
-        engage(&mut state, 1, 2);
+        engage(&mut state, a, b);
 
-        assert!(state.units[0].destination.is_none());
-        assert!(state.units[1].destination.is_none());
+        assert!(unit_ref(&state, 1).destination.is_none());
+        assert!(unit_ref(&state, 2).destination.is_none());
     }
 
     #[test]
@@ -351,9 +356,12 @@ mod tests {
             make_unit(2, 1, b_pos),
             make_unit(3, 1, c_pos),
         ]);
-        assert!(engage(&mut state, 1, 2));
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        let c = unit_key(&state, 3);
+        assert!(engage(&mut state, a, b));
         // A's edge toward b_pos is now occupied; C is at same pos so same edge
-        assert!(!engage(&mut state, 1, 3));
+        assert!(!engage(&mut state, a, c));
     }
 
     #[test]
@@ -361,10 +369,12 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
-        state.units[0].destination = Some(Axial::new(8, 8));
+        unit_mut(&mut state, 1).destination = Some(Axial::new(8, 8));
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
 
-        engage(&mut state, 1, 2);
-        assert!(state.units[0].destination.is_none());
+        engage(&mut state, a, b);
+        assert!(unit_ref(&state, 1).destination.is_none());
     }
 
     #[test]
@@ -372,14 +382,16 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
-        engage(&mut state, 1, 2);
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        engage(&mut state, a, b);
 
         resolve_combat(&mut state);
 
         // Both at 100 strength, DAMAGE_RATE=0.05, 1 engagement each (eff=1.0)
         // Each takes 100 * 0.05 * 1.0 = 5.0 damage
-        let a = state.units.iter().find(|u| u.id == 1).unwrap();
-        let b = state.units.iter().find(|u| u.id == 2).unwrap();
+        let a = unit_ref(&state, 1);
+        let b = unit_ref(&state, 2);
         assert!(
             (a.strength - 95.0).abs() < 0.01,
             "a.strength = {}",
@@ -404,8 +416,11 @@ mod tests {
             make_unit(2, 0, b_pos),
             make_unit(3, 1, x_pos),
         ]);
-        engage(&mut state, 1, 3); // A engages X
-        engage(&mut state, 2, 3); // B engages X
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        let x = unit_key(&state, 3);
+        engage(&mut state, a, x); // A engages X
+        engage(&mut state, b, x); // B engages X
 
         // X has 2 engagements, eff_X = 1/sqrt(2) ≈ 0.707
         // A has 1 engagement, eff_A = 1.0
@@ -417,9 +432,9 @@ mod tests {
 
         resolve_combat(&mut state);
 
-        let a = state.units.iter().find(|u| u.id == 1).unwrap();
-        let b = state.units.iter().find(|u| u.id == 2).unwrap();
-        let x = state.units.iter().find(|u| u.id == 3).unwrap();
+        let a = unit_ref(&state, 1);
+        let b = unit_ref(&state, 2);
+        let x = unit_ref(&state, 3);
 
         assert!(
             (x.strength - 90.0).abs() < 0.01,
@@ -443,12 +458,14 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
-        engage(&mut state, 1, 2);
-        let edge = state.units[0].engagements[0].edge;
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        engage(&mut state, a, b);
+        let edge = unit_ref(&state, 1).engagements[0].edge;
 
-        disengage_edge(&mut state, 1, edge);
+        disengage_edge(&mut state, a, edge);
 
-        let a = state.units.iter().find(|u| u.id == 1).unwrap();
+        let a = unit_ref(&state, 1);
         assert!(
             (a.strength - 70.0).abs() < 0.01,
             "a.strength = {}",
@@ -456,7 +473,7 @@ mod tests {
         );
         assert!(a.engagements.is_empty());
 
-        let b = state.units.iter().find(|u| u.id == 2).unwrap();
+        let b = unit_ref(&state, 2);
         assert!(b.engagements.is_empty()); // opponent freed too
         assert!((b.strength - 100.0).abs() < 0.01); // opponent not penalized
     }
@@ -472,22 +489,16 @@ mod tests {
             make_unit(2, 0, b_pos),
             make_unit(3, 1, x_pos),
         ]);
-        engage(&mut state, 1, 3);
-        engage(&mut state, 2, 3);
-        assert_eq!(
-            state
-                .units
-                .iter()
-                .find(|u| u.id == 3)
-                .unwrap()
-                .engagements
-                .len(),
-            2
-        );
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        let x = unit_key(&state, 3);
+        engage(&mut state, a, x);
+        engage(&mut state, b, x);
+        assert_eq!(unit_ref(&state, 3).engagements.len(), 2);
 
-        disengage_all(&mut state, 3);
+        disengage_all(&mut state, x);
 
-        let x = state.units.iter().find(|u| u.id == 3).unwrap();
+        let x = unit_ref(&state, 3);
         assert!(
             (x.strength - 70.0).abs() < 0.01,
             "x.strength = {} (should be 70)",
@@ -510,25 +521,20 @@ mod tests {
             make_unit(3, 0, c_pos),
             make_unit(4, 1, x_pos),
         ]);
-        engage(&mut state, 1, 4);
-        engage(&mut state, 2, 4);
-        engage(&mut state, 3, 4);
-        assert_eq!(
-            state
-                .units
-                .iter()
-                .find(|u| u.id == 4)
-                .unwrap()
-                .engagements
-                .len(),
-            3
-        );
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        let c = unit_key(&state, 3);
+        let x = unit_key(&state, 4);
+        engage(&mut state, a, x);
+        engage(&mut state, b, x);
+        engage(&mut state, c, x);
+        assert_eq!(unit_ref(&state, 4).engagements.len(), 3);
 
-        let edge = state.units.iter().find(|u| u.id == 4).unwrap().engagements[0].edge;
-        assert!(!disengage_edge(&mut state, 4, edge));
-        assert!(!disengage_all(&mut state, 4));
+        let edge = unit_ref(&state, 4).engagements[0].edge;
+        assert!(!disengage_edge(&mut state, x, edge));
+        assert!(!disengage_all(&mut state, x));
         // Strength unchanged
-        assert!((state.units.iter().find(|u| u.id == 4).unwrap().strength - 100.0).abs() < 0.01);
+        assert!((unit_ref(&state, 4).strength - 100.0).abs() < 0.01);
     }
 
     #[test]
@@ -536,15 +542,17 @@ mod tests {
         let a_pos = Axial::new(2, 2);
         let b_pos = Axial::new(3, 2);
         let mut state = combat_state(vec![make_unit(1, 0, a_pos), make_unit(2, 1, b_pos)]);
-        engage(&mut state, 1, 2);
+        let a = unit_key(&state, 1);
+        let b = unit_key(&state, 2);
+        engage(&mut state, a, b);
 
         // Kill unit 1
-        state.units.iter_mut().find(|u| u.id == 1).unwrap().strength = 0.0;
+        unit_mut(&mut state, 1).strength = 0.0;
 
         // cleanup_engagements should clear unit 2's engagement
         cleanup_engagements(&mut state);
 
-        let b = state.units.iter().find(|u| u.id == 2).unwrap();
+        let b = unit_ref(&state, 2);
         assert!(b.engagements.is_empty());
     }
 }

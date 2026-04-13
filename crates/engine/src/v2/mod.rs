@@ -9,6 +9,8 @@ pub mod pathfinding;
 pub mod replay;
 pub mod runner;
 pub mod sim;
+pub mod spatial;
+pub mod spectator;
 pub mod state;
 pub mod vision;
 

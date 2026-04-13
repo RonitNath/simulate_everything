@@ -7,13 +7,17 @@ use super::state::GameState;
 
 pub(crate) fn advance_game_tick(state: &mut GameState, agents: &mut [Box<dyn Agent>]) {
     if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+        let mut session = observation::ObservationSession::new(state.players.len(), state.width * state.height);
         for (player_id, agent) in agents.iter_mut().enumerate() {
             let pid = player_id as u8;
             if !state.players.iter().any(|p| p.id == pid && p.alive) {
                 continue;
             }
-            let obs = observation::observe(state, pid);
-            let directives = agent.act(&obs);
+            let init = observation::initial_observation(state, pid);
+            agent.reset();
+            agent.init(&init);
+            let delta = observation::observe_delta(state, pid, &mut session);
+            let directives = agent.act(&delta);
             tracing::trace!(
                 tick = state.tick,
                 player = pid,
@@ -22,6 +26,7 @@ pub(crate) fn advance_game_tick(state: &mut GameState, agents: &mut [Box<dyn Age
             );
             directive::apply_directives(state, pid, &directives);
         }
+        state.clear_dirty_hexes();
     }
 
     sim::tick(state);
@@ -35,6 +40,13 @@ pub fn run_loop<F>(
 ) where
     F: FnMut(&GameState),
 {
+    let mut session = observation::ObservationSession::new(state.players.len(), state.width * state.height);
+    for (player_id, agent) in agents.iter_mut().enumerate() {
+        let pid = player_id as u8;
+        let init = observation::initial_observation(state, pid);
+        agent.reset();
+        agent.init(&init);
+    }
     while state.tick < tick_limit && !sim::is_over(state) {
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             for (player_id, agent) in agents.iter_mut().enumerate() {
@@ -42,8 +54,8 @@ pub fn run_loop<F>(
                 if !state.players.iter().any(|p| p.id == pid && p.alive) {
                     continue;
                 }
-                let obs = observation::observe(state, pid);
-                let directives = agent.act(&obs);
+                let delta = observation::observe_delta(state, pid, &mut session);
+                let directives = agent.act(&delta);
                 tracing::trace!(
                     tick = state.tick,
                     player = pid,
@@ -52,6 +64,7 @@ pub fn run_loop<F>(
                 );
                 directive::apply_directives(state, pid, &directives);
             }
+            state.clear_dirty_hexes();
         }
 
         sim::tick(state);
@@ -84,7 +97,7 @@ pub fn run_game(
                 if !p.alive {
                     continue;
                 }
-                let units: Vec<_> = state.units.iter().filter(|u| u.owner == p.id).collect();
+                let units: Vec<_> = state.units.values().filter(|u| u.owner == p.id).collect();
                 let engaged = units.iter().filter(|u| !u.engagements.is_empty()).count();
                 let moving = units
                     .iter()

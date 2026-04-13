@@ -5,13 +5,14 @@ use super::combat;
 use super::directive::Directive;
 use super::hex::{Axial, distance, neighbors, offset_to_axial};
 use super::mapgen::{MapConfig, generate};
-use super::observation::{self, Observation};
+use super::observation::{self, InitialObservation, ObservationDelta};
 use super::replay;
 use super::runner;
 use super::sim;
-use super::state::{
-    Biome, Cell, Convoy, GameState, Player, Population, Role, Unit,
-};
+use super::spatial::SpatialIndex;
+use super::state::{Biome, Cell, Convoy, GameState, Player, Population, Role, TickAccumulator, Unit};
+use bitvec::vec::BitVec;
+use slotmap::{Key, SlotMap};
 
 struct ScriptedAgent {
     name: &'static str,
@@ -32,7 +33,9 @@ impl Agent for ScriptedAgent {
         self.name
     }
 
-    fn act(&mut self, obs: &Observation) -> Vec<Directive> {
+    fn init(&mut self, _obs: &InitialObservation) {}
+
+    fn act(&mut self, obs: &ObservationDelta) -> Vec<Directive> {
         self.schedule.remove(&obs.tick).unwrap_or_default()
     }
 }
@@ -57,7 +60,7 @@ fn flat_cell() -> Cell {
 
 fn unit(id: u32, owner: u8, pos: Axial, is_general: bool) -> Unit {
     Unit {
-        id,
+        public_id: id,
         owner,
         pos,
         strength: 100.0,
@@ -70,35 +73,68 @@ fn unit(id: u32, owner: u8, pos: Axial, is_general: bool) -> Unit {
 
 fn blank_state(width: usize, height: usize, num_players: u8) -> GameState {
     let mut players = Vec::new();
-    let mut units = Vec::new();
+    let mut units = SlotMap::with_key();
 
     for player_id in 0..num_players {
         let general_pos = offset_to_axial(0, player_id as i32);
         let general_id = player_id as u32;
+        let general_key = units.insert(unit(general_id, player_id, general_pos, true));
         players.push(Player {
             id: player_id,
             food: 0.0,
             material: 0.0,
-            general_id,
+            general_id: general_key,
             alive: true,
         });
-        units.push(unit(general_id, player_id, general_pos, true));
     }
 
-    GameState {
+    let mut state = GameState {
         width,
         height,
         grid: vec![flat_cell(); width * height],
         units,
         players,
-        population: Vec::new(),
-        convoys: Vec::new(),
+        population: SlotMap::with_key(),
+        convoys: SlotMap::with_key(),
         regions: Vec::new(),
         tick: 0,
         next_unit_id: num_players as u32,
         next_pop_id: 0,
         next_convoy_id: 0,
+        scouted: vec![vec![true; width * height]; num_players as usize],
+        spatial: SpatialIndex::new(width, height),
+        dirty_hexes: BitVec::repeat(false, width * height),
+        hex_revisions: vec![0; width * height],
+        next_hex_revision: 0,
+        #[cfg(debug_assertions)]
+        tick_accumulator: Some(TickAccumulator::default()),
+    };
+    state.rebuild_spatial();
+    state
+}
+
+fn set_units(state: &mut GameState, units: Vec<Unit>) {
+    let mut slotmap = SlotMap::with_key();
+    for unit in units {
+        slotmap.insert(unit);
     }
+    state.units = slotmap;
+    for player in &mut state.players {
+        player.general_id = state
+            .units
+            .iter()
+            .find_map(|(key, unit)| (unit.owner == player.id && unit.is_general).then_some(key))
+            .expect("player missing general");
+    }
+    state.rebuild_spatial();
+}
+
+fn unit_ref(state: &GameState, public_id: u32) -> &Unit {
+    state.unit_by_public_id(public_id).unwrap()
+}
+
+fn unit_mut(state: &mut GameState, public_id: u32) -> &mut Unit {
+    state.unit_by_public_id_mut(public_id).unwrap()
 }
 
 fn stockpile_totals(state: &GameState) -> HashMap<u8, (f32, f32)> {
@@ -150,25 +186,41 @@ fn assert_player_totals_match_owned_cells(state: &GameState) {
 }
 
 fn assert_entities_in_bounds(state: &GameState) {
-    for unit in &state.units {
-        assert!(state.in_bounds(unit.pos), "unit {} out of bounds", unit.id);
+    for unit in state.units.values() {
+        assert!(
+            state.in_bounds(unit.pos),
+            "unit {} out of bounds",
+            unit.public_id
+        );
     }
-    for convoy in &state.convoys {
-        assert!(state.in_bounds(convoy.pos), "convoy {} out of bounds", convoy.id);
+    for convoy in state.convoys.values() {
+        assert!(
+            state.in_bounds(convoy.pos),
+            "convoy {} out of bounds",
+            convoy.public_id
+        );
         assert!(
             state.in_bounds(convoy.destination),
             "convoy {} destination out of bounds",
-            convoy.id
+            convoy.public_id
         );
     }
-    for pop in &state.population {
-        assert!(state.in_bounds(pop.hex), "population {} out of bounds", pop.id);
+    for pop in state.population.values() {
+        assert!(
+            state.in_bounds(pop.hex),
+            "population {} out of bounds",
+            pop.public_id
+        );
     }
 }
 
 fn assert_no_orphaned_engagements(state: &GameState) {
-    let positions: HashMap<u32, Axial> = state.units.iter().map(|unit| (unit.id, unit.pos)).collect();
-    for unit in &state.units {
+    let positions: HashMap<_, _> = state
+        .units
+        .iter()
+        .map(|(key, unit)| (key, unit.pos))
+        .collect();
+    for unit in state.units.values() {
         for engagement in &unit.engagements {
             let enemy_pos = positions
                 .get(&engagement.enemy_id)
@@ -177,8 +229,8 @@ fn assert_no_orphaned_engagements(state: &GameState) {
             assert!(
                 distance(unit.pos, enemy_pos) == 1,
                 "unit {} engaged with non-adjacent enemy {}",
-                unit.id,
-                engagement.enemy_id
+                unit.public_id,
+                engagement.enemy_id.data().as_ffi()
             );
         }
     }
@@ -202,8 +254,11 @@ fn passive_economy_preserves_non_negative_stockpiles_and_player_totals() {
         Box::new(ScriptedAgent::pass()),
         Box::new(ScriptedAgent::pass()),
     ];
-    let mut previous_material_assets =
-        state.grid.iter().map(|cell| cell.material_stockpile).sum::<f32>();
+    let mut previous_material_assets = state
+        .grid
+        .iter()
+        .map(|cell| cell.material_stockpile)
+        .sum::<f32>();
 
     for _ in 0..40 {
         runner::advance_game_tick(&mut state, &mut agents);
@@ -215,7 +270,11 @@ fn passive_economy_preserves_non_negative_stockpiles_and_player_totals() {
             .iter()
             .map(|cell| cell.material_stockpile)
             .sum::<f32>()
-            + state.convoys.iter().map(|convoy| convoy.cargo_amount).sum::<f32>();
+            + state
+                .convoys
+                .values()
+                .map(|convoy| convoy.cargo_amount)
+                .sum::<f32>();
         assert!(
             material_assets + 0.001 >= previous_material_assets,
             "material should not be consumed without directives"
@@ -231,15 +290,16 @@ fn convoy_raiding_transfers_cargo_to_adjacent_raider_hex() {
     let convoy_dest = neighbors(convoy_start)[0];
     let raid_hex = neighbors(convoy_dest)[1];
 
-    state.players[0].general_id = 100;
-    state.players[1].general_id = 200;
-    state.units = vec![
-        unit(100, 0, offset_to_axial(1, 1), true),
-        unit(200, 1, offset_to_axial(10, 10), true),
-        unit(201, 1, raid_hex, false),
-    ];
-    state.population.push(Population {
-        id: 0,
+    set_units(
+        &mut state,
+        vec![
+            unit(100, 0, offset_to_axial(1, 1), true),
+            unit(200, 1, offset_to_axial(10, 10), true),
+            unit(201, 1, raid_hex, false),
+        ],
+    );
+    state.population.insert(Population {
+        public_id: 0,
         hex: raid_hex,
         owner: 1,
         count: 10,
@@ -250,8 +310,8 @@ fn convoy_raiding_transfers_cargo_to_adjacent_raider_hex() {
     state.cell_at_mut(raid_hex).unwrap().terrain_value = 0.0;
     state.cell_at_mut(raid_hex).unwrap().material_value = 0.0;
     state.cell_at_mut(raid_hex).unwrap().stockpile_owner = Some(1);
-    state.convoys.push(Convoy {
-        id: 0,
+    state.convoys.insert(Convoy {
+        public_id: 0,
         owner: 0,
         pos: convoy_start,
         origin: convoy_start,
@@ -284,12 +344,14 @@ fn road_unit_arrives_faster_than_bare_terrain_unit() {
     let road_dest = offset_to_axial(3, 8);
     let plain_dest = offset_to_axial(8, 8);
 
-    state.players[0].general_id = 100;
-    state.units = vec![
-        unit(100, 0, offset_to_axial(0, 0), true),
-        unit(101, 0, road_start, false),
-        unit(102, 0, plain_start, false),
-    ];
+    set_units(
+        &mut state,
+        vec![
+            unit(100, 0, offset_to_axial(0, 0), true),
+            unit(101, 0, road_start, false),
+            unit(102, 0, plain_start, false),
+        ],
+    );
 
     for col in 3..=8 {
         let road_hex = offset_to_axial(3, col);
@@ -299,17 +361,17 @@ fn road_unit_arrives_faster_than_bare_terrain_unit() {
         state.cell_at_mut(plain_hex).unwrap().stockpile_owner = Some(0);
     }
 
-    state.units[1].destination = Some(road_dest);
-    state.units[2].destination = Some(plain_dest);
+    unit_mut(&mut state, 101).destination = Some(road_dest);
+    unit_mut(&mut state, 102).destination = Some(plain_dest);
 
     let mut road_arrival = None;
     let mut plain_arrival = None;
     for _ in 0..30 {
         runner::advance_game_tick(&mut state, &mut []);
-        if road_arrival.is_none() && state.units[1].pos == road_dest {
+        if road_arrival.is_none() && unit_ref(&state, 101).pos == road_dest {
             road_arrival = Some(state.tick);
         }
-        if plain_arrival.is_none() && state.units[2].pos == plain_dest {
+        if plain_arrival.is_none() && unit_ref(&state, 102).pos == plain_dest {
             plain_arrival = Some(state.tick);
         }
         if road_arrival.is_some() && plain_arrival.is_some() {
@@ -328,23 +390,26 @@ fn higher_ground_reduces_incoming_combat_damage() {
     let high_hex = offset_to_axial(4, 4);
     let low_hex = neighbors(high_hex)[1];
 
-    state.players[0].general_id = 100;
-    state.players[1].general_id = 200;
-    state.units = vec![
-        unit(100, 0, offset_to_axial(0, 0), true),
-        unit(200, 1, offset_to_axial(9, 9), true),
-        unit(101, 0, high_hex, false),
-        unit(201, 1, low_hex, false),
-    ];
+    set_units(
+        &mut state,
+        vec![
+            unit(100, 0, offset_to_axial(0, 0), true),
+            unit(200, 1, offset_to_axial(9, 9), true),
+            unit(101, 0, high_hex, false),
+            unit(201, 1, low_hex, false),
+        ],
+    );
     state.cell_at_mut(high_hex).unwrap().height = 1.0;
     state.cell_at_mut(low_hex).unwrap().height = 0.0;
 
-    assert!(combat::engage(&mut state, 101, 201));
-    let high_before = state.units.iter().find(|u| u.id == 101).unwrap().strength;
-    let low_before = state.units.iter().find(|u| u.id == 201).unwrap().strength;
+    let high_key = state.unit_key_by_public_id(101).unwrap();
+    let low_key = state.unit_key_by_public_id(201).unwrap();
+    assert!(combat::engage(&mut state, high_key, low_key));
+    let high_before = unit_ref(&state, 101).strength;
+    let low_before = unit_ref(&state, 201).strength;
     sim::tick(&mut state);
-    let high_after = state.units.iter().find(|u| u.id == 101).unwrap().strength;
-    let low_after = state.units.iter().find(|u| u.id == 201).unwrap().strength;
+    let high_after = unit_ref(&state, 101).strength;
+    let low_after = unit_ref(&state, 201).strength;
 
     assert!(high_before - high_after < low_before - low_after);
 }
@@ -357,14 +422,16 @@ fn uphill_movement_has_longer_cooldown_than_flat_movement() {
     let flat_from = offset_to_axial(6, 3);
     let flat_to = neighbors(flat_from)[1];
 
-    state.players[0].general_id = 100;
-    state.units = vec![
-        unit(100, 0, offset_to_axial(0, 0), true),
-        unit(101, 0, uphill_from, false),
-        unit(102, 0, flat_from, false),
-    ];
-    state.units[1].destination = Some(uphill_to);
-    state.units[2].destination = Some(flat_to);
+    set_units(
+        &mut state,
+        vec![
+            unit(100, 0, offset_to_axial(0, 0), true),
+            unit(101, 0, uphill_from, false),
+            unit(102, 0, flat_from, false),
+        ],
+    );
+    unit_mut(&mut state, 101).destination = Some(uphill_to);
+    unit_mut(&mut state, 102).destination = Some(flat_to);
 
     state.cell_at_mut(uphill_from).unwrap().height = 0.0;
     state.cell_at_mut(uphill_to).unwrap().height = 1.0;
@@ -373,8 +440,8 @@ fn uphill_movement_has_longer_cooldown_than_flat_movement() {
 
     run_ticks(&mut state, &mut [], 1);
 
-    let uphill_cooldown = state.units.iter().find(|u| u.id == 101).unwrap().move_cooldown;
-    let flat_cooldown = state.units.iter().find(|u| u.id == 102).unwrap().move_cooldown;
+    let uphill_cooldown = unit_ref(&state, 101).move_cooldown;
+    let flat_cooldown = unit_ref(&state, 102).move_cooldown;
     assert!(uphill_cooldown > flat_cooldown);
 }
 
@@ -383,16 +450,15 @@ fn population_growth_respects_carrying_capacity() {
     let mut state = blank_state(10, 10, 1);
     let home = offset_to_axial(4, 4);
 
-    state.players[0].general_id = 100;
-    state.units = vec![unit(100, 0, home, true)];
+    set_units(&mut state, vec![unit(100, 0, home, true)]);
     let home_cell = state.cell_at_mut(home).unwrap();
     home_cell.stockpile_owner = Some(0);
     home_cell.food_stockpile = 20.0;
     home_cell.terrain_value = 1.0;
     home_cell.water_access = 1.0;
 
-    state.population.push(Population {
-        id: 0,
+    state.population.insert(Population {
+        public_id: 0,
         hex: home,
         owner: 0,
         count: 20,
@@ -403,11 +469,13 @@ fn population_growth_respects_carrying_capacity() {
 
     run_ticks(&mut state, &mut [], 200);
 
-    let total_pop: u16 = state.population.iter().map(|p| p.count).sum();
+    let total_pop: u16 = state.population.values().map(|p| p.count).sum();
+    let capacity = 20.0
+        + state.cell_at(home).unwrap().terrain_value * 20.0
+        + state.cell_at(home).unwrap().water_access * 12.0;
     assert!(total_pop > 20);
-    // Carrying capacity: 20 + terrain(1.0)*20 + water(1.0)*12 = 52
-    assert!(total_pop <= 55);
-    assert!(state.population.iter().all(|p| p.hex == home));
+    assert!(total_pop as f32 <= capacity + 1.0);
+    assert!(state.population.values().all(|p| p.hex == home));
 }
 
 #[test]
@@ -417,12 +485,14 @@ fn starving_units_die_and_are_removed_from_state() {
     let starving_hex = offset_to_axial(8, 8);
     let starving_dest = offset_to_axial(8, 9);
 
-    state.players[0].general_id = 100;
-    state.units = vec![
-        unit(100, 0, general_hex, true),
-        unit(101, 0, starving_hex, false),
-    ];
-    state.units[1].destination = Some(starving_dest);
+    set_units(
+        &mut state,
+        vec![
+            unit(100, 0, general_hex, true),
+            unit(101, 0, starving_hex, false),
+        ],
+    );
+    unit_mut(&mut state, 101).destination = Some(starving_dest);
     state.cell_at_mut(general_hex).unwrap().stockpile_owner = Some(0);
     state.cell_at_mut(general_hex).unwrap().food_stockpile = 50.0;
     state.cell_at_mut(starving_hex).unwrap().stockpile_owner = Some(0);
@@ -433,7 +503,7 @@ fn starving_units_die_and_are_removed_from_state() {
     let mut weakened = false;
     for _ in 0..260 {
         runner::advance_game_tick(&mut state, &mut []);
-        if let Some(unit) = state.units.iter().find(|u| u.id == 101) {
+        if let Some(unit) = state.unit_by_public_id(101) {
             if unit.strength < 100.0 {
                 weakened = true;
             }
@@ -443,7 +513,7 @@ fn starving_units_die_and_are_removed_from_state() {
     }
 
     assert!(weakened, "starving unit should lose strength before dying");
-    assert!(state.units.iter().all(|u| u.id != 101));
+    assert!(state.unit_by_public_id(101).is_none());
     assert!(state.players[0].alive);
 }
 
@@ -453,19 +523,20 @@ fn fog_of_war_hides_distant_enemy_units_and_stockpiles() {
     let friendly_hex = offset_to_axial(2, 2);
     let enemy_hex = offset_to_axial(15, 15);
 
-    state.players[0].general_id = 100;
-    state.players[1].general_id = 200;
-    state.units = vec![
-        unit(100, 0, friendly_hex, true),
-        unit(200, 1, enemy_hex, true),
-        unit(201, 1, enemy_hex, false),
-    ];
+    set_units(
+        &mut state,
+        vec![
+            unit(100, 0, friendly_hex, true),
+            unit(200, 1, enemy_hex, true),
+            unit(201, 1, enemy_hex, false),
+        ],
+    );
     let enemy_cell = state.cell_at_mut(enemy_hex).unwrap();
     enemy_cell.stockpile_owner = Some(1);
     enemy_cell.food_stockpile = 18.0;
     enemy_cell.material_stockpile = 9.0;
 
-    let obs = observation::observe(&state, 0);
+    let obs = observation::observe(&mut state, 0);
     assert_eq!(obs.own_units.len(), 1);
     assert!(obs.visible_enemies.is_empty());
 
@@ -487,8 +558,7 @@ fn replay_reconstruction_matches_final_state() {
     };
     let mut agents: Vec<Box<dyn Agent>> =
         vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
-    let (replay, final_state) =
-        replay::record_game_with_final_state(&config, &mut agents, 120, 5);
+    let (replay, final_state) = replay::record_game_with_final_state(&config, &mut agents, 120, 5);
     let reconstructed = replay::reconstruct_state(&replay, replay.frames.last().unwrap());
 
     assert_eq!(reconstructed.tick, final_state.tick);
@@ -530,5 +600,8 @@ fn spread_vs_spread_converges_without_invalid_final_states() {
         assert_player_totals_match_owned_cells(&state);
     }
 
-    assert!(decisive >= 8, "expected at least 8 decisive games, got {decisive}");
+    assert!(
+        decisive >= 8,
+        "expected at least 8 decisive games, got {decisive}"
+    );
 }
