@@ -1,6 +1,6 @@
 use simulate_everything_engine::v2::{
     AGENT_POLL_INTERVAL,
-    agent::{Agent, SpreadAgent},
+    agent::{Agent, SpreadAgent, StrikerAgent},
     directive,
     mapgen::{self, MapConfig},
     observation,
@@ -145,7 +145,7 @@ impl V2RoundRobin {
             };
 
             let mut agents: Vec<Box<dyn Agent>> =
-                vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
+                vec![Box::new(SpreadAgent::new()), Box::new(StrikerAgent::new())];
             let agent_names: Vec<String> = agents
                 .iter()
                 .enumerate()
