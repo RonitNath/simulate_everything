@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use super::UNIT_COST;
 use super::directive::Directive;
 use super::hex::{self, Axial};
 use super::observation::{Observation, UnitInfo};
+use super::{UNIT_FOOD_COST, UNIT_MATERIAL_COST};
 
 /// Observe → act interface for V2 game agents.
 /// Send bound enables future use across threads.
@@ -25,11 +25,13 @@ impl Agent for SpreadAgent {
         let mut directives = Vec::new();
 
         // Produce whenever affordable — resource cost is the natural throttle
-        let mut remaining_resources = obs.resources;
+        let mut remaining_food = obs.food;
+        let mut remaining_material = obs.material;
         let mut produce_count = 0u32;
-        while remaining_resources >= UNIT_COST {
+        while remaining_food >= UNIT_FOOD_COST && remaining_material >= UNIT_MATERIAL_COST {
             directives.push(Directive::Produce);
-            remaining_resources -= UNIT_COST;
+            remaining_food -= UNIT_FOOD_COST;
+            remaining_material -= UNIT_MATERIAL_COST;
             produce_count += 1;
         }
 
@@ -52,8 +54,7 @@ impl Agent for SpreadAgent {
             }
 
             // Try to engage adjacent enemies
-            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy)
-            {
+            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy) {
                 directives.push(Directive::Engage {
                     unit_id: unit.id,
                     target_id: target,
@@ -94,16 +95,27 @@ impl Agent for SpreadAgent {
             }
         }
 
-        let engaged_count = obs.own_units.iter().filter(|u| !u.engagements.is_empty()).count();
-        let move_count = directives.iter().filter(|d| matches!(d, Directive::Move { .. })).count();
-        let engage_count = directives.iter().filter(|d| matches!(d, Directive::Engage { .. })).count();
+        let engaged_count = obs
+            .own_units
+            .iter()
+            .filter(|u| !u.engagements.is_empty())
+            .count();
+        let move_count = directives
+            .iter()
+            .filter(|d| matches!(d, Directive::Move { .. }))
+            .count();
+        let engage_count = directives
+            .iter()
+            .filter(|d| matches!(d, Directive::Engage { .. }))
+            .count();
 
         tracing::trace!(
             tick = obs.tick,
             player = obs.player,
             own_units = obs.own_units.len(),
             visible_enemies = obs.visible_enemies.len(),
-            resources = format_args!("{:.1}", obs.resources),
+            food = format_args!("{:.1}", obs.food),
+            material = format_args!("{:.1}", obs.material),
             produced = produce_count,
             moves = move_count,
             engages = engage_count,
@@ -174,7 +186,12 @@ fn pick_sector_destination(
     }
 
     // Fan out toward center with angular offset per unit
-    let non_general_count = obs.own_units.iter().filter(|u| !u.is_general).count().max(1);
+    let non_general_count = obs
+        .own_units
+        .iter()
+        .filter(|u| !u.is_general)
+        .count()
+        .max(1);
     // Use index among non-generals for sector assignment
     let non_gen_idx = obs
         .own_units
@@ -188,7 +205,7 @@ fn pick_sector_destination(
 
     let target_row = (map_center.r as f32 + angle.sin() * spread_radius) as i32;
     let target_col = {
-        let (cr, cc) = hex::axial_to_offset(map_center);
+        let (_cr, cc) = hex::axial_to_offset(map_center);
         (cc as f32 + angle.cos() * spread_radius) as i32
     };
 
@@ -232,8 +249,18 @@ fn pick_lane_destination(
     let perp_offset = lane_hash * 3; // 3-hex lane spacing
 
     // Apply perpendicular offset (rotate 90 degrees: (dx,dy) -> (-dy,dx))
-    let dest_r = target_r + if dx != 0 { perp_offset * dx.signum() } else { 0 };
-    let dest_c = target_c + if dy != 0 { perp_offset * dy.signum() } else { 0 };
+    let dest_r = target_r
+        + if dx != 0 {
+            perp_offset * dx.signum()
+        } else {
+            0
+        };
+    let dest_c = target_c
+        + if dy != 0 {
+            perp_offset * dy.signum()
+        } else {
+            0
+        };
 
     let dest_r = dest_r.clamp(1, obs.height as i32 - 2);
     let dest_c = dest_c.clamp(1, obs.width as i32 - 2);
@@ -279,7 +306,8 @@ mod tests {
             num_players: 2,
             seed: 42,
         });
-        state.players[0].resources = 25.0;
+        state.players[0].food = 25.0;
+        state.players[0].material = 14.0;
         let obs = observe(&state, 0);
         let mut agent = SpreadAgent;
         let directives = agent.act(&obs);
@@ -287,7 +315,7 @@ mod tests {
             .iter()
             .filter(|d| matches!(d, Directive::Produce))
             .count();
-        // 25.0 / 10.0 = 2 produces
+        // Enough for two produces on both resource axes.
         assert_eq!(produce_count, 2);
     }
 

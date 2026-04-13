@@ -57,7 +57,8 @@ pub fn run_game(
                     .filter(|u| u.destination.is_some() && u.engagements.is_empty())
                     .count();
                 let idle = units.len() - engaged - moving;
-                let resources = (p.resources * 10.0).round() / 10.0;
+                let food = (p.food * 10.0).round() / 10.0;
+                let material = (p.material * 10.0).round() / 10.0;
                 tracing::debug!(
                     tick = state.tick,
                     player = p.id,
@@ -65,7 +66,8 @@ pub fn run_game(
                     engaged,
                     moving,
                     idle,
-                    resources,
+                    food,
+                    material,
                     "player status"
                 );
             }

@@ -39,8 +39,8 @@ pub fn render_state(state: &GameState) -> String {
         let label = player_label(player.id);
         let unit_count = state.units.iter().filter(|u| u.owner == player.id).count();
         out.push_str(&format!(
-            " | {}: {:.1} res, {} units",
-            label, player.resources, unit_count
+            " | {}: {:.1} food, {:.1} mat, {} units",
+            label, player.food, player.material, unit_count
         ));
     }
     out.push('\n');

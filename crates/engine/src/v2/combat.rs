@@ -218,17 +218,25 @@ mod tests {
     fn combat_state(units: Vec<Unit>) -> GameState {
         let width = 10;
         let height = 10;
-        let grid = vec![Cell { terrain_value: 1.0 }; width * height];
+        let grid = vec![
+            Cell {
+                terrain_value: 1.0,
+                material_value: 1.0,
+            };
+            width * height
+        ];
         let players = vec![
             Player {
                 id: 0,
-                resources: 0.0,
+                food: 0.0,
+                material: 0.0,
                 general_id: 100,
                 alive: true,
             },
             Player {
                 id: 1,
-                resources: 0.0,
+                food: 0.0,
+                material: 0.0,
                 general_id: 200,
                 alive: true,
             },
@@ -415,7 +423,11 @@ mod tests {
         disengage_edge(&mut state, 1, edge);
 
         let a = state.units.iter().find(|u| u.id == 1).unwrap();
-        assert!((a.strength - 70.0).abs() < 0.01, "a.strength = {}", a.strength);
+        assert!(
+            (a.strength - 70.0).abs() < 0.01,
+            "a.strength = {}",
+            a.strength
+        );
         assert!(a.engagements.is_empty());
 
         let b = state.units.iter().find(|u| u.id == 2).unwrap();

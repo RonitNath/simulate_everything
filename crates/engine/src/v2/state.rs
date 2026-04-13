@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Cell {
     pub terrain_value: f32,
+    pub material_value: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,7 +28,8 @@ pub struct Unit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Player {
     pub id: u8,
-    pub resources: f32,
+    pub food: f32,
+    pub material: f32,
     pub general_id: u32,
     pub alive: bool,
 }
