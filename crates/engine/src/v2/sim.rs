@@ -8,6 +8,7 @@ use super::{
     SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SOLDIER_READY_THRESHOLD, STARVATION_DAMAGE, TERRAIN_MOVE_PENALTY,
     TRAINING_RATE, UPKEEP_PER_UNIT, WORKER_RATE,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub fn tick(state: &mut GameState) {
@@ -57,7 +58,7 @@ pub fn winner_at_limit(state: &GameState, max_ticks: u64) -> Option<u8> {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ScoreBreakdown {
     pub player_id: u8,
     pub population: f32,

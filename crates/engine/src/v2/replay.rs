@@ -81,6 +81,7 @@ pub struct Frame {
     pub cells: Vec<CellSnapshot>,
     pub population: Vec<PopulationSnapshot>,
     pub convoys: Vec<ConvoySnapshot>,
+    pub scores: Vec<super::sim::ScoreBreakdown>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +195,7 @@ fn capture_frame(state: &GameState) -> Frame {
         cells: snapshot_cells(state),
         population: snapshot_population(state),
         convoys: snapshot_convoys(state),
+        scores: sim::score_players(state),
     }
 }
 
