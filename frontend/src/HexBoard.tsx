@@ -102,6 +102,14 @@ interface CellStack {
 
 const SETTLEMENT_THRESHOLD = 10;
 
+interface RoadSegment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  level: number;
+}
+
 interface CellRender {
   cx: number;
   cy: number;
@@ -111,11 +119,11 @@ interface CellRender {
   baseStrokeWidth: number;
   terrPts?: string;
   terrFill?: string;
-  roadLevel: number;
+  roadSegments: RoadSegment[];
   hasDepot: boolean;
   depotSide: number;
   settlOwner?: number;
-  settlPts?: string;
+  settlPath?: string;
   entry?: CellStack;
   statusIcon?: string;
   statusColor?: string;
@@ -229,6 +237,10 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       }
     }
 
+    // Offset neighbor deltas: [even-row neighbors, odd-row neighbors]
+    const EVEN_NEIGHBORS: [number, number][] = [[-1, -1], [-1, 0], [0, 1], [1, 0], [1, -1], [0, -1]];
+    const ODD_NEIGHBORS: [number, number][] = [[-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [0, -1]];
+
     const cells: CellRender[] = [];
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
@@ -245,10 +257,10 @@ const HexBoard: Component<HexBoardProps> = (props) => {
           const t = stackBrightness(entry.totalStrength, maxStr);
           fill = playerRgbDim(entry.unit.owner, entry.unit.is_general ? Math.max(t, 0.85) : t);
           if (entry.unit.is_general) {
-            baseStroke = "#ffd700";
-            baseStrokeWidth = Math.max(1.5, s * 0.08);
+            baseStroke = "#ffffff";
+            baseStrokeWidth = Math.max(2, s * 0.1);
           } else if (entry.unit.engaged) {
-            baseStroke = "#ff0";
+            baseStroke = "#ff6644";
             baseStrokeWidth = Math.max(1, s * 0.06);
           }
         }
@@ -264,15 +276,18 @@ const HexBoard: Component<HexBoardProps> = (props) => {
         }
 
         let settlOwner: number | undefined;
-        let settlPts: string | undefined;
+        let settlPath: string | undefined;
         if (ls.has("settlements")) {
           const owner = settlementOwners.get(idx);
           if (owner !== undefined) {
             settlOwner = owner;
-            const ts = s * 0.32;
-            const tx = cx;
-            const ty = cy - ts * 0.55;
-            settlPts = `${tx},${ty - ts} ${tx - ts * 0.85},${ty + ts * 0.5} ${tx + ts * 0.85},${ty + ts * 0.5}`;
+            const hs = s * 0.28;
+            const bx = cx - hs;
+            const by = cy - hs * 0.1;
+            const bw = hs * 2;
+            const bh = hs * 1.2;
+            const peakY = cy - hs * 1.1;
+            settlPath = `M${bx},${by} L${bx},${by + bh} L${bx + bw},${by + bh} L${bx + bw},${by} L${cx},${peakY} Z`;
           }
         }
 
@@ -304,6 +319,31 @@ const HexBoard: Component<HexBoardProps> = (props) => {
           }
         }
 
+        // Connected road segments: draw line from center toward each neighbor with a road
+        const roadSegments: RoadSegment[] = [];
+        const myRoad = ls.has("roads") ? (roads[idx] ?? 0) : 0;
+        if (myRoad > 0) {
+          const neighbors = (row & 1) ? ODD_NEIGHBORS : EVEN_NEIGHBORS;
+          for (const [dr, dc] of neighbors) {
+            const nr = row + dr;
+            const nc = col + dc;
+            if (nr < 0 || nr >= height || nc < 0 || nc >= width) continue;
+            const nIdx = nr * width + nc;
+            const nRoad = roads[nIdx] ?? 0;
+            if (nRoad <= 0) continue;
+            const [nx, ny] = hexCenter(nr, nc, s);
+            const level = Math.min(myRoad, nRoad);
+            // Draw from center to midpoint between centers (edge midpoint)
+            roadSegments.push({
+              x1: cx,
+              y1: cy,
+              x2: (cx + nx) / 2,
+              y2: (cy + ny) / 2,
+              level,
+            });
+          }
+        }
+
         cells.push({
           cx,
           cy,
@@ -313,11 +353,11 @@ const HexBoard: Component<HexBoardProps> = (props) => {
           baseStrokeWidth,
           terrPts,
           terrFill,
-          roadLevel: ls.has("roads") ? (roads[idx] ?? 0) : 0,
+          roadSegments,
           hasDepot: ls.has("depots") ? (depots[idx] ?? false) : false,
           depotSide: Math.max(3, s * 0.22),
           settlOwner,
-          settlPts,
+          settlPath,
           entry,
           statusIcon,
           statusColor,
@@ -393,36 +433,28 @@ const HexBoard: Component<HexBoardProps> = (props) => {
               <polygon points={cell.terrPts} fill={cell.terrFill} stroke="none" />
             )}
 
-            {cell.roadLevel > 0 && (() => {
-              const rc = cell.roadLevel >= 3
-                ? "rgba(240,220,160,0.8)"
-                : cell.roadLevel >= 2
-                  ? "rgba(220,200,140,0.7)"
-                  : "rgba(200,200,180,0.6)";
-              const arm = s * 0.35;
-              return (
-                <g>
-                  <line
-                    x1={cell.cx - arm}
-                    y1={cell.cy}
-                    x2={cell.cx + arm}
-                    y2={cell.cy}
-                    stroke={rc}
-                    stroke-width={cell.roadLevel}
-                    stroke-linecap="round"
-                  />
-                  <line
-                    x1={cell.cx}
-                    y1={cell.cy - arm}
-                    x2={cell.cx}
-                    y2={cell.cy + arm}
-                    stroke={rc}
-                    stroke-width={cell.roadLevel}
-                    stroke-linecap="round"
-                  />
-                </g>
-              );
-            })()}
+            {cell.roadSegments.length > 0 && (
+              <g>
+                {cell.roadSegments.map((seg) => {
+                  const rc = seg.level >= 3
+                    ? "rgba(240,220,160,0.8)"
+                    : seg.level >= 2
+                      ? "rgba(220,200,140,0.7)"
+                      : "rgba(200,200,180,0.6)";
+                  return (
+                    <line
+                      x1={seg.x1}
+                      y1={seg.y1}
+                      x2={seg.x2}
+                      y2={seg.y2}
+                      stroke={rc}
+                      stroke-width={Math.max(1.5, seg.level * 0.8 + s * 0.04)}
+                      stroke-linecap="round"
+                    />
+                  );
+                })}
+              </g>
+            )}
 
             {cell.hasDepot && (
               <rect
@@ -436,28 +468,31 @@ const HexBoard: Component<HexBoardProps> = (props) => {
               />
             )}
 
-            {cell.settlPts !== undefined && cell.settlOwner !== undefined && (
-              <polygon
-                points={cell.settlPts}
+            {cell.settlPath !== undefined && cell.settlOwner !== undefined && (
+              <path
+                d={cell.settlPath}
                 fill={playerRgba(cell.settlOwner, 0.9)}
                 stroke="#fff"
                 stroke-width={0.5}
+                stroke-linejoin="miter"
               />
             )}
 
-            {cell.entry && cell.entry.unit.is_general && (
-              <text
-                x={cell.cx}
-                y={cell.cy + (showNums ? -s * 0.15 : s * 0.05)}
-                text-anchor="middle"
-                dominant-baseline="middle"
-                font-size={`${s * 0.5}`}
-                fill="#ffd700"
-                style={{ "pointer-events": "none" }}
-              >
-                ★
-              </text>
-            )}
+            {cell.entry && cell.entry.unit.is_general && (() => {
+              const gs = s * 0.3;
+              const gy = cell.cy + (showNums ? -s * 0.15 : s * 0.05);
+              // Crown shape: 3-point crown
+              const crownPath = `M${cell.cx - gs},${gy + gs * 0.4} L${cell.cx - gs * 0.5},${gy - gs * 0.3} L${cell.cx},${gy + gs * 0.1} L${cell.cx + gs * 0.5},${gy - gs * 0.3} L${cell.cx + gs},${gy + gs * 0.4} Z`;
+              return (
+                <path
+                  d={crownPath}
+                  fill="#fff"
+                  stroke="#000"
+                  stroke-width={Math.max(0.5, s * 0.03)}
+                  style={{ "pointer-events": "none" }}
+                />
+              );
+            })()}
 
             {cell.entry && showNums && s > 8 && (
               <text
