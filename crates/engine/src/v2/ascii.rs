@@ -37,7 +37,11 @@ pub fn render_state(state: &GameState) -> String {
     out.push_str(&format!("Tick {}", state.tick));
     for player in &state.players {
         let label = player_label(player.id);
-        let unit_count = state.units.iter().filter(|u| u.owner == player.id).count();
+        let unit_count = state
+            .units
+            .values()
+            .filter(|u| u.owner == player.id)
+            .count();
         out.push_str(&format!(
             " | {}: {:.1} food, {:.1} mat, {} units",
             label, player.food, player.material, unit_count
@@ -63,7 +67,7 @@ pub fn render_state(state: &GameState) -> String {
             // Find the strongest unit at this cell
             let unit = state
                 .units
-                .iter()
+                .values()
                 .filter(|u| {
                     let (ur, uc) = axial_to_offset(u.pos);
                     ur as usize == row && uc as usize == col

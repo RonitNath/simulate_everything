@@ -1,8 +1,10 @@
 use noise::{NoiseFn, Perlin};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use slotmap::SlotMap;
 
 use super::hex::{axial_to_offset, distance, offset_to_axial, within_radius};
+use super::spatial::SpatialIndex;
 use super::state::{
     Biome, Cell, GameState, Player, Population, Region, RegionArchetype, Role, Unit,
 };
@@ -107,9 +109,9 @@ pub fn generate(config: &MapConfig) -> GameState {
     let margin = (config.width.max(config.height) / 8).max(5);
     let general_positions = place_generals(config, &grid, &strategic_values, margin, &mut rng);
 
-    let mut units: Vec<Unit> = Vec::new();
+    let mut units = SlotMap::with_key();
     let mut players: Vec<Player> = Vec::new();
-    let mut population: Vec<Population> = Vec::new();
+    let mut population = SlotMap::with_key();
     let mut next_id: u32 = 0;
     let mut next_pop_id: u32 = 0;
 
@@ -119,8 +121,8 @@ pub fn generate(config: &MapConfig) -> GameState {
         // Spawn the general unit
         let general_id = next_id;
         next_id += 1;
-        units.push(Unit {
-            id: general_id,
+        let general_key = units.insert(Unit {
+            public_id: general_id,
             owner,
             pos: gen_pos,
             strength: INITIAL_STRENGTH,
@@ -148,8 +150,8 @@ pub fn generate(config: &MapConfig) -> GameState {
             if !is_in_bounds(candidate, config.width, config.height) {
                 continue;
             }
-            units.push(Unit {
-                id: next_id,
+            units.insert(Unit {
+                public_id: next_id,
                 owner,
                 pos: candidate,
                 strength: INITIAL_STRENGTH,
@@ -166,13 +168,13 @@ pub fn generate(config: &MapConfig) -> GameState {
             id: owner,
             food: 0.0,
             material: 0.0,
-            general_id,
+            general_id: general_key,
             alive: true,
         });
 
         let mut push_pop = |count: u16, role: Role| {
-            population.push(Population {
-                id: next_pop_id,
+            population.insert(Population {
+                public_id: next_pop_id,
                 hex: gen_pos,
                 owner,
                 count,
@@ -199,16 +201,38 @@ pub fn generate(config: &MapConfig) -> GameState {
         units,
         players,
         population,
-        convoys: Vec::new(),
+        convoys: SlotMap::with_key(),
         regions,
         tick: 0,
         next_unit_id: next_id,
         next_pop_id,
         next_convoy_id: 0,
+        scouted: vec![vec![false; config.width * config.height]; config.num_players as usize],
+        spatial: SpatialIndex::new(config.width, config.height),
     };
+    seed_starting_scouted(&mut state);
+    state.rebuild_spatial();
     recompute_player_totals(&mut state);
 
     state
+}
+
+fn seed_starting_scouted(state: &mut GameState) {
+    for player in &state.players {
+        for unit in state.units.values().filter(|unit| unit.owner == player.id) {
+            for ax in within_radius(unit.pos, super::VISION_RADIUS) {
+                let (row, col) = axial_to_offset(ax);
+                if row >= 0
+                    && col >= 0
+                    && (row as usize) < state.height
+                    && (col as usize) < state.width
+                {
+                    let idx = row as usize * state.width + col as usize;
+                    state.scouted[player.id as usize][idx] = true;
+                }
+            }
+        }
+    }
 }
 
 fn is_in_bounds(ax: super::hex::Axial, width: usize, height: usize) -> bool {
@@ -584,11 +608,7 @@ mod tests {
     fn generals_placed_on_valid_terrain() {
         let state = default_state();
         for player in &state.players {
-            let general = state
-                .units
-                .iter()
-                .find(|u| u.id == player.general_id)
-                .unwrap();
+            let general = state.units.get(player.general_id).unwrap();
             let cell = state.cell_at(general.pos).unwrap();
             assert!(
                 cell.terrain_value > 1.0,
@@ -604,14 +624,7 @@ mod tests {
         let generals: Vec<_> = state
             .players
             .iter()
-            .map(|p| {
-                state
-                    .units
-                    .iter()
-                    .find(|u| u.id == p.general_id)
-                    .unwrap()
-                    .pos
-            })
+            .map(|p| state.units.get(p.general_id).unwrap().pos)
             .collect();
         for i in 0..generals.len() {
             for j in (i + 1)..generals.len() {
@@ -631,7 +644,7 @@ mod tests {
             .players
             .iter()
             .map(|p| {
-                let g = state.units.iter().find(|u| u.id == p.general_id).unwrap();
+                let g = state.units.get(p.general_id).unwrap();
                 let (row, col) = axial_to_offset(g.pos);
                 sv[(row as usize) * config.width + (col as usize)]
             })
@@ -649,7 +662,11 @@ mod tests {
     fn each_player_has_correct_unit_count() {
         let state = default_state();
         for player in &state.players {
-            let count = state.units.iter().filter(|u| u.owner == player.id).count();
+            let count = state
+                .units
+                .values()
+                .filter(|u| u.owner == player.id)
+                .count();
             // INITIAL_UNITS normal units + 1 general
             assert_eq!(
                 count,
@@ -665,15 +682,10 @@ mod tests {
     fn initial_units_near_general() {
         let state = default_state();
         for player in &state.players {
-            let general_pos = state
-                .units
-                .iter()
-                .find(|u| u.id == player.general_id)
-                .unwrap()
-                .pos;
+            let general_pos = state.units.get(player.general_id).unwrap().pos;
             for unit in state
                 .units
-                .iter()
+                .values()
                 .filter(|u| u.owner == player.id && !u.is_general)
             {
                 let d = distance(general_pos, unit.pos);

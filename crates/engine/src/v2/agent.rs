@@ -1,10 +1,14 @@
+use slotmap::Key;
 use std::collections::HashMap;
 
 use super::directive::Directive;
 use super::hex::{self, Axial};
 use super::observation::{Observation, UnitInfo};
-use super::state::{CargoType, Role};
-use super::{SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIERS_PER_UNIT, UNIT_FOOD_COST, UNIT_MATERIAL_COST};
+use super::state::{CargoType, Role, UnitKey};
+use super::{
+    SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIERS_PER_UNIT,
+    UNIT_FOOD_COST, UNIT_MATERIAL_COST,
+};
 
 pub trait Agent: Send {
     fn name(&self) -> &str;
@@ -174,7 +178,7 @@ impl Agent for SpreadAgent {
             .iter()
             .map(|e| ((e.q, e.r), e))
             .collect();
-        let friendly_near_enemy: HashMap<u32, usize> = count_friendlies_near_enemies(obs);
+        let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
 
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
         let enemy_target = enemy_direction(obs);
@@ -305,14 +309,19 @@ fn settlement_hexes(obs: &Observation) -> Vec<Axial> {
     let mut settlements = Vec::new();
     for pop in &obs.own_population {
         let hex = Axial::new(pop.q, pop.r);
-        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex) {
+        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex)
+        {
             settlements.push(hex);
         }
     }
     settlements
 }
 
-fn pick_settlement_target(obs: &Observation, settlements: &[Axial], origin: Axial) -> Option<Axial> {
+fn pick_settlement_target(
+    obs: &Observation,
+    settlements: &[Axial],
+    origin: Axial,
+) -> Option<Axial> {
     let mut best: Option<(Axial, f32)> = None;
     for (idx, owner) in obs.stockpile_owner.iter().enumerate() {
         if *owner != Some(obs.player) {
@@ -350,8 +359,8 @@ fn pick_settlement_target(obs: &Observation, settlements: &[Axial], origin: Axia
     best.map(|(hex, _)| hex)
 }
 
-fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<u32, usize> {
-    let mut counts: HashMap<u32, usize> = HashMap::new();
+fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<UnitKey, usize> {
+    let mut counts: HashMap<UnitKey, usize> = HashMap::new();
     for enemy in &obs.visible_enemies {
         let enemy_pos = Axial::new(enemy.q, enemy.r);
         let count = obs
@@ -368,8 +377,8 @@ fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<u32, usize> {
 fn find_engageable_enemy(
     unit: &UnitInfo,
     enemy_by_pos: &HashMap<(i32, i32), &UnitInfo>,
-    friendly_counts: &HashMap<u32, usize>,
-) -> Option<u32> {
+    friendly_counts: &HashMap<UnitKey, usize>,
+) -> Option<UnitKey> {
     let unit_pos = Axial::new(unit.q, unit.r);
     hex::neighbors(unit_pos)
         .iter()
@@ -444,7 +453,7 @@ fn pick_lane_destination(
     let (unit_r, unit_c) = hex::axial_to_offset(unit_pos);
     let dx = target_c - unit_c;
     let dy = target_r - unit_r;
-    let lane_hash = ((unit.id as i32 * 7 + 13) % 5) - 2;
+    let lane_hash = (((unit.id.data().as_ffi() as i32) * 7 + 13) % 5) - 2;
     let perp_offset = lane_hash * 3;
     let dest_r = target_r
         + if dx != 0 {
@@ -496,7 +505,8 @@ mod tests {
             num_players: 2,
             seed: 42,
         });
-        let obs = observe(&state, 0);
+        let mut state = state;
+        let obs = observe(&mut state, 0);
         let mut agent = SpreadAgent::new();
         let directives = agent.act(&obs);
         assert!(directives.iter().any(|d| {
@@ -517,7 +527,8 @@ mod tests {
             num_players: 2,
             seed: 42,
         });
-        let obs = observe(&state, 0);
+        let mut state = state;
+        let obs = observe(&mut state, 0);
         let mut agent = SpreadAgent::new();
         let directives = agent.act(&obs);
         assert!(
