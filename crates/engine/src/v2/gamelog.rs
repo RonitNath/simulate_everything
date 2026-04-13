@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use super::SETTLEMENT_THRESHOLD;
 use super::hex::Axial;
 use super::state::{GameState, Role};
-use super::SETTLEMENT_THRESHOLD;
 
 // ---------------------------------------------------------------------------
 // Event types
@@ -55,6 +55,18 @@ impl GameEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct UnitPositionSample {
+    pub tick: u64,
+    pub player: u8,
+    pub unit_id: u32,
+    pub q: i32,
+    pub r: i32,
+    pub strength: f32,
+    pub engaged: bool,
+    pub is_general: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct EconomySample {
     pub tick: u64,
     pub player: u8,
@@ -89,6 +101,7 @@ pub struct GameLog {
     pub events: Vec<GameEvent>,
     pub economy_samples: Vec<EconomySample>,
     pub agent_polls: Vec<AgentPollRecord>,
+    pub unit_positions: Vec<UnitPositionSample>,
     known_settlements: Vec<(u8, Axial)>,
 }
 
@@ -98,6 +111,7 @@ impl GameLog {
             events: Vec::new(),
             economy_samples: Vec::new(),
             agent_polls: Vec::new(),
+            unit_positions: Vec::new(),
             known_settlements: Vec::new(),
         }
     }
@@ -116,7 +130,11 @@ impl GameLog {
 
     /// Build an economy sample for one player from current game state.
     pub fn sample_economy(state: &GameState, player_id: u8) -> EconomySample {
-        let units = state.units.values().filter(|u| u.owner == player_id).count();
+        let units = state
+            .units
+            .values()
+            .filter(|u| u.owner == player_id)
+            .count();
         let territory = state
             .grid
             .iter()
@@ -173,7 +191,8 @@ impl GameLog {
 fn count_settlements(state: &GameState, player_id: u8) -> usize {
     let mut seen: Vec<Axial> = Vec::new();
     for pop in state.population.values().filter(|p| p.owner == player_id) {
-        if !seen.contains(&pop.hex) && state.population_on_hex(player_id, pop.hex) >= SETTLEMENT_THRESHOLD
+        if !seen.contains(&pop.hex)
+            && state.population_on_hex(player_id, pop.hex) >= SETTLEMENT_THRESHOLD
         {
             seen.push(pop.hex);
         }
@@ -267,7 +286,8 @@ impl GameLog {
         let mut last_mode: Vec<Option<String>> = vec![None; num_players];
 
         // Aggregate kills into battles (clusters within 20 ticks)
-        let mut kill_clusters: Vec<(u64, u64, HashMap<u8, u32>, HashMap<u8, u32>, Axial)> = Vec::new();
+        let mut kill_clusters: Vec<(u64, u64, HashMap<u8, u32>, HashMap<u8, u32>, Axial)> =
+            Vec::new();
 
         for event in &self.events {
             match event {
@@ -277,10 +297,8 @@ impl GameLog {
                         player_stats[pid].units_produced += 1;
                         if !first_produced[pid] {
                             first_produced[pid] = true;
-                            timeline.push(format!(
-                                "  t={:<6} P{}: first unit produced",
-                                tick, player
-                            ));
+                            timeline
+                                .push(format!("  t={:<6} P{}: first unit produced", tick, player));
                         }
                     }
                 }
@@ -399,10 +417,7 @@ impl GameLog {
                 if let Some(ref mode) = poll.mode {
                     timeline.push(format!(
                         "  t={:<6} P{} {} → {} mode",
-                        poll.tick,
-                        poll.player,
-                        agent_names[pid],
-                        mode
+                        poll.tick, poll.player, agent_names[pid], mode
                     ));
                 }
                 last_mode[pid] = poll.mode.clone();
@@ -464,16 +479,16 @@ impl GameLog {
         }
 
         // Game end
-        let end_reason = if timed_out { "timeout" } else { "general killed" };
+        let end_reason = if timed_out {
+            "timeout"
+        } else {
+            "general killed"
+        };
         timeline.push(format!("  t={:<6} Game ends ({})", final_tick, end_reason));
 
         // Decisive moment detection
-        let (decisive_tick, decisive_reason) = detect_decisive_moment(
-            &self.economy_samples,
-            &kill_clusters,
-            winner,
-            num_players,
-        );
+        let (decisive_tick, decisive_reason) =
+            detect_decisive_moment(&self.economy_samples, &kill_clusters, winner, num_players);
 
         PostmortemSummary {
             winner,
@@ -500,7 +515,12 @@ fn detect_decisive_moment(
 
     // Walk economy samples: find tick where winner first had 2:1 unit advantage
     // that was never reversed.
-    let ticks: Vec<u64> = samples.iter().map(|s| s.tick).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let ticks: Vec<u64> = samples
+        .iter()
+        .map(|s| s.tick)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
 
     let mut decisive_tick: Option<u64> = None;
     for &tick in &ticks {
@@ -586,8 +606,16 @@ impl PostmortemSummary {
 
         let winner_str = match self.winner {
             Some(w) => {
-                let name = self.agent_names.get(w as usize).map(|s| s.as_str()).unwrap_or("?");
-                let reason = if self.timed_out { "timeout" } else { "general killed" };
+                let name = self
+                    .agent_names
+                    .get(w as usize)
+                    .map(|s| s.as_str())
+                    .unwrap_or("?");
+                let reason = if self.timed_out {
+                    "timeout"
+                } else {
+                    "general killed"
+                };
                 format!("P{} ({}) at tick {} ({})", w, name, self.final_tick, reason)
             }
             None => format!("draw at tick {}", self.final_tick),
@@ -609,26 +637,51 @@ impl PostmortemSummary {
         // Header
         out.push_str(&format!("{:<12}", ""));
         for i in 0..n {
-            let label = format!("P{} ({})", i, self.agent_names.get(i).map(|s| s.as_str()).unwrap_or("?"));
+            let label = format!(
+                "P{} ({})",
+                i,
+                self.agent_names.get(i).map(|s| s.as_str()).unwrap_or("?")
+            );
             out.push_str(&format!("{:<width$}", label, width = col_width));
         }
         out.push('\n');
 
         // Rows
         let rows: Vec<(&str, Box<dyn Fn(&PlayerStats) -> String>)> = vec![
-            ("Produced", Box::new(|s: &PlayerStats| format!("{}", s.units_produced))),
-            ("Lost", Box::new(|s: &PlayerStats| format!("{}", s.units_lost))),
-            ("K/D", Box::new(|s: &PlayerStats| {
-                if s.units_lost == 0 {
-                    format!("{:.0}/0", s.kills)
-                } else {
-                    format!("{:.2}", s.kills as f64 / s.units_lost as f64)
-                }
-            })),
-            ("Peak units", Box::new(|s: &PlayerStats| format!("{}", s.peak_units))),
-            ("Territory", Box::new(|s: &PlayerStats| format!("{}", s.final_territory))),
-            ("Population", Box::new(|s: &PlayerStats| format!("{}", s.final_population))),
-            ("Settlements", Box::new(|s: &PlayerStats| format!("{}", s.settlements_founded))),
+            (
+                "Produced",
+                Box::new(|s: &PlayerStats| format!("{}", s.units_produced)),
+            ),
+            (
+                "Lost",
+                Box::new(|s: &PlayerStats| format!("{}", s.units_lost)),
+            ),
+            (
+                "K/D",
+                Box::new(|s: &PlayerStats| {
+                    if s.units_lost == 0 {
+                        format!("{:.0}/0", s.kills)
+                    } else {
+                        format!("{:.2}", s.kills as f64 / s.units_lost as f64)
+                    }
+                }),
+            ),
+            (
+                "Peak units",
+                Box::new(|s: &PlayerStats| format!("{}", s.peak_units)),
+            ),
+            (
+                "Territory",
+                Box::new(|s: &PlayerStats| format!("{}", s.final_territory)),
+            ),
+            (
+                "Population",
+                Box::new(|s: &PlayerStats| format!("{}", s.final_population)),
+            ),
+            (
+                "Settlements",
+                Box::new(|s: &PlayerStats| format!("{}", s.settlements_founded)),
+            ),
         ];
 
         for (label, fmt_fn) in &rows {
@@ -660,15 +713,16 @@ impl PostmortemSummary {
     pub fn one_liner(&self) -> String {
         let winner_str = match self.winner {
             Some(w) => {
-                let name = self.agent_names.get(w as usize).map(|s| s.as_str()).unwrap_or("?");
+                let name = self
+                    .agent_names
+                    .get(w as usize)
+                    .map(|s| s.as_str())
+                    .unwrap_or("?");
                 format!("P{}({}) wins t={}", w, name, self.final_tick)
             }
             None => format!("draw t={}", self.final_tick),
         };
-        let reason = self
-            .decisive_reason
-            .as_deref()
-            .unwrap_or("no clear cause");
+        let reason = self.decisive_reason.as_deref().unwrap_or("no clear cause");
         format!("{} — {}", winner_str, reason)
     }
 }

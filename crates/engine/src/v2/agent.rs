@@ -15,7 +15,9 @@ pub trait Agent: Send {
     fn init(&mut self, obs: &InitialObservation);
     fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive>;
     fn reset(&mut self) {}
-    fn mode(&self) -> Option<&str> { None }
+    fn mode(&self) -> Option<&str> {
+        None
+    }
 }
 
 fn seed_observation(obs: &InitialObservation) -> Observation {
@@ -90,15 +92,19 @@ impl SpreadAgent {
         let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
 
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
+        let general_hex = obs
+            .own_units
+            .iter()
+            .find(|u| u.is_general)
+            .map(|u| Axial::new(u.q, u.r));
+        let origin = general_hex.unwrap_or(map_center);
         let enemy_target = enemy_direction(obs);
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
             // Handle engaged units: disengage if losing.
             if !unit.engagements.is_empty() {
                 if should_disengage(unit, &obs.visible_enemies) {
-                    directives.push(Directive::DisengageAll {
-                        unit_id: unit.id,
-                    });
+                    directives.push(Directive::DisengageAll { unit_id: unit.id });
                 }
                 continue;
             }
@@ -115,7 +121,7 @@ impl SpreadAgent {
             }
 
             let dest = if obs.own_units.len() <= 8 {
-                pick_sector_destination(unit, idx, obs, map_center)
+                pick_sector_destination(unit, idx, obs, origin)
             } else {
                 pick_lane_destination(unit, obs, enemy_target)
             };
@@ -311,6 +317,7 @@ impl StrikerAgent {
             .collect();
         let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
+        let striker_origin = general_hex.unwrap_or(map_center);
         let enemy_target = enemy_direction(obs);
 
         let guard_ids = if self.mode != StrikerMode::Expand {
@@ -327,9 +334,7 @@ impl StrikerAgent {
             // Handle engaged units: disengage if losing.
             if !unit.engagements.is_empty() {
                 if should_disengage(unit, &obs.visible_enemies) {
-                    directives.push(Directive::DisengageAll {
-                        unit_id: unit.id,
-                    });
+                    directives.push(Directive::DisengageAll { unit_id: unit.id });
                 }
                 continue;
             }
@@ -352,7 +357,7 @@ impl StrikerAgent {
             let dest = match self.mode {
                 StrikerMode::Expand => {
                     if obs.own_units.len() <= 8 {
-                        pick_sector_destination(unit, idx, obs, map_center)
+                        pick_sector_destination(unit, idx, obs, striker_origin)
                     } else {
                         pick_lane_destination(unit, obs, enemy_target)
                     }
@@ -475,15 +480,19 @@ impl TurtleAgent {
             .collect();
         let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
+        let turtle_general_hex = obs
+            .own_units
+            .iter()
+            .find(|u| u.is_general)
+            .map(|u| Axial::new(u.q, u.r));
+        let turtle_origin = turtle_general_hex.unwrap_or(map_center);
         let enemy_target = enemy_direction(obs);
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
             // Handle engaged units: disengage if losing.
             if !unit.engagements.is_empty() {
                 if should_disengage(unit, &obs.visible_enemies) {
-                    directives.push(Directive::DisengageAll {
-                        unit_id: unit.id,
-                    });
+                    directives.push(Directive::DisengageAll { unit_id: unit.id });
                 }
                 continue;
             }
@@ -502,7 +511,7 @@ impl TurtleAgent {
             }
 
             let dest = if obs.own_units.len() <= 8 {
-                pick_sector_destination(unit, idx, obs, map_center)
+                pick_sector_destination(unit, idx, obs, turtle_origin)
             } else if obs.own_units.len() >= 20 {
                 pick_lane_destination(unit, obs, enemy_target)
             } else {
@@ -763,7 +772,7 @@ fn pick_lane_destination(
     if let Some(enemy) = obs
         .visible_enemies
         .iter()
-        .filter(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)) <= 10)
+        .filter(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)) <= 6)
         .min_by_key(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)))
     {
         return Some(Axial::new(enemy.q, enemy.r));

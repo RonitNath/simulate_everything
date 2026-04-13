@@ -97,6 +97,27 @@ pub fn run_loop<F>(
 
         sim::tick(state);
 
+        // Record unit positions every 10 ticks
+        if state.game_log.is_some() && state.tick % 10 == 0 {
+            let positions: Vec<super::gamelog::UnitPositionSample> = state
+                .units
+                .values()
+                .map(|u| super::gamelog::UnitPositionSample {
+                    tick: state.tick,
+                    player: u.owner,
+                    unit_id: u.public_id,
+                    q: u.pos.q,
+                    r: u.pos.r,
+                    strength: u.strength,
+                    engaged: !u.engagements.is_empty(),
+                    is_general: u.is_general,
+                })
+                .collect();
+            if let Some(log) = &mut state.game_log {
+                log.unit_positions.extend(positions);
+            }
+        }
+
         // Economy sampling every 50 ticks
         if state.game_log.is_some() && state.tick % 50 == 0 {
             let player_ids: Vec<u8> = state

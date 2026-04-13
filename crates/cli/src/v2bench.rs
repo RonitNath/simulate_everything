@@ -23,6 +23,7 @@ pub fn main(args: &[String]) {
     let ascii_mode = args.iter().any(|a| a == "--ascii");
     let postmortem_mode = args.iter().any(|a| a == "--postmortem");
     let explain_mode = args.iter().any(|a| a == "--explain");
+    let diagnose_mode = args.iter().any(|a| a == "--diagnose");
     let top_n: usize = flag_value(args, "--top")
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
@@ -127,6 +128,17 @@ pub fn main(args: &[String]) {
             .map(|x| x.trim().parse::<u64>().expect("bad snapshot tick"))
             .collect()
     });
+
+    if diagnose_mode {
+        let matchup = &matchups[0];
+        let check_seeds: Vec<u64> = if seeds.len() > 10 {
+            seeds[..10].to_vec()
+        } else {
+            seeds.clone()
+        };
+        run_diagnose(&check_seeds, matchup, max_ticks, (w, h), num_players);
+        return;
+    }
 
     if ascii_mode || snapshot_ticks.is_some() {
         let matchup = &matchups[0];
@@ -449,6 +461,291 @@ fn run_convergence(
     }
 
     eprintln!("\nTotal wall time: {:.2?}", total_start.elapsed());
+}
+
+// ---------------------------------------------------------------------------
+// Diagnose mode: 4 automated behavioral health checks
+// ---------------------------------------------------------------------------
+
+fn run_diagnose(
+    seeds: &[u64],
+    agent_names: &[&str],
+    max_ticks: u64,
+    (w, h): (usize, usize),
+    num_players: u8,
+) {
+    use simulate_everything_engine::v2::{gamelog::GameLog, runner};
+
+    eprintln!(
+        "\n=== BEHAVIORAL HEALTH CHECK: {} ({} seeds, {}x{}) ===\n",
+        agent_names.join(" vs "),
+        seeds.len(),
+        w,
+        h,
+    );
+
+    let mut spatial_scores: Vec<f64> = Vec::new();
+    let mut retreat_scores: Vec<f64> = Vec::new();
+    let mut concentration_scores: Vec<f64> = Vec::new();
+    let mut production_ticks: Vec<u64> = Vec::new();
+
+    for &seed in seeds {
+        let mut state = v2_mapgen::generate(&V2MapConfig {
+            width: w,
+            height: h,
+            num_players,
+            seed,
+        });
+        state.game_log = Some(GameLog::new());
+
+        let mut agents: Vec<Box<dyn V2Agent>> = agent_names
+            .iter()
+            .map(|name| v2_agent::agent_by_name(name).unwrap())
+            .collect();
+
+        let tick_limit = sim::timeout_limit(max_ticks);
+        runner::run_loop(&mut state, &mut agents, tick_limit, |_| {});
+
+        if let Some(log) = state.game_log.take() {
+            if let Some(s) = check_spatial_diversity(&log, num_players) {
+                spatial_scores.push(s);
+            }
+            if let Some(s) = check_retreat_rate(&log) {
+                retreat_scores.push(s);
+            }
+            if let Some(s) = check_force_concentration(&log) {
+                concentration_scores.push(s);
+            }
+            check_production_speed(&log, num_players, &mut production_ticks);
+        }
+    }
+
+    let avg = |v: &[f64]| -> Option<f64> {
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.iter().sum::<f64>() / v.len() as f64)
+        }
+    };
+    let avg_tick = |v: &[u64]| -> Option<f64> {
+        if v.is_empty() {
+            None
+        } else {
+            Some(v.iter().sum::<u64>() as f64 / v.len() as f64)
+        }
+    };
+
+    let spatial_avg = avg(&spatial_scores);
+    let retreat_avg = avg(&retreat_scores);
+    let concentration_avg = avg(&concentration_scores);
+    let production_avg = avg_tick(&production_ticks);
+
+    eprintln!("--- CHECK 1: Spatial Diversity (target >= 4.0 distinct hexes) ---");
+    match spatial_avg {
+        Some(v) => {
+            let status = if v >= 4.0 { "PASS" } else { "FAIL" };
+            eprintln!("  avg distinct hexes: {:.2}  [{}]", v, status);
+        }
+        None => eprintln!("  no data"),
+    }
+
+    eprintln!("\n--- CHECK 2: Retreat Rate (target >= 30% survival when critical) ---");
+    match retreat_avg {
+        Some(v) => {
+            let status = if v >= 30.0 { "PASS" } else { "FAIL" };
+            eprintln!("  survival rate when critical: {:.1}%  [{}]", v, status);
+        }
+        None => eprintln!("  no critical engagements observed"),
+    }
+
+    eprintln!("\n--- CHECK 3: Force Concentration (target >= 2.0 friendlies near attacker) ---");
+    match concentration_avg {
+        Some(v) => {
+            let status = if v >= 2.0 { "PASS" } else { "FAIL" };
+            eprintln!(
+                "  avg friendlies near attacker at engagement: {:.2}  [{}]",
+                v, status
+            );
+        }
+        None => eprintln!("  no engagements observed"),
+    }
+
+    eprintln!("\n--- CHECK 4: Production Speed (target <= 30 ticks to first unit) ---");
+    match production_avg {
+        Some(v) => {
+            let status = if v <= 30.0 { "PASS" } else { "FAIL" };
+            eprintln!("  avg tick of first unit produced: {:.1}  [{}]", v, status);
+        }
+        None => eprintln!("  no units produced observed"),
+    }
+
+    eprintln!();
+}
+
+/// Check 1: avg distinct hexes occupied by non-general units at sample ticks 50,100,150,200.
+fn check_spatial_diversity(
+    log: &simulate_everything_engine::v2::gamelog::GameLog,
+    num_players: u8,
+) -> Option<f64> {
+    use std::collections::HashSet;
+
+    let sample_ticks = [50u64, 100, 150, 200];
+    let mut total_distinct: u64 = 0;
+    let mut sample_count: u64 = 0;
+
+    for &tick in &sample_ticks {
+        // Find the closest recorded tick within +/- 10.
+        let positions_at_tick: Vec<_> = log
+            .unit_positions
+            .iter()
+            .filter(|s| s.tick >= tick.saturating_sub(10) && s.tick <= tick + 10 && !s.is_general)
+            .collect();
+
+        if positions_at_tick.is_empty() {
+            continue;
+        }
+
+        for pid in 0..num_players {
+            let hexes: HashSet<(i32, i32)> = positions_at_tick
+                .iter()
+                .filter(|s| s.player == pid)
+                .map(|s| (s.q, s.r))
+                .collect();
+            if !hexes.is_empty() {
+                total_distinct += hexes.len() as u64;
+                sample_count += 1;
+            }
+        }
+    }
+
+    if sample_count == 0 {
+        None
+    } else {
+        Some(total_distinct as f64 / sample_count as f64)
+    }
+}
+
+/// Check 2: of units that reached <=30 strength while engaged, what % survived.
+fn check_retreat_rate(log: &simulate_everything_engine::v2::gamelog::GameLog) -> Option<f64> {
+    use simulate_everything_engine::v2::gamelog::GameEvent;
+
+    // Find all unit_ids that were killed.
+    let killed_ids: std::collections::HashSet<u32> = log
+        .events
+        .iter()
+        .filter_map(|e| {
+            if let GameEvent::UnitKilled {
+                unit_id,
+                was_general,
+                ..
+            } = e
+            {
+                if !was_general { Some(*unit_id) } else { None }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Find units that hit critical strength while engaged.
+    let mut critical_unit_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for sample in &log.unit_positions {
+        if !sample.is_general && sample.engaged && sample.strength <= 30.0 {
+            critical_unit_ids.insert(sample.unit_id);
+        }
+    }
+
+    if critical_unit_ids.is_empty() {
+        return None;
+    }
+
+    let survived = critical_unit_ids
+        .iter()
+        .filter(|id| !killed_ids.contains(id))
+        .count();
+    let total = critical_unit_ids.len();
+    Some(survived as f64 / total as f64 * 100.0)
+}
+
+/// Check 3: at each EngagementCreated, count friendly non-general units within distance 2.
+fn check_force_concentration(
+    log: &simulate_everything_engine::v2::gamelog::GameLog,
+) -> Option<f64> {
+    use simulate_everything_engine::v2::{
+        gamelog::GameEvent,
+        hex::{self, Axial},
+    };
+
+    let mut total_nearby: u64 = 0;
+    let mut engagement_count: u64 = 0;
+
+    for event in &log.events {
+        let GameEvent::EngagementCreated {
+            tick,
+            attacker,
+            attacker_owner,
+            ..
+        } = event
+        else {
+            continue;
+        };
+
+        // Find the nearest unit_positions snapshot to this tick.
+        let snap_tick = (tick / 10) * 10;
+        let attacker_pos = log
+            .unit_positions
+            .iter()
+            .filter(|s| s.tick == snap_tick && s.unit_id == *attacker)
+            .map(|s| Axial::new(s.q, s.r))
+            .next();
+
+        let Some(attacker_hex) = attacker_pos else {
+            continue;
+        };
+
+        let nearby = log
+            .unit_positions
+            .iter()
+            .filter(|s| {
+                s.tick == snap_tick
+                    && s.player == *attacker_owner
+                    && !s.is_general
+                    && s.unit_id != *attacker
+                    && hex::distance(Axial::new(s.q, s.r), attacker_hex) <= 2
+            })
+            .count();
+
+        total_nearby += nearby as u64;
+        engagement_count += 1;
+    }
+
+    if engagement_count == 0 {
+        None
+    } else {
+        Some(total_nearby as f64 / engagement_count as f64)
+    }
+}
+
+/// Check 4: tick of first UnitProduced per player; appends to out_ticks.
+fn check_production_speed(
+    log: &simulate_everything_engine::v2::gamelog::GameLog,
+    num_players: u8,
+    out_ticks: &mut Vec<u64>,
+) {
+    use simulate_everything_engine::v2::gamelog::GameEvent;
+
+    for pid in 0..num_players {
+        let first = log.events.iter().find_map(|e| {
+            if let GameEvent::UnitProduced { tick, player, .. } = e {
+                if *player == pid { Some(*tick) } else { None }
+            } else {
+                None
+            }
+        });
+        if let Some(t) = first {
+            out_ticks.push(t);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
