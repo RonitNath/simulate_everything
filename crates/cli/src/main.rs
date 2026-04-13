@@ -1,3 +1,5 @@
+mod v2bench;
+
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rayon::prelude::*;
@@ -12,7 +14,9 @@ use std::time::Instant;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    if args.iter().any(|a| a == "bench") {
+    if args.iter().any(|a| a == "v2bench") {
+        v2bench::main(&args);
+    } else if args.iter().any(|a| a == "bench") {
         bench_main(&args);
     } else {
         sim_main(&args);
