@@ -128,6 +128,14 @@ fn produce_unit(state: &mut GameState, player_id: u8) {
         destination: None,
         is_general: false,
     });
+
+    tracing::trace!(
+        tick = state.tick,
+        player = player_id,
+        unit_id = id,
+        pos = ?spawn_pos,
+        "unit produced"
+    );
 }
 
 #[cfg(test)]

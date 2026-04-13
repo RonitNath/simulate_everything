@@ -1,4 +1,4 @@
-use generals_engine::v2::{
+use simulate_everything_engine::v2::{
     agent::{Agent, SpreadAgent},
     directive,
     mapgen::{self, MapConfig},

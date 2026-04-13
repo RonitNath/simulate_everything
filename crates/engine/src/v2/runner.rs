@@ -13,24 +13,72 @@ pub fn run_game(
     agents: &mut [Box<dyn Agent>],
     max_ticks: u64,
 ) -> Option<u8> {
+    let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
+    tracing::info!(
+        width = state.width,
+        height = state.height,
+        players = state.players.len(),
+        max_ticks,
+        ?agent_names,
+        "game starting"
+    );
+
     while state.tick < max_ticks && !sim::is_over(state) {
         if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
             for (player_id, agent) in agents.iter_mut().enumerate() {
                 let pid = player_id as u8;
-                // Skip eliminated players
                 if !state.players.iter().any(|p| p.id == pid && p.alive) {
                     continue;
                 }
                 let obs = observation::observe(state, pid);
                 let directives = agent.act(&obs);
+                tracing::trace!(
+                    tick = state.tick,
+                    player = pid,
+                    directives = directives.len(),
+                    "agent polled"
+                );
                 directive::apply_directives(state, pid, &directives);
             }
         }
 
         sim::tick(state);
+
+        // Periodic summary at debug level
+        if state.tick % 50 == 0 {
+            for p in &state.players {
+                if !p.alive {
+                    continue;
+                }
+                let units: Vec<_> = state.units.iter().filter(|u| u.owner == p.id).collect();
+                let engaged = units.iter().filter(|u| !u.engagements.is_empty()).count();
+                let moving = units
+                    .iter()
+                    .filter(|u| u.destination.is_some() && u.engagements.is_empty())
+                    .count();
+                let idle = units.len() - engaged - moving;
+                let resources = (p.resources * 10.0).round() / 10.0;
+                tracing::debug!(
+                    tick = state.tick,
+                    player = p.id,
+                    units = units.len(),
+                    engaged,
+                    moving,
+                    idle,
+                    resources,
+                    "player status"
+                );
+            }
+        }
     }
 
-    sim::winner(state)
+    let winner = sim::winner(state);
+    tracing::info!(
+        tick = state.tick,
+        winner = ?winner,
+        "game ended"
+    );
+    winner
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
 use super::combat;
-use super::hex::Axial;
+use super::hex::{self, Axial};
 use super::pathfinding;
 use super::state::GameState;
 use super::{BASE_MOVE_COOLDOWN, RESOURCE_RATE, TERRAIN_MOVE_PENALTY};
+use std::collections::HashMap;
 
 /// Advance the game state by one tick.
 ///
@@ -13,6 +14,7 @@ pub fn tick(state: &mut GameState) {
     move_units(state);
     decrement_cooldowns(state);
     cleanup(state);
+    check_stale_engagements(state);
     state.tick += 1;
 }
 
@@ -101,6 +103,18 @@ fn decrement_cooldowns(state: &mut GameState) {
 fn cleanup(state: &mut GameState) {
     // Clear engagements referencing dead units before removing them
     combat::cleanup_engagements(state);
+
+    // Log deaths
+    for u in state.units.iter().filter(|u| u.strength <= 0.0) {
+        tracing::debug!(
+            tick = state.tick,
+            unit_id = u.id,
+            owner = u.owner,
+            is_general = u.is_general,
+            "unit killed"
+        );
+    }
+
     // Remove dead units
     state.units.retain(|u| u.strength > 0.0);
 
@@ -114,10 +128,61 @@ fn cleanup(state: &mut GameState) {
         .collect();
 
     for pid in eliminated {
+        tracing::info!(tick = state.tick, player = pid, "player eliminated");
         if let Some(player) = state.players.iter_mut().find(|p| p.id == pid) {
             player.alive = false;
         }
+        // Collect IDs of units being removed so we can clean up engagement refs
+        let removed_ids: Vec<u32> = state
+            .units
+            .iter()
+            .filter(|u| u.owner == pid)
+            .map(|u| u.id)
+            .collect();
         state.units.retain(|u| u.owner != pid);
+        // Clean up stale engagement refs on surviving units
+        for unit in &mut state.units {
+            unit.engagements
+                .retain(|e| !removed_ids.contains(&e.enemy_id));
+        }
+    }
+}
+
+/// Log stale engagements — units marked as engaged but with no valid adjacent enemy.
+/// This is a diagnostic to detect engagement state bugs.
+fn check_stale_engagements(state: &GameState) {
+    let unit_positions: HashMap<u32, Axial> = state
+        .units
+        .iter()
+        .map(|u| (u.id, u.pos))
+        .collect();
+
+    for u in &state.units {
+        for eng in &u.engagements {
+            match unit_positions.get(&eng.enemy_id) {
+                None => {
+                    tracing::warn!(
+                        tick = state.tick,
+                        unit_id = u.id,
+                        enemy_id = eng.enemy_id,
+                        edge = eng.edge,
+                        "stale engagement: enemy does not exist"
+                    );
+                }
+                Some(&enemy_pos) => {
+                    if hex::shared_edge(u.pos, enemy_pos).is_none() {
+                        tracing::warn!(
+                            tick = state.tick,
+                            unit_id = u.id,
+                            enemy_id = eng.enemy_id,
+                            unit_pos = ?u.pos,
+                            enemy_pos = ?enemy_pos,
+                            "stale engagement: units not adjacent"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -206,9 +271,9 @@ mod tests {
         tick(&mut state);
 
         // cooldown = BASE_MOVE_COOLDOWN + terrain_penalty, then decremented by 1
-        // BASE_MOVE_COOLDOWN=3, terrain_penalty in [0,1], so result is 2 or 3
+        // BASE_MOVE_COOLDOWN=2, terrain_penalty in [0,1], so result is 1 or 2
         assert!(
-            state.units[unit_idx].move_cooldown >= 2,
+            state.units[unit_idx].move_cooldown >= 1,
             "cooldown {} too low after move",
             state.units[unit_idx].move_cooldown
         );

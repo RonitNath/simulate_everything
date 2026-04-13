@@ -14,7 +14,7 @@ use axum::{
     response::{Html, IntoResponse, Json},
     routing::get,
 };
-use generals_engine::{
+use simulate_everything_engine::{
     agent::Agent,
     game::Game,
     mapgen::{self, MapConfig},
@@ -66,7 +66,7 @@ struct GameParams {
 }
 
 fn run_game(seed: u64, num_players: u8, max_turns: u32, size: Option<(usize, usize)>) -> Replay {
-    use generals_engine::agent::all_builtin_agents;
+    use simulate_everything_engine::agent::all_builtin_agents;
     use rand::seq::SliceRandom;
 
     let mut rng = StdRng::seed_from_u64(seed);
@@ -683,7 +683,12 @@ async fn api_v2_rr_status(State(state): State<Arc<AppState>>) -> impl IntoRespon
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let static_dir = std::env::var("GENERALS_STATIC_DIR").unwrap_or_else(|_| {
         let manifest = env!("CARGO_MANIFEST_DIR");

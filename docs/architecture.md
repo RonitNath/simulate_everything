@@ -84,17 +84,17 @@ Cell encoding: `....` empty, `####` mountain, `c 42` neutral city, `a  5` player
 
 `screenshot(width, height, grid, turn, stats) -> String` or `frame.ascii(w, h)` for Display.
 
-## CLI (`generals` binary)
+## CLI (`simulate_everything_cli` binary)
 
 ### Simulation mode (default)
 ```bash
-generals [seed] [players] [max_turns] [--ascii]
+simulate_everything_cli [seed] [players] [max_turns] [--ascii]
 ```
 Runs a single game with shuffled agents. Outputs event JSON to stdout (or ASCII board with `--ascii`).
 
 ### Bench mode
 ```bash
-generals bench [flags]
+simulate_everything_cli bench [flags]
 ```
 Parallel game runner for agent comparison. All games run on rayon thread pool. Outputs per-game JSON to stdout, summary to stderr.
 
@@ -121,13 +121,13 @@ Parallel game runner for agent comparison. All games run on rayon thread pool. O
 **Examples:**
 ```bash
 # Quick regression check
-generals bench --seeds 100-249 --agents pressure,swarm
+simulate_everything_cli bench --seeds 100-249 --agents pressure,swarm
 # Full round-robin with convergence
-generals bench --converge --matchups all --ci 0.03
+simulate_everything_cli bench --converge --matchups all --ci 0.03
 # Profile a specific interesting game
-generals bench --profile --seeds 202 --agents pressure,swarm
+simulate_everything_cli bench --profile --seeds 202 --agents pressure,swarm
 # Tight CI for detecting small improvements
-generals bench --converge --agents pressure,swarm --ci 0.02 --max-seeds 10000
+simulate_everything_cli bench --converge --agents pressure,swarm --ci 0.02 --max-seeds 10000
 ```
 
 ## Replay Binary (`simulate_everything_replay`)
@@ -163,7 +163,7 @@ Minimal static file server (Axum + tower-http ServeDir). No dynamic routes. Requ
 The bench harness identifies interesting games by score. Export those specific seeds:
 ```bash
 # Bench finds seed 202 is interesting (upset, comeback)
-generals bench --seeds 100-249 --agents pressure,swarm --top 5
+simulate_everything_cli bench --seeds 100-249 --agents pressure,swarm --top 5
 # Export that replay for publishing
 simulate_everything_replay --seeds 202 --agents pressure,swarm --out ./replays
 ```

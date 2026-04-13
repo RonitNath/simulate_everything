@@ -1,8 +1,8 @@
-use generals_engine::agent::{self, Agent};
-use generals_engine::game::Game;
-use generals_engine::mapgen::{self, MapConfig};
-use generals_engine::replay::Replay;
-use generals_engine::state::Tile;
+use simulate_everything_engine::agent::{self, Agent};
+use simulate_everything_engine::game::Game;
+use simulate_everything_engine::mapgen::{self, MapConfig};
+use simulate_everything_engine::replay::Replay;
+use simulate_everything_engine::state::Tile;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
@@ -248,7 +248,7 @@ fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
     write!(out, "{}", keyframe_interval).unwrap();
     out.push_str(",\"f\":[");
 
-    let mut prev_grid: Option<&[generals_engine::state::Cell]> = None;
+    let mut prev_grid: Option<&[simulate_everything_engine::state::Cell]> = None;
 
     for (i, frame) in replay.frames.iter().enumerate() {
         if i > 0 { out.push(','); }
@@ -297,7 +297,7 @@ fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
     out
 }
 
-fn write_cell_compact(out: &mut String, cell: &generals_engine::state::Cell) {
+fn write_cell_compact(out: &mut String, cell: &simulate_everything_engine::state::Cell) {
     let tile: u8 = match cell.tile {
         Tile::Empty => 0,
         Tile::Mountain => 1,

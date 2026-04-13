@@ -1,6 +1,6 @@
-use generals_engine::agent::{self, Agent};
-use generals_engine::game::Game;
-use generals_engine::mapgen::{self, MapConfig};
+use simulate_everything_engine::agent::{self, Agent};
+use simulate_everything_engine::game::Game;
+use simulate_everything_engine::mapgen::{self, MapConfig};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
@@ -55,7 +55,7 @@ fn sim_main(args: &[String]) {
     let gen_time = gen_start.elapsed();
     eprintln!("Map generated in {:?}", gen_time);
 
-    use generals_engine::agent::all_builtin_agents;
+    use simulate_everything_engine::agent::all_builtin_agents;
     use rand::seq::SliceRandom;
 
     let mut pool = all_builtin_agents();

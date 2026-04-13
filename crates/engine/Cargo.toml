@@ -7,4 +7,5 @@ edition.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rand.workspace = true
+tracing.workspace = true
 noise = "0.9"

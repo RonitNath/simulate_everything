@@ -173,7 +173,7 @@ async def run(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Graph search agent for Generals")
+    parser = argparse.ArgumentParser(description="Graph search agent for simulate_everything")
     parser.add_argument("--name", default="GraphBot", help="Agent name")
     parser.add_argument("--host", default="localhost", help="Server host")
     parser.add_argument("--port", type=int, default=3333, help="Server port")

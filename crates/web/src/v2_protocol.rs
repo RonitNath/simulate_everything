@@ -1,4 +1,4 @@
-use generals_engine::v2::replay::UnitSnapshot;
+use simulate_everything_engine::v2::replay::UnitSnapshot;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]

@@ -26,9 +26,11 @@ impl Agent for SpreadAgent {
 
         // Produce whenever affordable — resource cost is the natural throttle
         let mut remaining_resources = obs.resources;
+        let mut produce_count = 0u32;
         while remaining_resources >= UNIT_COST {
             directives.push(Directive::Produce);
             remaining_resources -= UNIT_COST;
+            produce_count += 1;
         }
 
         // Build position→enemy lookup for O(6) engagement checks
@@ -91,6 +93,23 @@ impl Agent for SpreadAgent {
                 });
             }
         }
+
+        let engaged_count = obs.own_units.iter().filter(|u| !u.engagements.is_empty()).count();
+        let move_count = directives.iter().filter(|d| matches!(d, Directive::Move { .. })).count();
+        let engage_count = directives.iter().filter(|d| matches!(d, Directive::Engage { .. })).count();
+
+        tracing::trace!(
+            tick = obs.tick,
+            player = obs.player,
+            own_units = obs.own_units.len(),
+            visible_enemies = obs.visible_enemies.len(),
+            resources = format_args!("{:.1}", obs.resources),
+            produced = produce_count,
+            moves = move_count,
+            engages = engage_count,
+            already_engaged = engaged_count,
+            "spread agent act"
+        );
 
         directives
     }

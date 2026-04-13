@@ -1,4 +1,4 @@
-use generals_engine::{
+use simulate_everything_engine::{
     agent::{rr_agents, Agent},
     event::PlayerStats,
     game::Game,
@@ -305,7 +305,7 @@ impl RoundRobin {
     }
 }
 
-fn make_frame(state: &generals_engine::GameState) -> Frame {
+fn make_frame(state: &simulate_everything_engine::GameState) -> Frame {
     let stats = (0..state.num_players)
         .map(|p| PlayerStats {
             player: p,

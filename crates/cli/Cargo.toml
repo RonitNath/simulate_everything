@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 
 [[bin]]
-name = "generals"
+name = "simulate_everything_cli"
 path = "src/main.rs"
 
 [dependencies]

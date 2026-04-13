@@ -1,5 +1,5 @@
 use crate::protocol::*;
-use generals_engine::{
+use simulate_everything_engine::{
     event::PlayerStats,
     game::Game,
     mapgen::{self, MapConfig},
@@ -12,7 +12,7 @@ use tokio::sync::{broadcast, mpsc, Mutex, Notify};
 use tracing::{info, warn};
 
 pub struct TurnSubmission {
-    pub actions: Vec<generals_engine::action::Action>,
+    pub actions: Vec<simulate_everything_engine::action::Action>,
 }
 
 struct AgentSlot {
@@ -260,7 +260,7 @@ impl Lobby {
             }
 
             // Collect actions with timeout.
-            let mut orders: Vec<(u8, Vec<generals_engine::action::Action>)> =
+            let mut orders: Vec<(u8, Vec<simulate_everything_engine::action::Action>)> =
                 (0..self.num_players).map(|p| (p, vec![])).collect();
 
             let deadline = tokio::time::Instant::now() + action_deadline;
@@ -310,7 +310,7 @@ impl Lobby {
     }
 }
 
-fn make_frame(state: &generals_engine::GameState) -> Frame {
+fn make_frame(state: &simulate_everything_engine::GameState) -> Frame {
     let stats = (0..state.num_players)
         .map(|p| PlayerStats {
             player: p,

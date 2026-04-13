@@ -64,6 +64,16 @@ pub fn engage(state: &mut GameState, attacker_id: u32, target_id: u32) -> bool {
     state.units[attacker_idx].destination = None;
     state.units[target_idx].destination = None;
 
+    tracing::debug!(
+        tick = state.tick,
+        attacker = attacker_id,
+        target = target_id,
+        edge,
+        attacker_owner = state.units[attacker_idx].owner,
+        target_owner = state.units[target_idx].owner,
+        "engagement created"
+    );
+
     true
 }
 
@@ -332,17 +342,17 @@ mod tests {
 
         resolve_combat(&mut state);
 
-        // Both at 100 strength, DAMAGE_RATE=0.01, 1 engagement each (eff=1.0)
-        // Each takes 100 * 0.01 * 1.0 = 1.0 damage
+        // Both at 100 strength, DAMAGE_RATE=0.05, 1 engagement each (eff=1.0)
+        // Each takes 100 * 0.05 * 1.0 = 5.0 damage
         let a = state.units.iter().find(|u| u.id == 1).unwrap();
         let b = state.units.iter().find(|u| u.id == 2).unwrap();
         assert!(
-            (a.strength - 99.0).abs() < 0.01,
+            (a.strength - 95.0).abs() < 0.01,
             "a.strength = {}",
             a.strength
         );
         assert!(
-            (b.strength - 99.0).abs() < 0.01,
+            (b.strength - 95.0).abs() < 0.01,
             "b.strength = {}",
             b.strength
         );
@@ -367,9 +377,9 @@ mod tests {
         // A has 1 engagement, eff_A = 1.0
         // B has 1 engagement, eff_B = 1.0
         //
-        // damage to X = A.str * DR * eff_A + B.str * DR * eff_B = 1.0 + 1.0 = 2.0
-        // damage to A from X = X.str * DR * eff_X ≈ 0.707
-        // damage to B from X = X.str * DR * eff_X ≈ 0.707
+        // damage to X = A.str * DR * eff_A + B.str * DR * eff_B = 5.0 + 5.0 = 10.0
+        // damage to A from X = X.str * DR * eff_X = 100 * 0.05 * 0.707 ≈ 3.536
+        // damage to B from X = X.str * DR * eff_X ≈ 3.536
 
         resolve_combat(&mut state);
 
@@ -378,17 +388,17 @@ mod tests {
         let x = state.units.iter().find(|u| u.id == 3).unwrap();
 
         assert!(
-            (x.strength - 98.0).abs() < 0.01,
+            (x.strength - 90.0).abs() < 0.01,
             "x.strength = {}",
             x.strength
         );
         assert!(
-            (a.strength - 99.293).abs() < 0.02,
+            (a.strength - 96.464).abs() < 0.02,
             "a.strength = {}",
             a.strength
         );
         assert!(
-            (b.strength - 99.293).abs() < 0.02,
+            (b.strength - 96.464).abs() < 0.02,
             "b.strength = {}",
             b.strength
         );
@@ -405,7 +415,7 @@ mod tests {
         disengage_edge(&mut state, 1, edge);
 
         let a = state.units.iter().find(|u| u.id == 1).unwrap();
-        assert!((a.strength - 50.0).abs() < 0.01);
+        assert!((a.strength - 70.0).abs() < 0.01, "a.strength = {}", a.strength);
         assert!(a.engagements.is_empty());
 
         let b = state.units.iter().find(|u| u.id == 2).unwrap();
@@ -441,8 +451,8 @@ mod tests {
 
         let x = state.units.iter().find(|u| u.id == 3).unwrap();
         assert!(
-            (x.strength - 50.0).abs() < 0.01,
-            "x.strength = {} (should be 50)",
+            (x.strength - 70.0).abs() < 0.01,
+            "x.strength = {} (should be 70)",
             x.strength
         );
         assert!(x.engagements.is_empty());
