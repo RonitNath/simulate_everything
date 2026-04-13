@@ -53,7 +53,13 @@ pub const VILLAGE_RADIUS: i32 = 1;
 /// Territory radius for City settlements.
 pub const CITY_RADIUS: i32 = 2;
 /// How often (in ticks) the city AI runs.
-pub const CITY_AI_INTERVAL: u64 = 10;
+pub const CITY_AI_INTERVAL: u64 = 5;
+/// Vision radius for Farm settlements.
+pub const FARM_VISION: i32 = 2;
+/// Vision radius for Village settlements.
+pub const VILLAGE_VISION: i32 = 3;
+/// Vision radius for City settlements.
+pub const CITY_VISION: i32 = 4;
 /// Population size of a farm settler convoy.
 pub const FARM_CONVOY_SIZE: u16 = 4;
 /// Legacy alias kept for existing callers.
@@ -74,3 +80,4 @@ pub const VISION_RADIUS: i32 = 5;
 pub const INITIAL_UNITS: usize = 5;
 pub const TICKS_PER_SECOND: u32 = 10;
 pub const AGENT_POLL_INTERVAL: u32 = 5;
+pub const MAX_RATIONS: f32 = 50.0;

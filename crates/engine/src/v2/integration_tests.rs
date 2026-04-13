@@ -70,6 +70,8 @@ fn unit(id: u32, owner: u8, pos: Axial) -> Unit {
         move_cooldown: 0,
         engagements: Vec::new(),
         destination: None,
+        rations: super::MAX_RATIONS,
+        half_rations: false,
     }
 }
 
@@ -331,6 +333,7 @@ fn convoy_raiding_transfers_cargo_to_adjacent_raider_hex() {
         speed: 1.0,
         move_cooldown: 0,
         returning: false,
+        route: vec![],
     });
 
     run_ticks(&mut state, &mut [], 1);
@@ -596,6 +599,36 @@ fn replay_reconstruction_matches_final_state() {
         assert_eq!(lhs.stockpile_owner, rhs.stockpile_owner);
         assert_eq!(lhs.road_level, rhs.road_level);
         assert_eq!(lhs.has_depot, rhs.has_depot);
+    }
+}
+
+#[test]
+fn convoys_have_non_empty_routes_after_creation() {
+    let config = MapConfig {
+        width: 20,
+        height: 20,
+        num_players: 2,
+        seed: 42,
+    };
+    let mut agents: Vec<Box<dyn Agent>> =
+        vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
+
+    // Run long enough for the city AI to dispatch some convoys.
+    let mut state = super::mapgen::generate(&config);
+    for _ in 0..200 {
+        runner::advance_game_tick(&mut state, &mut agents);
+        // Once a convoy exists, verify it has a non-empty route (or is already at destination).
+        for convoy in state.convoys.values() {
+            if convoy.pos != convoy.destination {
+                assert!(
+                    !convoy.route.is_empty(),
+                    "convoy {} has empty route but has not reached destination (pos={:?}, dest={:?})",
+                    convoy.public_id,
+                    convoy.pos,
+                    convoy.destination
+                );
+            }
+        }
     }
 }
 

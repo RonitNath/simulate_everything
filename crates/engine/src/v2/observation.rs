@@ -12,6 +12,8 @@ pub struct UnitInfo {
     pub r: i32,
     pub strength: f32,
     pub engagements: Vec<Engagement>,
+    pub rations: f32,
+    pub half_rations: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +161,8 @@ fn unit_to_info(id: UnitKey, u: &Unit) -> UnitInfo {
         r: u.pos.r,
         strength: u.strength,
         engagements: u.engagements.clone(),
+        rations: u.rations,
+        half_rations: u.half_rations,
     }
 }
 

@@ -36,6 +36,7 @@ pub struct SpectatorUnit {
     pub r: i32,
     pub strength: f32,
     pub engaged: bool,
+    pub ration_level: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +46,8 @@ pub struct SpectatorConvoy {
     pub q: i32,
     pub r: i32,
     pub cargo_type: CargoType,
+    /// Remaining waypoints toward destination as (q, r) pairs for frontend visualization.
+    pub route: Vec<(i32, i32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +111,7 @@ fn build_snapshot(state: &GameState, full_state: bool) -> SpectatorSnapshot {
                 r: u.pos.r,
                 strength: u.strength,
                 engaged: !u.engagements.is_empty(),
+                ration_level: ration_level(u.rations),
             })
             .collect(),
         engagements: engagement_pairs(state),
@@ -120,6 +124,7 @@ fn build_snapshot(state: &GameState, full_state: bool) -> SpectatorSnapshot {
                 q: c.pos.q,
                 r: c.pos.r,
                 cargo_type: c.cargo_type,
+                route: c.route.iter().map(|a| (a.q, a.r)).collect(),
             })
             .collect(),
         hex_changes: hex_changes(state, full_state),
@@ -143,6 +148,20 @@ fn settlements(state: &GameState) -> Vec<SpectatorSettlement> {
         }
     }
     out
+}
+
+/// Converts a raw rations value to a 0–3 level for display (3=full, 0=empty).
+fn ration_level(rations: f32) -> u8 {
+    let frac = (rations / super::MAX_RATIONS).clamp(0.0, 1.0);
+    if frac >= 0.75 {
+        3
+    } else if frac >= 0.50 {
+        2
+    } else if frac >= 0.25 {
+        1
+    } else {
+        0
+    }
 }
 
 fn settlement_owner_at(settlements: &[SpectatorSettlement], ax: Axial) -> Option<u8> {

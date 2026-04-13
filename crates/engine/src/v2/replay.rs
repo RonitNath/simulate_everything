@@ -24,6 +24,7 @@ pub struct UnitSnapshot {
     pub move_cooldown: u8,
     pub destination: Option<Axial>,
     pub engaged: bool,
+    pub rations: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +52,8 @@ pub struct ConvoySnapshot {
     pub speed: f32,
     pub move_cooldown: u8,
     pub returning: bool,
+    /// Remaining waypoints toward destination, as (q, r) pairs.
+    pub route: Vec<(i32, i32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +129,7 @@ fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
             move_cooldown: u.move_cooldown,
             destination: u.destination,
             engaged: !u.engagements.is_empty(),
+            rations: u.rations,
         })
         .collect()
 }
@@ -163,6 +167,7 @@ fn snapshot_convoys(state: &GameState) -> Vec<ConvoySnapshot> {
             speed: c.speed,
             move_cooldown: c.move_cooldown,
             returning: c.returning,
+            route: c.route.iter().map(|a| (a.q, a.r)).collect(),
         })
         .collect()
 }
@@ -321,6 +326,8 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
             move_cooldown: s.move_cooldown,
             engagements: Vec::new(),
             destination: s.destination,
+            rations: s.rations,
+            half_rations: false,
         });
     }
 
@@ -366,6 +373,11 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
             speed: snapshot.speed,
             move_cooldown: snapshot.move_cooldown,
             returning: snapshot.returning,
+            route: snapshot
+                .route
+                .iter()
+                .map(|&(q, r)| Axial::new(q, r))
+                .collect(),
         });
     }
 

@@ -149,6 +149,7 @@ fn snapshot_units(state: &GameState) -> Vec<UnitSnapshot> {
             move_cooldown: u.move_cooldown,
             destination: u.destination,
             engaged: !u.engagements.is_empty(),
+            rations: u.rations,
         })
         .collect()
 }
@@ -329,6 +330,8 @@ fn inflate_units(state: &mut GameState, target_units: usize) {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
+            rations: simulate_everything_engine::v2::MAX_RATIONS,
+            half_rations: false,
         });
         state.next_unit_id += 1;
     }

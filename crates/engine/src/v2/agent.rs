@@ -89,10 +89,7 @@ impl SpreadAgent {
             .iter()
             .map(|e| ((e.q, e.r), e))
             .collect();
-        let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
-
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
-        let origin = settlement_hexes(obs).first().copied().unwrap_or(map_center);
         let enemy_target = enemy_direction(obs);
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
@@ -103,7 +100,7 @@ impl SpreadAgent {
                 }
                 continue;
             }
-            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy) {
+            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, obs) {
                 directives.push(Directive::Engage {
                     unit_id: unit.id,
                     target_id: target,
@@ -112,7 +109,7 @@ impl SpreadAgent {
             }
 
             let dest = if obs.own_units.len() <= 8 {
-                pick_sector_destination(unit, idx, obs, origin)
+                pick_sector_destination(unit, idx, obs, map_center)
             } else {
                 pick_lane_destination(unit, obs, enemy_target)
             };
@@ -270,7 +267,7 @@ impl StrikerAgent {
                 // Check if enough units gathered at rally point.
                 if let Some(rp) = self.rally_point {
                     let gathered = self.count_units_near(obs, rp, 3);
-                    if gathered >= STRIKER_MIN_RALLY_SIZE {
+                    if gathered >= STRIKER_MIN_RALLY_SIZE && average_rations(obs) > 0.50 {
                         self.mode = StrikerMode::Strike;
                     }
                 }
@@ -301,9 +298,7 @@ impl StrikerAgent {
             .iter()
             .map(|e| ((e.q, e.r), e))
             .collect();
-        let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
-        let striker_origin = settlement_hexes(obs).first().copied().unwrap_or(map_center);
         let enemy_target = enemy_direction(obs);
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
@@ -316,10 +311,23 @@ impl StrikerAgent {
             }
 
             // Engage adjacent enemies.
-            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy) {
+            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, obs) {
                 directives.push(Directive::Engage {
                     unit_id: unit.id,
                     target_id: target,
+                });
+                continue;
+            }
+
+            // Retreat toward nearest settlement when rations are critically low.
+            let unit_pos = Axial::new(unit.q, unit.r);
+            if unit.rations / super::MAX_RATIONS < 0.30
+                && let Some(settle) = nearest_settlement_hex(obs, unit_pos)
+            {
+                directives.push(Directive::Move {
+                    unit_id: unit.id,
+                    q: settle.q,
+                    r: settle.r,
                 });
                 continue;
             }
@@ -328,7 +336,7 @@ impl StrikerAgent {
             let dest = match self.mode {
                 StrikerMode::Expand => {
                     if obs.own_units.len() <= 8 {
-                        pick_sector_destination(unit, idx, obs, striker_origin)
+                        pick_sector_destination(unit, idx, obs, map_center)
                     } else {
                         pick_lane_destination(unit, obs, enemy_target)
                     }
@@ -436,9 +444,7 @@ impl TurtleAgent {
             .iter()
             .map(|e| ((e.q, e.r), e))
             .collect();
-        let friendly_near_enemy: HashMap<UnitKey, usize> = count_friendlies_near_enemies(obs);
         let map_center = hex::offset_to_axial(obs.height as i32 / 2, obs.width as i32 / 2);
-        let turtle_origin = settlement_hexes(obs).first().copied().unwrap_or(map_center);
         let enemy_target = enemy_direction(obs);
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
@@ -450,7 +456,7 @@ impl TurtleAgent {
                 continue;
             }
 
-            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy) {
+            if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, obs) {
                 directives.push(Directive::Engage {
                     unit_id: unit.id,
                     target_id: target,
@@ -458,8 +464,21 @@ impl TurtleAgent {
                 continue;
             }
 
+            // Retreat toward nearest settlement when rations are critically low.
+            let unit_pos = Axial::new(unit.q, unit.r);
+            if unit.rations / super::MAX_RATIONS < 0.30
+                && let Some(settle) = nearest_settlement_hex(obs, unit_pos)
+            {
+                directives.push(Directive::Move {
+                    unit_id: unit.id,
+                    q: settle.q,
+                    r: settle.r,
+                });
+                continue;
+            }
+
             let dest = if obs.own_units.len() <= 8 {
-                pick_sector_destination(unit, idx, obs, turtle_origin)
+                pick_sector_destination(unit, idx, obs, map_center)
             } else if obs.own_units.len() >= 20 {
                 pick_lane_destination(unit, obs, enemy_target)
             } else {
@@ -538,6 +557,33 @@ impl Agent for TurtleAgent {
 // Shared utility functions
 // ---------------------------------------------------------------------------
 
+/// Returns the hex of the nearest friendly settlement to `pos`, searching all population hexes.
+fn nearest_settlement_hex(obs: &Observation, pos: Axial) -> Option<Axial> {
+    let mut settlements: Vec<Axial> = Vec::new();
+    for pop in &obs.own_population {
+        let hex = Axial::new(pop.q, pop.r);
+        if !settlements.contains(&hex) {
+            settlements.push(hex);
+        }
+    }
+    settlements
+        .into_iter()
+        .min_by_key(|&s| hex::distance(pos, s))
+}
+
+/// Average rations fraction (0.0–1.0) across all own units.
+fn average_rations(obs: &Observation) -> f32 {
+    if obs.own_units.is_empty() {
+        return 1.0;
+    }
+    let sum: f32 = obs
+        .own_units
+        .iter()
+        .map(|u| u.rations / super::MAX_RATIONS)
+        .sum();
+    sum / obs.own_units.len() as f32
+}
+
 fn cell_index(obs: &Observation, ax: Axial) -> Option<usize> {
     let (row, col) = hex::axial_to_offset(ax);
     if row < 0 || col < 0 {
@@ -574,35 +620,33 @@ fn settlement_hexes(obs: &Observation) -> Vec<Axial> {
     settlements
 }
 
-fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<UnitKey, usize> {
-    let mut counts: HashMap<UnitKey, usize> = HashMap::new();
-    for enemy in &obs.visible_enemies {
-        let enemy_pos = Axial::new(enemy.q, enemy.r);
-        let count = obs
-            .own_units
-            .iter()
-            .filter(|u| u.engagements.is_empty())
-            .filter(|u| hex::distance(Axial::new(u.q, u.r), enemy_pos) <= 1)
-            .count();
-        counts.insert(enemy.id, count);
-    }
-    counts
-}
-
 fn find_engageable_enemy(
     unit: &UnitInfo,
     enemy_by_pos: &HashMap<(i32, i32), &UnitInfo>,
-    friendly_counts: &HashMap<UnitKey, usize>,
+    obs: &Observation,
 ) -> Option<UnitKey> {
     let unit_pos = Axial::new(unit.q, unit.r);
     hex::neighbors(unit_pos)
         .iter()
         .filter_map(|nb| enemy_by_pos.get(&(nb.q, nb.r)).copied())
         .filter(|e| {
-            let friends = friendly_counts.get(&e.id).copied().unwrap_or(0);
-            // Require 2+ friendlies nearby, or significant strength advantage solo.
-            // Solo engagements against stronger/equal enemies are wasteful attrition.
-            friends >= 2 || unit.strength >= e.strength * 0.8
+            let enemy_pos = Axial::new(e.q, e.r);
+            // Total friendly strength within 2 hexes of the enemy.
+            let nearby_friendly_str: f32 = obs
+                .own_units
+                .iter()
+                .filter(|u| hex::distance(Axial::new(u.q, u.r), enemy_pos) <= 2)
+                .map(|u| u.strength)
+                .sum();
+            // Total visible enemy strength within 2 hexes.
+            let nearby_enemy_str: f32 = obs
+                .visible_enemies
+                .iter()
+                .filter(|ve| hex::distance(Axial::new(ve.q, ve.r), enemy_pos) <= 2)
+                .map(|ve| ve.strength)
+                .sum();
+            // Engage only at 1.5:1 force ratio.
+            nearby_friendly_str >= nearby_enemy_str * 1.5
         })
         .min_by(|a, b| a.strength.partial_cmp(&b.strength).unwrap())
         .map(|e| e.id)
@@ -637,17 +681,8 @@ fn pick_sector_destination(
     obs: &Observation,
     map_center: Axial,
 ) -> Option<Axial> {
-    let unit_pos = Axial::new(unit.q, unit.r);
-    let nearby_enemy = obs
-        .visible_enemies
-        .iter()
-        .filter(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)) <= 8)
-        .min_by_key(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)));
-
-    if let Some(enemy) = nearby_enemy {
-        return Some(Axial::new(enemy.q, enemy.r));
-    }
-
+    // Units fan out in sectors from the origin — no individual enemy chasing.
+    // Engagement is handled by find_engageable_enemy when force ratio is favorable.
     let unit_count = obs.own_units.len().max(1);
     let unit_idx = obs
         .own_units
@@ -673,17 +708,11 @@ fn pick_lane_destination(
     obs: &Observation,
     enemy_target: Option<Axial>,
 ) -> Option<Axial> {
-    let unit_pos = Axial::new(unit.q, unit.r);
-    if let Some(enemy) = obs
-        .visible_enemies
-        .iter()
-        .filter(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)) <= 6)
-        .min_by_key(|e| hex::distance(unit_pos, Axial::new(e.q, e.r)))
-    {
-        return Some(Axial::new(enemy.q, enemy.r));
-    }
+    // Units advance toward enemy centroid in lanes — no individual enemy chasing.
+    // Engagement is handled by find_engageable_enemy when force ratio is favorable.
     let target = enemy_target?;
     let (target_r, target_c) = hex::axial_to_offset(target);
+    let unit_pos = Axial::new(unit.q, unit.r);
     let (unit_r, unit_c) = hex::axial_to_offset(unit_pos);
     let dx = target_c - unit_c;
     let dy = target_r - unit_r;

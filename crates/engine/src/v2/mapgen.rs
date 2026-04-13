@@ -10,7 +10,7 @@ use super::state::{
     Biome, Cell, GameState, Player, Population, Region, RegionArchetype, Role, Settlement,
     SettlementType, Unit,
 };
-use super::{INITIAL_STRENGTH, INITIAL_UNITS};
+use super::{INITIAL_STRENGTH, INITIAL_UNITS, MAX_RATIONS};
 
 pub struct MapConfig {
     pub width: usize,
@@ -133,6 +133,8 @@ pub fn generate(config: &MapConfig) -> GameState {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
+            rations: MAX_RATIONS,
+            half_rations: false,
         });
 
         // Spawn INITIAL_UNITS nearby units
@@ -161,6 +163,8 @@ pub fn generate(config: &MapConfig) -> GameState {
                 move_cooldown: 0,
                 engagements: Vec::new(),
                 destination: None,
+                rations: MAX_RATIONS,
+                half_rations: false,
             });
             next_id += 1;
             placed += 1;

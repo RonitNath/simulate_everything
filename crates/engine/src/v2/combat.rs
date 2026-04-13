@@ -279,6 +279,8 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
+            rations: crate::v2::MAX_RATIONS,
+            half_rations: false,
         }
     }
 

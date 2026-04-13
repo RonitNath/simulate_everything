@@ -91,6 +91,8 @@ pub struct Unit {
     pub move_cooldown: u8,
     pub engagements: Vec<Engagement>,
     pub destination: Option<Axial>,
+    pub rations: f32,
+    pub half_rations: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +133,8 @@ pub struct Convoy {
     pub speed: f32,
     pub move_cooldown: u8,
     pub returning: bool,
+    /// Remaining waypoints toward destination, next step first. Empty means at destination or route not yet computed.
+    pub route: Vec<Axial>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -690,7 +690,7 @@ fn consume_upkeep(state: &mut GameState) {
     }
 }
 
-fn road_bonus(level: u8) -> f32 {
+pub(super) fn road_bonus(level: u8) -> f32 {
     match level {
         1 => 0.3,
         2 => 0.6,
@@ -745,6 +745,25 @@ fn move_units(state: &mut GameState) {
 }
 
 fn move_convoys(state: &mut GameState) {
+    // Re-route any convoys that have an empty route but haven't arrived yet.
+    // This handles convoys created before routing was available (e.g. from replay reconstruction).
+    let needs_route: Vec<ConvoyKey> = state
+        .convoys
+        .iter()
+        .filter(|(_, c)| c.route.is_empty() && c.pos != c.destination)
+        .map(|(key, _)| key)
+        .collect();
+    for key in needs_route {
+        let (pos, destination) = match state.convoys.get(key) {
+            Some(c) => (c.pos, c.destination),
+            None => continue,
+        };
+        let route = pathfinding::find_path_weighted(state, pos, destination);
+        if let Some(c) = state.convoys.get_mut(key) {
+            c.route = route;
+        }
+    }
+
     let convoy_states: Vec<(ConvoyKey, Axial, Axial, u8)> = state
         .convoys
         .iter()
@@ -753,7 +772,31 @@ fn move_convoys(state: &mut GameState) {
         .collect();
 
     for (id, pos, dest, owner) in convoy_states {
-        if let Some(next) = pathfinding::next_step(state, pos, dest) {
+        // Pop the next step from the cached route; fall back to weighted A* if empty.
+        let next = if let Some(convoy) = state.convoys.get_mut(id) {
+            if !convoy.route.is_empty() {
+                Some(convoy.route.remove(0))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let next = next.or_else(|| {
+            // Route exhausted before destination reached — recompute.
+            let route = pathfinding::find_path_weighted(state, pos, dest);
+            if let Some(convoy) = state.convoys.get_mut(id) {
+                convoy.route = route;
+                if !convoy.route.is_empty() {
+                    Some(convoy.route.remove(0))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        if let Some(next) = next {
             let cooldown = movement_cooldown(state, pos, next, true);
             if let Some(convoy) = state.convoys.get_mut(id) {
                 convoy.pos = next;
@@ -838,6 +881,8 @@ fn move_convoys(state: &mut GameState) {
                                 convoy.cargo_amount,
                             );
                             if !convoy.returning && convoy.origin != dest {
+                                let return_route =
+                                    pathfinding::find_path_weighted(state, dest, convoy.origin);
                                 state.convoys.insert(Convoy {
                                     public_id: state.next_convoy_id,
                                     owner: convoy.owner,
@@ -850,6 +895,7 @@ fn move_convoys(state: &mut GameState) {
                                     speed: convoy.speed,
                                     move_cooldown: CONVOY_MOVE_COOLDOWN,
                                     returning: true,
+                                    route: return_route,
                                 });
                                 state.next_convoy_id += 1;
                             }
@@ -1556,6 +1602,8 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
+            rations: crate::v2::MAX_RATIONS,
+            half_rations: false,
         });
         state.units.insert(crate::v2::state::Unit {
             public_id: 200,
@@ -1565,6 +1613,8 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
+            rations: crate::v2::MAX_RATIONS,
+            half_rations: false,
         });
         state.units.insert(crate::v2::state::Unit {
             public_id: 201,
@@ -1574,6 +1624,8 @@ mod tests {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
+            rations: crate::v2::MAX_RATIONS,
+            half_rations: false,
         });
         state.population.insert(Population {
             public_id: 0,
@@ -1607,6 +1659,7 @@ mod tests {
             speed: 1.0,
             move_cooldown: 0,
             returning: false,
+            route: vec![],
         });
         state.rebuild_spatial();
 

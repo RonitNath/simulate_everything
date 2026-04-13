@@ -1,9 +1,12 @@
-use super::VISION_RADIUS;
-use super::hex::{axial_to_offset, within_radius};
+use super::hex::{Axial, axial_to_offset, within_radius};
 use super::state::GameState;
+use super::{
+    CITY_THRESHOLD, CITY_VISION, FARM_THRESHOLD, FARM_VISION, VILLAGE_THRESHOLD, VILLAGE_VISION,
+    VISION_RADIUS,
+};
 
 /// Compute visibility bitmask for a player. Returns row-major Vec<bool> matching grid layout.
-/// A cell is visible if any of the player's units is within VISION_RADIUS hex distance.
+/// A cell is visible if any of the player's units or settlements is within vision range.
 pub fn visible_cells(state: &GameState, player_id: u8) -> Vec<bool> {
     let mut visible = vec![false; state.width * state.height];
 
@@ -13,6 +16,34 @@ pub fn visible_cells(state: &GameState, player_id: u8) -> Vec<bool> {
             .map(|c| if c.height > 0.7 { 1 } else { 0 })
             .unwrap_or(0);
         for ax in within_radius(unit.pos, VISION_RADIUS + vision_bonus) {
+            let (row, col) = axial_to_offset(ax);
+            if row >= 0 && col >= 0 {
+                let (row, col) = (row as usize, col as usize);
+                if row < state.height && col < state.width {
+                    visible[row * state.width + col] = true;
+                }
+            }
+        }
+    }
+
+    // Settlement vision: settlements provide vision based on population tier.
+    let mut seen_hexes: Vec<Axial> = Vec::new();
+    for pop in state.population.values().filter(|p| p.owner == player_id) {
+        if seen_hexes.contains(&pop.hex) {
+            continue;
+        }
+        let pop_count = state.population_on_hex(player_id, pop.hex);
+        let vision_radius = if pop_count >= CITY_THRESHOLD {
+            CITY_VISION
+        } else if pop_count >= VILLAGE_THRESHOLD {
+            VILLAGE_VISION
+        } else if pop_count >= FARM_THRESHOLD {
+            FARM_VISION
+        } else {
+            continue;
+        };
+        seen_hexes.push(pop.hex);
+        for ax in within_radius(pop.hex, vision_radius) {
             let (row, col) = axial_to_offset(ax);
             if row >= 0 && col >= 0 {
                 let (row, col) = (row as usize, col as usize);
@@ -91,11 +122,15 @@ mod tests {
     }
 
     #[test]
-    fn no_units_means_no_vision() {
+    fn no_vision_sources_means_no_vision() {
         let mut state = test_state();
-        // Remove all player 0 units
+        // Remove all player 0 units and population (both provide vision).
         state.units.retain(|_, u| u.owner != 0);
+        state.population.retain(|_, p| p.owner != 0);
         let vis = visible_cells(&state, 0);
-        assert!(vis.iter().all(|&v| !v), "no units should mean no vision");
+        assert!(
+            vis.iter().all(|&v| !v),
+            "no units or settlements should mean no vision"
+        );
     }
 }

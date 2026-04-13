@@ -3,15 +3,16 @@ use slotmap::SlotMap;
 
 use super::combat;
 use super::hex::{self, Axial};
+use super::pathfinding;
 use super::sim::territory_owner;
 use super::state::{
     CargoType, Convoy, ConvoyKey, GameState, PopKey, Population, Role, Unit, UnitKey,
 };
 use super::{
-    CONVOY_CAPACITY, CONVOY_MOVE_COOLDOWN, DEPOT_BUILD_COST, INITIAL_STRENGTH, ROAD_LEVEL2_COST,
-    ROAD_LEVEL3_COST, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIER_EQUIP_COST,
-    SOLDIER_READY_THRESHOLD, SOLDIERS_PER_UNIT, TRAIN_BATCH_SIZE, UNIT_FOOD_COST,
-    UNIT_MATERIAL_COST,
+    CONVOY_CAPACITY, CONVOY_MOVE_COOLDOWN, DEPOT_BUILD_COST, INITIAL_STRENGTH, MAX_RATIONS,
+    ROAD_LEVEL2_COST, ROAD_LEVEL3_COST, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE,
+    SOLDIER_EQUIP_COST, SOLDIER_READY_THRESHOLD, SOLDIERS_PER_UNIT, TRAIN_BATCH_SIZE,
+    UNIT_FOOD_COST, UNIT_MATERIAL_COST,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +343,8 @@ fn produce_unit(state: &mut GameState, player_id: u8, production_hex: Axial) {
         move_cooldown: 0,
         engagements: Vec::new(),
         destination: None,
+        rations: MAX_RATIONS,
+        half_rations: false,
     });
     debug_assert!(state.units.contains_key(unit_key));
     if let Some(log) = &mut state.game_log {
@@ -401,6 +404,7 @@ fn load_convoy(
     }
     state.mark_dirty_axial(hex);
 
+    let route = pathfinding::find_path_weighted(state, hex, destination);
     state.convoys.insert(Convoy {
         public_id: state.next_convoy_id,
         owner: player_id,
@@ -413,6 +417,7 @@ fn load_convoy(
         speed: 1.0,
         move_cooldown: CONVOY_MOVE_COOLDOWN,
         returning: false,
+        route,
     });
     state.next_convoy_id += 1;
 }
@@ -450,6 +455,8 @@ fn load_settlers(state: &mut GameState, player_id: u8, hex: Axial) -> bool {
         return false;
     }
     let destination = hex;
+    // Settler convoy destination is set to current hex initially; SendConvoy will update it.
+    // Route is empty until destination is known.
     state.convoys.insert(Convoy {
         public_id: state.next_convoy_id,
         owner: player_id,
@@ -462,6 +469,7 @@ fn load_settlers(state: &mut GameState, player_id: u8, hex: Axial) -> bool {
         speed: 1.0,
         move_cooldown: CONVOY_MOVE_COOLDOWN,
         returning: false,
+        route: vec![],
     });
     state.next_convoy_id += 1;
     true
@@ -471,12 +479,15 @@ fn send_convoy(state: &mut GameState, player_id: u8, convoy_id: ConvoyKey, dest:
     if !state.in_bounds(dest) {
         return;
     }
+    let pos = match state.convoys.get(convoy_id) {
+        Some(c) if c.owner == player_id => c.pos,
+        _ => return,
+    };
+    let route = pathfinding::find_path_weighted(state, pos, dest);
     if let Some(convoy) = state.convoys.get_mut(convoy_id) {
-        if convoy.owner != player_id {
-            return;
-        }
         convoy.destination = dest;
         convoy.returning = false;
+        convoy.route = route;
     }
 }
 

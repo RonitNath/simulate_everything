@@ -1,6 +1,7 @@
 /// Autonomous city AI that manages population roles, infrastructure, settlers, and resource convoys.
 /// Runs every CITY_AI_INTERVAL ticks, directly mutating GameState.
 use super::hex::{self, Axial};
+use super::pathfinding;
 use super::state::{CargoType, Convoy, GameState, Population, Role, SettlementType};
 use super::{
     CITY_THRESHOLD, CONVOY_CAPACITY, CONVOY_MOVE_COOLDOWN, DEPOT_BUILD_COST, FARM_CONVOY_SIZE,
@@ -263,6 +264,7 @@ fn manage_auto_settlers(state: &mut GameState, player_id: u8) {
             continue;
         }
 
+        let route = pathfinding::find_path_weighted(state, city_hex, target);
         state.convoys.insert(Convoy {
             public_id: state.next_convoy_id,
             owner: player_id,
@@ -275,6 +277,7 @@ fn manage_auto_settlers(state: &mut GameState, player_id: u8) {
             speed: 1.0,
             move_cooldown: CONVOY_MOVE_COOLDOWN,
             returning: false,
+            route,
         });
         state.next_convoy_id += 1;
     }
@@ -428,6 +431,7 @@ fn manage_resource_convoys(state: &mut GameState, player_id: u8) {
             continue;
         }
 
+        let route = pathfinding::find_path_weighted(state, hex, destination);
         state.convoys.insert(Convoy {
             public_id: state.next_convoy_id,
             owner: player_id,
@@ -440,6 +444,7 @@ fn manage_resource_convoys(state: &mut GameState, player_id: u8) {
             speed: 1.0,
             move_cooldown: CONVOY_MOVE_COOLDOWN,
             returning: false,
+            route,
         });
         state.next_convoy_id += 1;
     }
@@ -536,6 +541,8 @@ fn produce_units_from_settlements(state: &mut GameState, player_id: u8) {
             move_cooldown: 0,
             engagements: Vec::new(),
             destination: None,
+            rations: super::MAX_RATIONS,
+            half_rations: false,
         });
         if let Some(log) = &mut state.game_log {
             log.record(super::gamelog::GameEvent::UnitProduced {
