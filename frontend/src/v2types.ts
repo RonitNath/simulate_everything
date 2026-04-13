@@ -13,6 +13,8 @@ export interface V2UnitSnapshot {
   destination?: { q: number; r: number } | null;
   engaged: boolean;
   is_general: boolean;
+  _dead?: boolean;
+  _deadTick?: number;
 }
 
 export interface V2PopSnapshot {
@@ -163,6 +165,7 @@ export interface BoardStaticData {
 }
 
 export interface BoardFrameData {
+  tick: number;
   units: V2UnitSnapshot[];
   territory: Array<number | null>;
   roads: number[];
@@ -202,6 +205,7 @@ export function normalizeWsFrame(f: V2Frame): BoardFrameData {
   const territory = f.territory ?? f.hex_ownership ?? [];
   const roads = f.roads ?? f.road_levels ?? [];
   return {
+    tick: f.tick,
     units: f.units,
     territory,
     roads,
@@ -214,6 +218,7 @@ export function normalizeWsFrame(f: V2Frame): BoardFrameData {
 
 export function normalizeReplayFrame(f: V2ReplayFrame): BoardFrameData {
   return {
+    tick: f.tick,
     units: f.units,
     territory: f.cells.map((c) => c.stockpile_owner),
     roads: f.cells.map((c) => c.road_level),

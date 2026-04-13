@@ -140,6 +140,16 @@ interface DestRender {
   stroke: string;
 }
 
+interface GhostRender {
+  id: number;
+  cx: number;
+  cy: number;
+  pts: string;
+  fill: string;
+  opacity: number;
+  markerSize: number;
+}
+
 interface HexBoardProps {
   staticData: BoardStaticData;
   frameData: BoardFrameData;
@@ -189,8 +199,10 @@ const HexBoard: Component<HexBoardProps> = (props) => {
     );
 
     const unitMap = new Map<string, CellStack>();
+    const ghostRenders: GhostRender[] = [];
     let maxStr = 1;
     for (const u of units) {
+      if (u._dead) continue;
       const row = u.r;
       const col = u.q + (u.r - (u.r & 1)) / 2;
       const key = `${row},${col}`;
@@ -203,6 +215,25 @@ const HexBoard: Component<HexBoardProps> = (props) => {
         if (u.strength > current.unit.strength) current.unit = u;
       }
       maxStr = Math.max(maxStr, unitMap.get(key)!.totalStrength);
+    }
+
+    for (const u of units) {
+      if (!u._dead) continue;
+      const row = u.r;
+      const col = u.q + (u.r - (u.r & 1)) / 2;
+      const [cx, cy] = hexCenter(row, col, s);
+      const age = props.frameData.tick - (u._deadTick ?? props.frameData.tick);
+      const opacity = Math.max(0, 1 - age / 8);
+      if (opacity <= 0) continue;
+      ghostRenders.push({
+        id: u.id,
+        cx,
+        cy,
+        pts: hexPoints(cx, cy, s * 0.82),
+        fill: playerRgba(u.owner, 0.45),
+        opacity,
+        markerSize: s * 0.46,
+      });
     }
 
     const terrMap = new Map<number, number>();
@@ -367,7 +398,7 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       }
     }
 
-    return { cells, convoyRenders, destRenders, s };
+    return { cells, convoyRenders, destRenders, ghostRenders, s };
   });
 
   return (
@@ -377,6 +408,30 @@ const HexBoard: Component<HexBoardProps> = (props) => {
       viewBox={`${-hexSize()} ${-hexSize()} ${svgWidth()} ${svgHeight()}`}
       style={{ "max-width": "100%", "max-height": "100%" }}
     >
+      {renderData().ghostRenders.map((ghost) => (
+        <g opacity={ghost.opacity}>
+          <polygon
+            points={ghost.pts}
+            fill={ghost.fill}
+            stroke="rgba(255,255,255,0.7)"
+            stroke-width={Math.max(0.8, renderData().s * 0.04)}
+            stroke-dasharray="3,3"
+          />
+          <text
+            x={ghost.cx}
+            y={ghost.cy + 1}
+            text-anchor="middle"
+            dominant-baseline="middle"
+            font-size={`${ghost.markerSize}`}
+            font-weight="bold"
+            fill="rgba(255,255,255,0.9)"
+            style={{ "pointer-events": "none" }}
+          >
+            ×
+          </text>
+        </g>
+      ))}
+
       {renderData().cells.map((cell) => {
         const s = renderData().s;
         const showNums = props.showNumbers;
@@ -475,17 +530,25 @@ const HexBoard: Component<HexBoardProps> = (props) => {
             )}
 
             {cell.entry && s > 6 && cell.statusIcon && cell.statusIcon !== "·" && (
-              <text
-                x={cell.cx + s * 0.38}
-                y={cell.cy - s * 0.32}
-                text-anchor="middle"
-                dominant-baseline="middle"
-                font-size={`${Math.max(6, s * 0.28)}`}
-                fill={cell.statusColor ?? "#888"}
-                style={{ "pointer-events": "none" }}
-              >
-                {cell.statusIcon}
-              </text>
+              <g>
+                <circle
+                  cx={cell.cx + s * 0.38}
+                  cy={cell.cy - s * 0.32}
+                  r={s * 0.12}
+                  fill="rgba(255,255,255,0.85)"
+                />
+                <text
+                  x={cell.cx + s * 0.38}
+                  y={cell.cy - s * 0.32}
+                  text-anchor="middle"
+                  dominant-baseline="middle"
+                  font-size={`${Math.max(6, s * 0.25)}`}
+                  fill={cell.statusColor ?? "#888"}
+                  style={{ "pointer-events": "none" }}
+                >
+                  {cell.statusIcon}
+                </text>
+              </g>
             )}
 
             {cell.engagements.map((engagement) => (

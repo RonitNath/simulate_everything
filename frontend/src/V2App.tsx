@@ -443,6 +443,17 @@ const V2App: Component = () => {
           >
             Restart
           </button>
+          <button
+            class={styles.btn}
+            style={{
+              "font-size": "10px",
+              padding: "2px 6px",
+              "font-weight": serverPaused() ? "bold" : "normal",
+            }}
+            onClick={toggleServerPause}
+          >
+            {serverPaused() ? "Resume Server" : "Pause Server"}
+          </button>
           <span style={{ "margin-left": "auto" }} />
           <button
             class={styles.btn}
