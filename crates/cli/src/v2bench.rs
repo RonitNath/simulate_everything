@@ -174,6 +174,12 @@ struct V2GameResult {
     final_material: Vec<f32>,
     /// Per-agent final hex count (stockpile_owner).
     final_hexes: Vec<usize>,
+    /// Per-agent final total population.
+    final_population: Vec<u16>,
+    /// Per-agent final farmer count.
+    final_farmers: Vec<u16>,
+    /// Per-agent final settlement count.
+    final_settlements: Vec<usize>,
     interest_score: f64,
     interest_tags: Vec<String>,
     snapshots: Vec<V2Snapshot>,
@@ -187,6 +193,9 @@ struct V2Snapshot {
     food: Vec<f32>,
     material: Vec<f32>,
     hexes: Vec<usize>,
+    population: Vec<u16>,
+    farmers: Vec<u16>,
+    settlements: Vec<usize>,
     alive: Vec<bool>,
 }
 
@@ -199,6 +208,9 @@ struct V2TickProfile {
     food: Vec<f32>,
     material: Vec<f32>,
     hexes: Vec<usize>,
+    population: Vec<u16>,
+    farmers: Vec<u16>,
+    settlements: Vec<usize>,
 }
 
 struct V2MatchupStats {
@@ -441,6 +453,9 @@ fn run_profile_game(
                 food: player_food(&state, num_players),
                 material: player_material(&state, num_players),
                 hexes: player_hex_counts(&state, num_players),
+                population: player_population(&state, num_players),
+                farmers: player_farmers(&state, num_players),
+                settlements: player_settlements(&state, num_players),
             };
             println!("{}", serde_json::to_string(&tp).unwrap());
         }
@@ -666,6 +681,9 @@ fn run_bench_game(
         final_food: player_food(&state, num_players),
         final_material: player_material(&state, num_players),
         final_hexes: player_hex_counts(&state, num_players),
+        final_population: player_population(&state, num_players),
+        final_farmers: player_farmers(&state, num_players),
+        final_settlements: player_settlements(&state, num_players),
         interest_score,
         interest_tags,
         snapshots,
@@ -748,6 +766,57 @@ fn player_hex_counts(
         .collect()
 }
 
+fn player_population(
+    state: &simulate_everything_engine::v2::state::GameState,
+    num_players: u8,
+) -> Vec<u16> {
+    (0..num_players)
+        .map(|p| {
+            state
+                .population
+                .iter()
+                .filter(|pop| pop.owner == p)
+                .map(|pop| pop.count)
+                .sum()
+        })
+        .collect()
+}
+
+fn player_farmers(
+    state: &simulate_everything_engine::v2::state::GameState,
+    num_players: u8,
+) -> Vec<u16> {
+    use simulate_everything_engine::v2::state::Role;
+    (0..num_players)
+        .map(|p| {
+            state
+                .population
+                .iter()
+                .filter(|pop| pop.owner == p && pop.role == Role::Farmer)
+                .map(|pop| pop.count)
+                .sum()
+        })
+        .collect()
+}
+
+fn player_settlements(
+    state: &simulate_everything_engine::v2::state::GameState,
+    num_players: u8,
+) -> Vec<usize> {
+    use simulate_everything_engine::v2::hex::Axial;
+    (0..num_players)
+        .map(|p| {
+            let mut seen: Vec<Axial> = Vec::new();
+            for pop in state.population.iter().filter(|pop| pop.owner == p) {
+                if !seen.contains(&pop.hex) && state.is_settlement(p, pop.hex) {
+                    seen.push(pop.hex);
+                }
+            }
+            seen.len()
+        })
+        .collect()
+}
+
 fn take_snapshot(
     state: &simulate_everything_engine::v2::state::GameState,
     num_players: u8,
@@ -759,6 +828,9 @@ fn take_snapshot(
         food: player_food(state, num_players),
         material: player_material(state, num_players),
         hexes: player_hex_counts(state, num_players),
+        population: player_population(state, num_players),
+        farmers: player_farmers(state, num_players),
+        settlements: player_settlements(state, num_players),
         alive: (0..num_players)
             .map(|p| state.players.iter().any(|pl| pl.id == p && pl.alive))
             .collect(),
