@@ -27,3 +27,20 @@ body { background: #0a0a0f; color: #e0e0e8; font-family: 'JetBrains Mono', 'Fira
 .p-stat.dead { opacity: 0.4; text-decoration: line-through; }
 .p-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .p-val { color: #8888a0; margin-left: auto; }
+
+/* Mobile: sidebar collapses to horizontal scorecard above the board */
+@media (max-width: 768px) {
+  .header { flex-direction: column; gap: 4px; padding: 6px 12px; }
+  .title { font-size: 14px; }
+  .meta { font-size: 10px; text-align: center; }
+  .controls { gap: 4px; padding: 6px 8px; flex-wrap: wrap; }
+  .controls button { padding: 6px 10px; font-size: 14px; }
+  #turn-label { font-size: 10px; min-width: auto; order: 10; width: 100%; text-align: center; }
+  #scrubber { min-width: 0; order: 9; width: 100%; }
+  .speed-bar { padding: 4px 8px; flex-wrap: wrap; justify-content: center; }
+  .main { flex-direction: column-reverse; overflow: auto; }
+  .sidebar { width: 100%; border-left: none; border-bottom: 1px solid #2a2a3e; padding: 6px 12px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; overflow: visible; }
+  .p-stat { padding: 2px 0; font-size: 11px; gap: 4px; white-space: nowrap; }
+  .p-dot { width: 8px; height: 8px; }
+  .board-container { padding: 8px; flex: 1; min-height: 0; }
+}

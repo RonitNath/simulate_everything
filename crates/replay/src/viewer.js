@@ -27,8 +27,10 @@
   }
 
   function calcCellSize() {
-    var maxW = (window.innerWidth - 320) * 0.9;
-    var maxH = (window.innerHeight - 140) * 0.9;
+    var sidebarW = window.innerWidth <= 768 ? 0 : 320;
+    var maxW = (window.innerWidth - sidebarW) * 0.9;
+    var scorecardH = window.innerWidth <= 768 ? 50 : 0;
+    var maxH = (window.innerHeight - 140 - scorecardH) * 0.9;
     var availW = maxW - (REPLAY.width - 1);
     var availH = maxH - (REPLAY.height - 1);
     return Math.max(2, Math.min(Math.floor(availW / REPLAY.width), Math.floor(availH / REPLAY.height)));
