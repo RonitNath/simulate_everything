@@ -5,7 +5,7 @@ use simulate_everything_engine::v2::{
     directive,
     hex::offset_to_axial,
     mapgen::{self, MapConfig},
-    observation::{self, Observation},
+    observation::{self, Observation, ObservationSession},
     replay::UnitSnapshot,
     sim,
     state::{GameState, Unit},
@@ -211,6 +211,12 @@ fn run_scenario(scenario: Scenario) {
     let mut agents: Vec<Box<dyn Agent>> = (0..scenario.players)
         .map(|_| v2_agent::agent_by_name("spread").expect("spread agent exists"))
         .collect();
+    let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+    for (pid, agent) in agents.iter_mut().enumerate() {
+        let init = observation::initial_observation(&state, pid as u8);
+        agent.reset();
+        agent.init(&init);
+    }
 
     let mut metrics = ScenarioMetrics {
         game_start_bytes: serialize_len(&game_start_message(&state, scenario.players, &agent_names)),
@@ -225,10 +231,12 @@ fn run_scenario(scenario: Scenario) {
                 if !state.players.iter().any(|p| p.id == player_id && p.alive) {
                     continue;
                 }
-                let obs = benchmark_observation(&mut state, player_id, &mut metrics);
-                let directives = agent.act(&obs);
+                let _obs = benchmark_observation(&mut state, player_id, &mut metrics);
+                let delta = observation::observe_delta(&mut state, player_id, &mut session);
+                let directives = agent.act(&delta);
                 directive::apply_directives(&mut state, player_id, &directives);
             }
+            state.clear_dirty_hexes();
         }
 
         let sim_start = Instant::now();

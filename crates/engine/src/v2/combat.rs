@@ -184,6 +184,7 @@ pub fn cleanup_engagements(state: &mut GameState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitvec::vec::BitVec;
     use crate::v2::INITIAL_STRENGTH;
     use crate::v2::hex::Axial;
     use crate::v2::spatial::SpatialIndex;
@@ -252,6 +253,11 @@ mod tests {
             next_convoy_id: 0,
             scouted: vec![vec![true; width * height]; 2],
             spatial: SpatialIndex::new(width, height),
+            dirty_hexes: BitVec::repeat(false, width * height),
+            hex_revisions: vec![0; width * height],
+            next_hex_revision: 0,
+            #[cfg(debug_assertions)]
+            tick_accumulator: Some(TickAccumulator::default()),
         };
         state.rebuild_spatial();
         state

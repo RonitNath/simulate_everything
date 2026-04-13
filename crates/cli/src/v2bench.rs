@@ -5,7 +5,8 @@ use simulate_everything_engine::v2::{
     agent::{self as v2_agent, Agent as V2Agent},
     directive,
     mapgen::{self as v2_mapgen, MapConfig as V2MapConfig},
-    observation, sim,
+    observation::{self, ObservationSession},
+    sim,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -435,6 +436,12 @@ fn run_profile_game(
         .iter()
         .map(|name| v2_agent::agent_by_name(name).unwrap())
         .collect();
+    let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+    for (pid, agent) in agents.iter_mut().enumerate() {
+        let init = observation::initial_observation(&state, pid as u8);
+        agent.reset();
+        agent.init(&init);
+    }
 
     let np = num_players as usize;
 
@@ -447,12 +454,13 @@ fn run_profile_game(
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
                     continue;
                 }
-                let obs = observation::observe(&mut state, p);
+                let delta = observation::observe_delta(&mut state, p, &mut session);
                 let t0 = Instant::now();
-                let directives = agent.act(&obs);
+                let directives = agent.act(&delta);
                 poll_us[pid] = t0.elapsed().as_micros() as u64;
                 directive::apply_directives(&mut state, p, &directives);
             }
+            state.clear_dirty_hexes();
 
             let tp = V2TickProfile {
                 tick: state.tick,
@@ -508,6 +516,12 @@ fn run_ascii_game(
         .iter()
         .map(|name| v2_agent::agent_by_name(name).unwrap())
         .collect();
+    let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+    for (pid, agent) in agents.iter_mut().enumerate() {
+        let init = observation::initial_observation(&state, pid as u8);
+        agent.reset();
+        agent.init(&init);
+    }
 
     let tick_limit = sim::timeout_limit(max_ticks);
     while state.tick < tick_limit && !sim::is_over(&state) {
@@ -548,10 +562,11 @@ fn run_ascii_game(
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
                     continue;
                 }
-                let obs = observation::observe(&mut state, p);
-                let directives = agent.act(&obs);
+                let delta = observation::observe_delta(&mut state, p, &mut session);
+                let directives = agent.act(&delta);
                 directive::apply_directives(&mut state, p, &directives);
             }
+            state.clear_dirty_hexes();
         }
         sim::tick(&mut state);
     }
@@ -622,6 +637,12 @@ fn run_bench_game(
         .iter()
         .map(|name| v2_agent::agent_by_name(name).unwrap())
         .collect();
+    let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+    for (pid, agent) in agents.iter_mut().enumerate() {
+        let init = observation::initial_observation(&state, pid as u8);
+        agent.reset();
+        agent.init(&init);
+    }
 
     let ids: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
     let matchup_key = agent_names.join("-vs-");
@@ -646,9 +667,9 @@ fn run_bench_game(
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
                     continue;
                 }
-                let obs = observation::observe(&mut state, p);
+                let delta = observation::observe_delta(&mut state, p, &mut session);
                 let t0 = Instant::now();
-                let directives = agent.act(&obs);
+                let directives = agent.act(&delta);
                 let elapsed = t0.elapsed().as_micros() as u64;
                 compute_total[pid] += elapsed;
                 if elapsed > compute_max[pid] {
@@ -656,6 +677,7 @@ fn run_bench_game(
                 }
                 directive::apply_directives(&mut state, p, &directives);
             }
+            state.clear_dirty_hexes();
             poll_count += 1;
         }
 

@@ -3,7 +3,10 @@ use std::collections::HashMap;
 
 use super::directive::Directive;
 use super::hex::{self, Axial};
-use super::observation::{Observation, UnitInfo};
+use super::observation::{
+    InitialObservation, Observation, ObservationDelta, UnitInfo, apply_delta_to_observation,
+    materialize_observation,
+};
 use super::state::{CargoType, Role, UnitKey};
 use super::{
     SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIERS_PER_UNIT,
@@ -12,7 +15,8 @@ use super::{
 
 pub trait Agent: Send {
     fn name(&self) -> &str;
-    fn act(&mut self, obs: &Observation) -> Vec<Directive>;
+    fn init(&mut self, obs: &InitialObservation);
+    fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive>;
     fn reset(&mut self) {}
 }
 
@@ -31,22 +35,18 @@ pub fn agent_by_name(name: &str) -> Option<Box<dyn Agent>> {
 
 pub struct SpreadAgent {
     pending_settlement: Option<Axial>,
+    cached_observation: Option<Observation>,
 }
 
 impl SpreadAgent {
     pub fn new() -> Self {
         Self {
             pending_settlement: None,
+            cached_observation: None,
         }
     }
-}
 
-impl Agent for SpreadAgent {
-    fn name(&self) -> &str {
-        "spread"
-    }
-
-    fn act(&mut self, obs: &Observation) -> Vec<Directive> {
+    fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
         let mut directives = Vec::new();
         let general = obs.own_units.iter().find(|u| u.is_general);
         let general_hex = general.map(|u| Axial::new(u.q, u.r));
@@ -233,9 +233,58 @@ impl Agent for SpreadAgent {
 
         directives
     }
+}
+
+impl Agent for SpreadAgent {
+    fn name(&self) -> &str {
+        "spread"
+    }
+
+    fn init(&mut self, obs: &InitialObservation) {
+        self.cached_observation = Some(materialize_observation(
+            obs,
+            &ObservationDelta {
+                tick: 0,
+                player: obs.player,
+                newly_scouted: obs
+                    .scouted
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| **s)
+                    .map(|(index, _)| super::observation::NewScoutedHex {
+                        index,
+                        terrain: obs.terrain[index],
+                        material: obs.material_map[index],
+                        height: obs.height_map[index],
+                    })
+                    .collect(),
+                hex_changes: Vec::new(),
+                own_units: Vec::new(),
+                visible_enemies: Vec::new(),
+                own_population: Vec::new(),
+                visible_enemy_population: Vec::new(),
+                own_convoys: Vec::new(),
+                visible_enemy_convoys: Vec::new(),
+                visible: vec![false; obs.width * obs.height],
+                total_food: 0.0,
+                total_material: 0.0,
+            },
+        ));
+    }
+
+    fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive> {
+        let Some(mut obs) = self.cached_observation.take() else {
+            return Vec::new();
+        };
+        apply_delta_to_observation(&mut obs, delta);
+        let directives = self.decide(&obs);
+        self.cached_observation = Some(obs);
+        directives
+    }
 
     fn reset(&mut self) {
         self.pending_settlement = None;
+        self.cached_observation = None;
     }
 }
 
@@ -495,7 +544,7 @@ fn enemy_direction(obs: &Observation) -> Option<Axial> {
 mod tests {
     use super::*;
     use crate::v2::mapgen::{MapConfig, generate};
-    use crate::v2::observation::observe;
+    use crate::v2::observation::{ObservationSession, initial_observation, observe_delta};
 
     #[test]
     fn spread_agent_manages_population() {
@@ -506,9 +555,12 @@ mod tests {
             seed: 42,
         });
         let mut state = state;
-        let obs = observe(&mut state, 0);
         let mut agent = SpreadAgent::new();
-        let directives = agent.act(&obs);
+        let init = initial_observation(&state, 0);
+        agent.init(&init);
+        let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+        let delta = observe_delta(&mut state, 0, &mut session);
+        let directives = agent.act(&delta);
         assert!(directives.iter().any(|d| {
             matches!(
                 d,
@@ -528,9 +580,12 @@ mod tests {
             seed: 42,
         });
         let mut state = state;
-        let obs = observe(&mut state, 0);
         let mut agent = SpreadAgent::new();
-        let directives = agent.act(&obs);
+        let init = initial_observation(&state, 0);
+        agent.init(&init);
+        let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+        let delta = observe_delta(&mut state, 0, &mut session);
+        let directives = agent.act(&delta);
         assert!(
             directives
                 .iter()

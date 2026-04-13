@@ -2,6 +2,8 @@ use super::combat;
 use super::hex::{self, Axial};
 use super::pathfinding;
 use super::state::{CargoType, Convoy, ConvoyKey, GameState, PopKey, Population, Role};
+#[cfg(debug_assertions)]
+use super::state::TickAccumulator;
 use super::{
     BASE_MOVE_COOLDOWN, BASE_STORAGE_CAP, CONVOY_MOVE_COOLDOWN, DEPOT_STORAGE_CAP, FARMER_RATE,
     FOOD_RATE, FRONTIER_DECAY_RATE, MATERIAL_RATE, MIGRATION_DIVISOR, POPULATION_GROWTH_RATE,
@@ -13,7 +15,11 @@ use std::collections::HashMap;
 
 pub fn tick(state: &mut GameState) {
     #[cfg(debug_assertions)]
-    debug_assert_economy_sane(state, "pre");
+    if state.tick_accumulator.is_none() {
+        state.tick_accumulator = Some(TickAccumulator::default());
+    }
+    #[cfg(debug_assertions)]
+    let pre_totals = economic_snapshot(state);
     state.rebuild_spatial();
     generate_resources(state);
     grow_population(state);
@@ -28,7 +34,11 @@ pub fn tick(state: &mut GameState) {
     cleanup_stale_engagements(state);
     refresh_player_totals(state);
     #[cfg(debug_assertions)]
-    debug_assert_economy_sane(state, "post");
+    debug_assert_economy_sane(state, "post", pre_totals);
+    #[cfg(debug_assertions)]
+    {
+        state.tick_accumulator = None;
+    }
     state.tick += 1;
 }
 
@@ -187,21 +197,43 @@ fn has_settlement_support(state: &GameState, owner: u8, ax: Axial) -> bool {
 
 fn add_stockpile(state: &mut GameState, ax: Axial, owner: u8, food: f32, material: f32) {
     let target = supported_settlement(state, owner, ax).unwrap_or(ax);
+    let mut food_overflow = 0.0;
+    let mut material_overflow = 0.0;
+    let mut changed = false;
     if let Some(cell) = state.cell_at_mut(target) {
         if cell.stockpile_owner.is_none() || cell.stockpile_owner == Some(owner) {
+            changed |= cell.stockpile_owner != Some(owner);
             cell.stockpile_owner = Some(owner);
         }
         let cap = storage_cap(cell.has_depot);
         if cell.stockpile_owner == Some(owner) {
-            cell.food_stockpile = (cell.food_stockpile + food).clamp(0.0, cap);
-            cell.material_stockpile = (cell.material_stockpile + material).clamp(0.0, cap);
+            let next_food = (cell.food_stockpile + food).clamp(0.0, cap);
+            let next_material = (cell.material_stockpile + material).clamp(0.0, cap);
+            food_overflow = (cell.food_stockpile + food - next_food).max(0.0);
+            material_overflow = (cell.material_stockpile + material - next_material).max(0.0);
+            changed |= (next_food - cell.food_stockpile).abs() > 0.0001;
+            changed |= (next_material - cell.material_stockpile).abs() > 0.0001;
+            cell.food_stockpile = next_food;
+            cell.material_stockpile = next_material;
         }
+    }
+    #[cfg(debug_assertions)]
+    {
+        state.record_food_destroyed(food_overflow);
+        state.record_material_destroyed(material_overflow);
+    }
+    if changed {
+        state.mark_dirty_axial(target);
     }
 }
 
 fn capture_hex(state: &mut GameState, ax: Axial, owner: u8) {
     if let Some(cell) = state.cell_at_mut(ax) {
+        let changed = cell.stockpile_owner != Some(owner);
         cell.stockpile_owner = Some(owner);
+        if changed {
+            state.mark_dirty_axial(ax);
+        }
     }
 }
 
@@ -223,6 +255,11 @@ fn generate_resources(state: &mut GameState) {
         .collect();
 
     for (hex, owner, food, material) in unit_income {
+        #[cfg(debug_assertions)]
+        {
+            state.record_food_produced(food);
+            state.record_material_produced(material);
+        }
         add_stockpile(state, hex, owner, food, material);
     }
 
@@ -270,6 +307,11 @@ fn generate_resources(state: &mut GameState) {
     }
 
     for (hex, owner, food, material) in pop_income {
+        #[cfg(debug_assertions)]
+        {
+            state.record_food_produced(food);
+            state.record_material_produced(material);
+        }
         add_stockpile(state, hex, owner, food, material);
     }
 }
@@ -437,17 +479,33 @@ fn consume_upkeep(state: &mut GameState) {
         // Capture hex ownership
         if let Some(cell) = state.cell_at_mut(*pos) {
             if cell.stockpile_owner.is_none() || cell.stockpile_owner == Some(*owner) {
+                let changed = cell.stockpile_owner != Some(*owner);
                 cell.stockpile_owner = Some(*owner);
+                if changed {
+                    state.mark_dirty_axial(*pos);
+                }
             }
         }
 
         let mut fed = false;
+        let mut partial_food = 0.0;
         if let Some(cell) = state.cell_at_mut(*pos) {
             if cell.stockpile_owner == Some(*owner) && cell.food_stockpile >= UPKEEP_PER_UNIT {
                 cell.food_stockpile -= UPKEEP_PER_UNIT;
+                state.mark_dirty_axial(*pos);
                 fed = true;
             } else if cell.stockpile_owner == Some(*owner) && cell.food_stockpile > 0.0 {
+                partial_food = cell.food_stockpile;
                 cell.food_stockpile = 0.0;
+                state.mark_dirty_axial(*pos);
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            if fed {
+                state.record_food_consumed(UPKEEP_PER_UNIT);
+            } else if partial_food > 0.0 {
+                state.record_food_consumed(partial_food);
             }
         }
         if !fed {
@@ -462,11 +520,16 @@ fn consume_upkeep(state: &mut GameState) {
     let convoy_info: Vec<(Axial, u8)> = state.convoys.values().map(|c| (c.pos, c.owner)).collect();
 
     for (pos, owner) in convoy_info {
+        let mut consumed = 0.0;
         if let Some(cell) = state.cell_at_mut(pos) {
             if cell.stockpile_owner == Some(owner) && cell.food_stockpile >= UPKEEP_PER_UNIT * 0.5 {
                 cell.food_stockpile -= UPKEEP_PER_UNIT * 0.5;
+                state.mark_dirty_axial(pos);
+                consumed = UPKEEP_PER_UNIT * 0.5;
             }
         }
+        #[cfg(debug_assertions)]
+        state.record_food_consumed(consumed);
     }
 }
 
@@ -580,7 +643,11 @@ fn move_convoys(state: &mut GameState) {
                                     state.next_pop_id += 1;
                                 }
                                 if let Some(cell) = state.cell_at_mut(dest) {
+                                    let changed = cell.stockpile_owner != Some(owner);
                                     cell.stockpile_owner = Some(owner);
+                                    if changed {
+                                        state.mark_dirty_axial(dest);
+                                    }
                                 }
                             }
                         }
@@ -633,16 +700,36 @@ fn add_convoy_cargo_to_cell(
     cargo_type: CargoType,
     amount: f32,
 ) {
+    let mut food_overflow = 0.0;
+    let mut material_overflow = 0.0;
+    let mut changed = false;
     if let Some(cell) = state.cell_at_mut(ax) {
+        changed = cell.stockpile_owner != Some(owner);
         cell.stockpile_owner = Some(owner);
         let cap = storage_cap(cell.has_depot);
         match cargo_type {
-            CargoType::Food => cell.food_stockpile = (cell.food_stockpile + amount).clamp(0.0, cap),
+            CargoType::Food => {
+                let next = (cell.food_stockpile + amount).clamp(0.0, cap);
+                food_overflow = (cell.food_stockpile + amount - next).max(0.0);
+                changed |= (next - cell.food_stockpile).abs() > 0.0001;
+                cell.food_stockpile = next;
+            }
             CargoType::Material => {
-                cell.material_stockpile = (cell.material_stockpile + amount).clamp(0.0, cap)
+                let next = (cell.material_stockpile + amount).clamp(0.0, cap);
+                material_overflow = (cell.material_stockpile + amount - next).max(0.0);
+                changed |= (next - cell.material_stockpile).abs() > 0.0001;
+                cell.material_stockpile = next;
             }
             CargoType::Settlers => {}
         }
+    }
+    #[cfg(debug_assertions)]
+    {
+        state.record_food_destroyed(food_overflow);
+        state.record_material_destroyed(material_overflow);
+    }
+    if changed {
+        state.mark_dirty_axial(ax);
     }
 }
 
@@ -662,10 +749,20 @@ fn decay_frontier_stockpiles(state: &mut GameState) {
 
     for (idx, supported) in support_mask.into_iter().enumerate() {
         if !supported {
+            let mut food_destroyed = 0.0;
+            let mut material_destroyed = 0.0;
             let cell = &mut state.grid[idx];
             if cell.stockpile_owner.is_some() {
+                food_destroyed = cell.food_stockpile * FRONTIER_DECAY_RATE;
+                material_destroyed = cell.material_stockpile * FRONTIER_DECAY_RATE;
                 cell.food_stockpile *= 1.0 - FRONTIER_DECAY_RATE;
                 cell.material_stockpile *= 1.0 - FRONTIER_DECAY_RATE;
+                state.mark_dirty_index(idx);
+            }
+            #[cfg(debug_assertions)]
+            {
+                state.record_food_destroyed(food_destroyed);
+                state.record_material_destroyed(material_destroyed);
             }
         }
     }
@@ -726,12 +823,26 @@ fn cleanup(state: &mut GameState) {
         state.units.retain(|_, u| u.owner != pid);
         state.population.retain(|_, p| p.owner != pid);
         state.convoys.retain(|_, c| c.owner != pid);
-        for cell in &mut state.grid {
+        let mut cleared = Vec::new();
+        let mut destroyed_food = 0.0;
+        let mut destroyed_material = 0.0;
+        for (idx, cell) in state.grid.iter_mut().enumerate() {
             if cell.stockpile_owner == Some(pid) {
+                destroyed_food += cell.food_stockpile;
+                destroyed_material += cell.material_stockpile;
                 cell.stockpile_owner = None;
                 cell.food_stockpile = 0.0;
                 cell.material_stockpile = 0.0;
+                cleared.push(idx);
             }
+        }
+        #[cfg(debug_assertions)]
+        {
+            state.record_food_destroyed(destroyed_food);
+            state.record_material_destroyed(destroyed_material);
+        }
+        for idx in cleared {
+            state.mark_dirty_index(idx);
         }
         for (_, unit) in &mut state.units {
             unit.engagements
@@ -819,8 +930,28 @@ fn economic_snapshot(state: &GameState) -> EconomicSnapshot {
 }
 
 #[cfg(debug_assertions)]
-fn debug_assert_economy_sane(state: &GameState, phase: &str) {
+fn debug_assert_economy_sane(state: &GameState, phase: &str, pre_snapshot: EconomicSnapshot) {
     let snapshot = economic_snapshot(state);
+    let acc = state.tick_accumulator.unwrap_or_default();
+    let expected_food_delta = acc.food_produced - acc.food_consumed - acc.food_destroyed;
+    let expected_material_delta =
+        acc.material_produced - acc.material_consumed - acc.material_destroyed;
+    let tolerance = 3.0;
+    assert!(
+        ((snapshot.food_assets - pre_snapshot.food_assets) - expected_food_delta).abs() < tolerance,
+        "{phase} tick {}: food conservation violated delta={} expected={}",
+        state.tick,
+        snapshot.food_assets - pre_snapshot.food_assets,
+        expected_food_delta
+    );
+    assert!(
+        ((snapshot.material_assets - pre_snapshot.material_assets) - expected_material_delta).abs()
+            < tolerance,
+        "{phase} tick {}: material conservation violated delta={} expected={}",
+        state.tick,
+        snapshot.material_assets - pre_snapshot.material_assets,
+        expected_material_delta
+    );
     assert!(
         snapshot.food_assets.is_finite() && snapshot.food_assets >= -0.001,
         "{phase} tick {}: invalid total food assets {}",
@@ -855,33 +986,31 @@ fn debug_assert_economy_sane(state: &GameState, phase: &str) {
             convoy.public_id
         );
     }
-    if phase == "post" {
-        let mut food_by_owner = vec![0.0f32; state.players.len()];
-        let mut material_by_owner = vec![0.0f32; state.players.len()];
-        for cell in &state.grid {
-            if let Some(owner) = cell.stockpile_owner {
-                food_by_owner[owner as usize] += cell.food_stockpile;
-                material_by_owner[owner as usize] += cell.material_stockpile;
-            }
+    let mut food_by_owner = vec![0.0f32; state.players.len()];
+    let mut material_by_owner = vec![0.0f32; state.players.len()];
+    for cell in &state.grid {
+        if let Some(owner) = cell.stockpile_owner {
+            food_by_owner[owner as usize] += cell.food_stockpile;
+            material_by_owner[owner as usize] += cell.material_stockpile;
         }
-        for player in &state.players {
-            assert!(
-                (player.food - food_by_owner[player.id as usize]).abs() < 0.01,
-                "{phase} tick {}: player {} food total mismatch {} vs {}",
-                state.tick,
-                player.id,
-                player.food,
-                food_by_owner[player.id as usize]
-            );
-            assert!(
-                (player.material - material_by_owner[player.id as usize]).abs() < 0.01,
-                "{phase} tick {}: player {} material total mismatch {} vs {}",
-                state.tick,
-                player.id,
-                player.material,
-                material_by_owner[player.id as usize]
-            );
-        }
+    }
+    for player in &state.players {
+        assert!(
+            (player.food - food_by_owner[player.id as usize]).abs() < 0.01,
+            "{phase} tick {}: player {} food total mismatch {} vs {}",
+            state.tick,
+            player.id,
+            player.food,
+            food_by_owner[player.id as usize]
+        );
+        assert!(
+            (player.material - material_by_owner[player.id as usize]).abs() < 0.01,
+            "{phase} tick {}: player {} material total mismatch {} vs {}",
+            state.tick,
+            player.id,
+            player.material,
+            material_by_owner[player.id as usize]
+        );
     }
 }
 

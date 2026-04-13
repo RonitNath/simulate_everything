@@ -257,6 +257,8 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 - Units, population, and convoys are stored in `SlotMap`s keyed by opaque engine IDs (`UnitKey`, `PopKey`, `ConvoyKey`) so hot paths can do direct lookups instead of scanning vectors.
 - `GameState` maintains a rebuilt-per-tick `SpatialIndex` cache for unit occupancy lookups on a hex and its adjacent ring.
 - Replay and spectator payloads keep stable numeric `id` fields for frontend compatibility even though the engine uses slotmap keys internally.
+- Agent polling now uses `InitialObservation` plus per-poll `ObservationDelta`; the engine keeps a lightweight dirty-cell mask and each caller owns an `ObservationSession` to track prior visibility/scouted state.
+- `observe()` still exists as a convenience for tests, replay reconstruction, and benchmarking; it materializes a full observation from the same delta-oriented internals.
 
 **V2 economy and settlement rules:**
 
@@ -269,7 +271,7 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 - Natural migration is slow adjacent drift from established settlements into owned fertile frontier hexes.
 - Deliberate long-range expansion uses settler convoys carrying `SETTLER_CONVOY_SIZE` population.
 - V2 games end either by elimination or by `TIMEOUT_TICKS`, where the timeout winner is chosen by weighted score: population 40%, territory 30%, military strength 20%, stockpiles 10%.
-- In debug builds, each tick asserts basic economic invariants: finite/non-negative assets and player totals that match owned stockpiles.
+- In debug builds, each tick runs a conservation-oriented economy check against tracked production/consumption/destruction totals, then also asserts finite/non-negative assets and player totals that match owned stockpiles.
 
 **V2 fog-of-war observation model:**
 
@@ -301,14 +303,14 @@ All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crate
 
 | `type` | Fields | Description |
 |--------|--------|-------------|
-| `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. Terrain arrays currently expose the food/material productivity layers used by the UI. |
-| `v2_frame` | `tick: u64`, `units: Vec<UnitSnapshot>`, `player_food: Vec<f32>`, `player_material: Vec<f32>`, `alive: Vec<bool>` | Sent every tick. Full unit list with positions, strength, engagement state, and per-player economy. |
+| `v2_init` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `height_map: Vec<f32>`, `region_ids: Vec<u16>`, `player_count`, `agent_names` | Sent once per game. Carries the static terrain layers needed to render the board and seed reconnect catchup. |
+| `v2_snapshot` | `tick`, `full_state`, `units`, `engagements`, `convoys`, `hex_changes`, `settlements`, `players` | Sent every tick. `full_state=false` frames carry only dynamic hex deltas plus full entity lists; reconnect catchup uses a `full_state=true` snapshot representing the current board. |
 | `v2_game_end` | `winner: Option<u8>`, `tick: u64`, `timed_out: bool` | Sent when the game ends. `winner` is the elimination winner or the score winner at timeout; `timed_out` distinguishes those cases. |
 | `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
 
-`UnitSnapshot` fields: `id`, `owner`, `q`, `r`, `strength`, `engaged` (bool), `is_general` (bool).
+`v2_snapshot.players` uses compact HUD buckets instead of exact economy floats: `population`, `territory`, `food_level`, and `material_level`.
 
-Late-joining spectators receive a catchup burst of the last `game_start` and most recent `frame` before being subscribed to the live stream.
+Late-joining spectators receive a catchup burst of the last `v2_init` plus a `full_state=true` `v2_snapshot` before being subscribed to live deltas.
 
 ### V2 Round-Robin
 
@@ -321,6 +323,7 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 - Currently runs **SpreadAgent vs SpreadAgent** — both players use the same placeholder agent.
 - Supports pause / resume / reset without process restart.
 - Spectators receive a broadcast from a `tokio::broadcast::Sender<V2ServerToSpectator>` (capacity 512).
+- The RR loop maintains a full current snapshot for reconnect catchup even though live traffic is delta-based.
 
 ### V2 Agents
 
@@ -329,12 +332,13 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 ```rust
 pub trait Agent: Send {
     fn name(&self) -> &str;
-    fn act(&mut self, obs: &Observation) -> Vec<Directive>;
+    fn init(&mut self, obs: &InitialObservation);
+    fn act(&mut self, delta: &ObservationDelta) -> Vec<Directive>;
     fn reset(&mut self) {}
 }
 ```
 
-Directives are accumulated and applied to the game state by `directive::apply_directives`. The `reset` hook is called between games.
+Agents own their local cached view; `SpreadAgent` materializes a full observation internally and patches it with each delta before making decisions. Directives are accumulated and applied to the game state by `directive::apply_directives`. The `reset` hook is called between games.
 
 **SpreadAgent** — current placeholder:
 

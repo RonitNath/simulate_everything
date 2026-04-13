@@ -1,5 +1,5 @@
 import { Component, createMemo } from "solid-js";
-import type { V2UnitSnapshot } from "./v2types";
+import type { V2Settlement, V2UnitSnapshot } from "./v2types";
 
 const PLAYER_COLORS = [
   "#4a9eff", "#ff4a6a", "#4aff8a", "#ffa04a",
@@ -16,9 +16,9 @@ function parseHex(hex: string): [number, number, number] {
   ];
 }
 
-function playerRgbDim(owner: number, t: number): string {
+function playerRgb(owner: number, alpha = 1): string {
   const [r, g, b] = parseHex(PLAYER_COLORS[owner % PLAYER_COLORS.length]);
-  return `rgb(${Math.round(r * t)},${Math.round(g * t)},${Math.round(b * t)})`;
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function stackBrightness(totalStrength: number, maxStrength: number): number {
@@ -32,6 +32,10 @@ function terrainColor(value: number): string {
   const g = Math.round(25 + 40 * t);
   const b = Math.round(20 + 10 * t);
   return `rgb(${r},${g},${b})`;
+}
+
+function mixTerrain(base: string, overlay: string): string {
+  return `linear-gradient(135deg, ${base}, ${overlay})`;
 }
 
 function hexPoints(cx: number, cy: number, size: number): string {
@@ -58,6 +62,9 @@ interface CellStack {
 interface HexBoardProps {
   terrain: number[];
   units: V2UnitSnapshot[];
+  hexOwnership: (number | null)[];
+  roadLevels: number[];
+  settlements: V2Settlement[];
   width: number;
   height: number;
   showNumbers?: boolean;
@@ -74,6 +81,14 @@ const HexBoard: Component<HexBoardProps> = (props) => {
 
   const svgWidth = createMemo(() => SQRT3 * hexSize() * (props.width + 0.5) + hexSize());
   const svgHeight = createMemo(() => 1.5 * hexSize() * props.height + hexSize() * 1.5);
+
+  const settlementMap = createMemo(() => {
+    const map = new Map<string, V2Settlement>();
+    for (const settlement of props.settlements) {
+      map.set(`${settlement.q},${settlement.r}`, settlement);
+    }
+    return map;
+  });
 
   const unitMap = createMemo(() => {
     const map = new Map<string, CellStack>();
@@ -103,47 +118,62 @@ const HexBoard: Component<HexBoardProps> = (props) => {
     return max;
   });
 
-  // Pre-compute all cells as a flat memo so the entire SVG re-renders on unit changes
   const cells = createMemo(() => {
     const s = hexSize();
     const umap = unitMap();
     const maxStr = maxStackStrength();
+    const settlements = settlementMap();
     const result: Array<{
-      row: number; col: number; cx: number; cy: number;
-      fill: string; stroke: string; strokeWidth: number;
-      entry: CellStack | undefined;
+      cx: number; cy: number; pts: string; fill: string; stroke: string; strokeWidth: number;
+      entry: CellStack | undefined; owner: number | null; roadLevel: number; settlement?: V2Settlement;
     }> = [];
 
     for (let row = 0; row < props.height; row++) {
       for (let col = 0; col < props.width; col++) {
         const [cx, cy] = hexCenter(row, col, s);
         const idx = row * props.width + col;
-        const tv = props.terrain[idx] ?? 0;
+        const q = col - Math.floor((row - (row & 1)) / 2);
+        const r = row;
         const key = `${row},${col}`;
         const entry = umap.get(key);
+        const owner = props.hexOwnership[idx] ?? null;
+        const roadLevel = props.roadLevels[idx] ?? 0;
+        const settlement = settlements.get(`${q},${r}`);
 
-        let fill: string;
-        let stroke = "#1a1a2e";
-        let strokeWidth = Math.max(0.5, s * 0.04);
+        let fill = terrainColor(props.terrain[idx] ?? 0);
+        let stroke = roadLevel > 0 ? "#d3b36b" : "#1a1a2e";
+        let strokeWidth = roadLevel > 0 ? Math.max(1, s * (0.04 + 0.015 * roadLevel)) : Math.max(0.5, s * 0.04);
 
+        if (owner !== null) {
+          fill = mixTerrain(fill, playerRgb(owner, 0.45));
+        }
         if (entry) {
-          const { unit, totalStrength } = entry;
-          const t = stackBrightness(totalStrength, maxStr);
-          fill = playerRgbDim(unit.owner, unit.is_general ? Math.max(t, 0.85) : t);
-          if (unit.is_general) {
+          const t = stackBrightness(entry.totalStrength, maxStr);
+          fill = playerRgb(entry.unit.owner, entry.unit.is_general ? Math.max(t, 0.9) : t);
+          if (entry.unit.is_general) {
             stroke = "#ffd700";
             strokeWidth = Math.max(1.5, s * 0.08);
-          } else if (unit.engaged) {
+          } else if (entry.unit.engaged) {
             stroke = "#ff0";
             strokeWidth = Math.max(1, s * 0.06);
           }
-        } else {
-          fill = terrainColor(tv);
         }
 
-        result.push({ row, col, cx, cy, fill, stroke, strokeWidth, entry });
+        result.push({
+          cx,
+          cy,
+          pts: hexPoints(cx, cy, s * 0.96),
+          fill,
+          stroke,
+          strokeWidth,
+          entry,
+          owner,
+          roadLevel,
+          settlement,
+        });
       }
     }
+
     return result;
   });
 
@@ -156,17 +186,13 @@ const HexBoard: Component<HexBoardProps> = (props) => {
     >
       {cells().map((c) => {
         const s = hexSize();
-        const pts = hexPoints(c.cx, c.cy, s * 0.96);
-
-        if (!c.entry) {
-          return <polygon points={pts} fill={c.fill} stroke={c.stroke} stroke-width={c.strokeWidth} />;
-        }
-
-        const { unit, count } = c.entry;
         return (
           <g>
-            <polygon points={pts} fill={c.fill} stroke={c.stroke} stroke-width={c.strokeWidth} />
-            {unit.is_general && (
+            <polygon points={c.pts} fill={c.fill} stroke={c.stroke} stroke-width={c.strokeWidth} />
+            {c.settlement && (
+              <circle cx={c.cx} cy={c.cy} r={Math.max(2, s * 0.18)} fill={playerRgb(c.settlement.owner, 0.9)} stroke="#fff" stroke-width={Math.max(0.5, s * 0.03)} />
+            )}
+            {c.entry?.unit.is_general && (
               <text
                 x={c.cx} y={c.cy + (props.showNumbers ? -s * 0.15 : s * 0.05)}
                 text-anchor="middle" dominant-baseline="middle"
@@ -174,13 +200,13 @@ const HexBoard: Component<HexBoardProps> = (props) => {
                 style={{ "pointer-events": "none" }}
               >★</text>
             )}
-            {props.showNumbers && s > 8 && (
+            {props.showNumbers && c.entry && s > 8 && (
               <text
-                x={c.cx} y={c.cy + (unit.is_general ? s * 0.3 : s * 0.1)}
+                x={c.cx} y={c.cy + (c.entry.unit.is_general ? s * 0.3 : s * 0.1)}
                 text-anchor="middle" dominant-baseline="middle"
                 font-size={`${Math.max(7, s * 0.35)}`} font-weight="bold" fill="#fff"
                 style={{ "pointer-events": "none" }}
-              >{count}</text>
+              >{c.entry.count}</text>
             )}
           </g>
         );
