@@ -9,7 +9,8 @@ use super::runner;
 use super::sim;
 use super::spatial::SpatialIndex;
 use super::state::{
-    Biome, CargoType, Cell, Convoy, Engagement, GameState, Player, Population, Role, Unit,
+    Biome, CargoType, Cell, Convoy, Engagement, GameState, Player, Population, Role, Settlement,
+    SettlementType, Unit,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +76,16 @@ pub struct StaticCellSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettlementSnapshot {
+    pub id: u32,
+    pub owner: u8,
+    pub q: i32,
+    pub r: i32,
+    pub settlement_type: SettlementType,
+    pub population: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub tick: u64,
     pub units: Vec<UnitSnapshot>,
@@ -84,6 +95,7 @@ pub struct Frame {
     pub cells: Vec<CellSnapshot>,
     pub population: Vec<PopulationSnapshot>,
     pub convoys: Vec<ConvoySnapshot>,
+    pub settlements: Vec<SettlementSnapshot>,
     pub scores: Vec<super::sim::ScoreBreakdown>,
 }
 
@@ -171,6 +183,21 @@ fn snapshot_cells(state: &GameState) -> Vec<CellSnapshot> {
         .collect()
 }
 
+fn snapshot_settlements(state: &GameState) -> Vec<SettlementSnapshot> {
+    state
+        .settlements
+        .values()
+        .map(|s| SettlementSnapshot {
+            id: s.public_id,
+            owner: s.owner,
+            q: s.hex.q,
+            r: s.hex.r,
+            settlement_type: s.settlement_type,
+            population: state.population_on_hex(s.owner, s.hex),
+        })
+        .collect()
+}
+
 fn snapshot_static_cells(state: &GameState) -> Vec<StaticCellSnapshot> {
     state
         .grid
@@ -198,6 +225,7 @@ fn capture_frame(state: &GameState) -> Frame {
         cells: snapshot_cells(state),
         population: snapshot_population(state),
         convoys: snapshot_convoys(state),
+        settlements: snapshot_settlements(state),
         scores: sim::score_players(state),
     }
 }
@@ -349,6 +377,19 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         });
     }
 
+    let mut settlements = SlotMap::with_key();
+    let mut next_settlement_id = 0;
+    for snapshot in &frame.settlements {
+        next_settlement_id = next_settlement_id.max(snapshot.id + 1);
+        settlements.insert(Settlement {
+            public_id: snapshot.id,
+            hex: Axial::new(snapshot.q, snapshot.r),
+            owner: snapshot.owner,
+            settlement_type: snapshot.settlement_type,
+        });
+    }
+
+    let total_cells = replay.width * replay.height;
     let mut state = GameState {
         width: replay.width,
         height: replay.height,
@@ -357,16 +398,19 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         players,
         population,
         convoys,
+        settlements,
         regions: Vec::new(),
         tick: frame.tick,
         next_unit_id,
         next_pop_id,
         next_convoy_id,
-        scouted: vec![vec![true; replay.width * replay.height]; replay.num_players],
+        next_settlement_id,
+        scouted: vec![vec![true; total_cells]; replay.num_players],
         spatial: SpatialIndex::new(replay.width, replay.height),
-        dirty_hexes: BitVec::repeat(false, replay.width * replay.height),
-        hex_revisions: vec![0; replay.width * replay.height],
+        dirty_hexes: BitVec::repeat(false, total_cells),
+        hex_revisions: vec![0; total_cells],
         next_hex_revision: 0,
+        territory_cache: vec![None; total_cells],
         #[cfg(debug_assertions)]
         tick_accumulator: None,
     };

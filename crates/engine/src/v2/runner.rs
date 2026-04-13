@@ -7,7 +7,8 @@ use super::state::GameState;
 
 pub(crate) fn advance_game_tick(state: &mut GameState, agents: &mut [Box<dyn Agent>]) {
     if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
-        let mut session = observation::ObservationSession::new(state.players.len(), state.width * state.height);
+        let mut session =
+            observation::ObservationSession::new(state.players.len(), state.width * state.height);
         for (player_id, agent) in agents.iter_mut().enumerate() {
             let pid = player_id as u8;
             if !state.players.iter().any(|p| p.id == pid && p.alive) {
@@ -40,7 +41,8 @@ pub fn run_loop<F>(
 ) where
     F: FnMut(&GameState),
 {
-    let mut session = observation::ObservationSession::new(state.players.len(), state.width * state.height);
+    let mut session =
+        observation::ObservationSession::new(state.players.len(), state.width * state.height);
     for (player_id, agent) in agents.iter_mut().enumerate() {
         let pid = player_id as u8;
         let init = observation::initial_observation(state, pid);

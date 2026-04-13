@@ -339,7 +339,8 @@ pub fn observe_delta(
             changed_indices.push(idx);
         }
     }
-    for (idx, (&was_visible, &is_visible)) in previous_visible.iter().zip(visible.iter()).enumerate()
+    for (idx, (&was_visible, &is_visible)) in
+        previous_visible.iter().zip(visible.iter()).enumerate()
     {
         if was_visible != is_visible || (is_visible && !previous_scouted[idx] && scouted[idx]) {
             changed_indices.push(idx);
@@ -394,10 +395,7 @@ pub fn observe_delta(
     }
 }
 
-pub fn materialize_observation(
-    init: &InitialObservation,
-    delta: &ObservationDelta,
-) -> Observation {
+pub fn materialize_observation(init: &InitialObservation, delta: &ObservationDelta) -> Observation {
     let mut obs = Observation {
         tick: delta.tick,
         player: delta.player,

@@ -10,7 +10,10 @@ use super::replay;
 use super::runner;
 use super::sim;
 use super::spatial::SpatialIndex;
-use super::state::{Biome, Cell, Convoy, GameState, Player, Population, Role, TickAccumulator, Unit};
+use super::state::{
+    Biome, Cell, Convoy, GameState, Player, Population, Role, Settlement, SettlementType,
+    TickAccumulator, Unit,
+};
 use bitvec::vec::BitVec;
 use slotmap::{Key, SlotMap};
 
@@ -96,16 +99,19 @@ fn blank_state(width: usize, height: usize, num_players: u8) -> GameState {
         players,
         population: SlotMap::with_key(),
         convoys: SlotMap::with_key(),
+        settlements: SlotMap::with_key(),
         regions: Vec::new(),
         tick: 0,
         next_unit_id: num_players as u32,
         next_pop_id: 0,
         next_convoy_id: 0,
+        next_settlement_id: 0,
         scouted: vec![vec![true; width * height]; num_players as usize],
         spatial: SpatialIndex::new(width, height),
         dirty_hexes: BitVec::repeat(false, width * height),
         hex_revisions: vec![0; width * height],
         next_hex_revision: 0,
+        territory_cache: vec![None; width * height],
         #[cfg(debug_assertions)]
         tick_accumulator: Some(TickAccumulator::default()),
     };
@@ -254,32 +260,14 @@ fn passive_economy_preserves_non_negative_stockpiles_and_player_totals() {
         Box::new(ScriptedAgent::pass()),
         Box::new(ScriptedAgent::pass()),
     ];
-    let mut previous_material_assets = state
-        .grid
-        .iter()
-        .map(|cell| cell.material_stockpile)
-        .sum::<f32>();
 
+    // City AI now runs autonomously (building infrastructure, training soldiers, etc.)
+    // so material can decrease without explicit directives. We only verify that
+    // stockpiles stay non-negative and player totals are consistent.
     for _ in 0..40 {
         runner::advance_game_tick(&mut state, &mut agents);
         assert_no_negative_stockpiles(&state);
         assert_player_totals_match_owned_cells(&state);
-
-        let material_assets = state
-            .grid
-            .iter()
-            .map(|cell| cell.material_stockpile)
-            .sum::<f32>()
-            + state
-                .convoys
-                .values()
-                .map(|convoy| convoy.cargo_amount)
-                .sum::<f32>();
-        assert!(
-            material_assets + 0.001 >= previous_material_assets,
-            "material should not be consumed without directives"
-        );
-        previous_material_assets = material_assets;
     }
 }
 
@@ -310,6 +298,14 @@ fn convoy_raiding_transfers_cargo_to_adjacent_raider_hex() {
     state.cell_at_mut(raid_hex).unwrap().terrain_value = 0.0;
     state.cell_at_mut(raid_hex).unwrap().material_value = 0.0;
     state.cell_at_mut(raid_hex).unwrap().stockpile_owner = Some(1);
+    // Settlement so the hex has territory support and raided food doesn't decay this tick.
+    state.settlements.insert(Settlement {
+        public_id: 0,
+        hex: raid_hex,
+        owner: 1,
+        settlement_type: SettlementType::Village,
+    });
+    state.next_settlement_id = 1;
     state.convoys.insert(Convoy {
         public_id: 0,
         owner: 0,

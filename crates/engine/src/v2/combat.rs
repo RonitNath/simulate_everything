@@ -184,11 +184,11 @@ pub fn cleanup_engagements(state: &mut GameState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitvec::vec::BitVec;
     use crate::v2::INITIAL_STRENGTH;
     use crate::v2::hex::Axial;
     use crate::v2::spatial::SpatialIndex;
     use crate::v2::state::*;
+    use bitvec::vec::BitVec;
     use slotmap::SlotMap;
 
     fn combat_state(units: Vec<Unit>) -> GameState {
@@ -238,6 +238,7 @@ mod tests {
                 alive: true,
             },
         ];
+        let total_cells = width * height;
         let mut state = GameState {
             width,
             height,
@@ -246,16 +247,19 @@ mod tests {
             players,
             population: SlotMap::with_key(),
             convoys: SlotMap::with_key(),
+            settlements: SlotMap::with_key(),
             regions: Vec::new(),
             tick: 0,
             next_unit_id: 300,
             next_pop_id: 0,
             next_convoy_id: 0,
-            scouted: vec![vec![true; width * height]; 2],
+            next_settlement_id: 0,
+            scouted: vec![vec![true; total_cells]; 2],
             spatial: SpatialIndex::new(width, height),
-            dirty_hexes: BitVec::repeat(false, width * height),
-            hex_revisions: vec![0; width * height],
+            dirty_hexes: BitVec::repeat(false, total_cells),
+            hex_revisions: vec![0; total_cells],
             next_hex_revision: 0,
+            territory_cache: vec![None; total_cells],
             #[cfg(debug_assertions)]
             tick_accumulator: Some(TickAccumulator::default()),
         };

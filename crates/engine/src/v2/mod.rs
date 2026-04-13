@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod ascii;
+pub mod city_ai;
 pub mod combat;
 pub mod directive;
 pub mod hex;
@@ -38,9 +39,26 @@ pub const ROAD_LEVEL3_COST: f32 = 20.0;
 pub const CONVOY_CAPACITY: f32 = 20.0;
 pub const CONVOY_MOVE_COOLDOWN: u8 = 3;
 pub const POPULATION_GROWTH_RATE: f32 = 0.02;
-pub const SETTLEMENT_THRESHOLD: u16 = 10;
+/// Population threshold for a hex to count as any settlement (Farm).
+pub const FARM_THRESHOLD: u16 = 2;
+/// Village tier: 10+ population.
+pub const VILLAGE_THRESHOLD: u16 = 10;
+/// City tier: 30+ population.
+pub const CITY_THRESHOLD: u16 = 30;
+/// Territory radius for Farm settlements (own hex only).
+pub const FARM_RADIUS: i32 = 0;
+/// Territory radius for Village settlements.
+pub const VILLAGE_RADIUS: i32 = 1;
+/// Territory radius for City settlements.
+pub const CITY_RADIUS: i32 = 2;
+/// How often (in ticks) the city AI runs.
+pub const CITY_AI_INTERVAL: u64 = 10;
+/// Population size of a farm settler convoy.
+pub const FARM_CONVOY_SIZE: u16 = 4;
+/// Legacy alias kept for existing callers.
+pub const SETTLEMENT_THRESHOLD: u16 = VILLAGE_THRESHOLD;
 pub const SETTLER_CONVOY_SIZE: u16 = 10;
-pub const SETTLEMENT_SUPPORT_RADIUS: i32 = 1;
+pub const SETTLEMENT_SUPPORT_RADIUS: i32 = VILLAGE_RADIUS;
 pub const FRONTIER_DECAY_RATE: f32 = 0.02;
 pub const MIGRATION_DIVISOR: u64 = 120;
 pub const TIMEOUT_TICKS: u64 = 3000;
