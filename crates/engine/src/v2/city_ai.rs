@@ -53,15 +53,21 @@ fn manage_population_roles(state: &mut GameState, player_id: u8) {
         let target_farmers = (total * target_farmer_pct).ceil() as u16;
         let target_workers = (total * target_worker_pct).ceil() as u16;
 
+        // Always train some soldiers first so production isn't bottlenecked
+        // on sequential farmer→worker→soldier role assignment.
+        if idle >= 5 {
+            train_soldiers_ai(state, player_id, hex);
+        }
+
+        // Re-read idle count after training consumed some
+        let idle = population_mix(state, player_id, hex).0;
+
         if farmers < target_farmers && idle > 0 {
             let needed = (target_farmers - farmers).min(idle).min(5);
             reassign_idle(state, player_id, hex, Role::Farmer, needed);
         } else if workers < target_workers && idle > 0 {
             let needed = (target_workers - workers).min(idle).min(3);
             reassign_idle(state, player_id, hex, Role::Worker, needed);
-        } else if idle > 0 {
-            // Train remaining idle as soldiers.
-            train_soldiers_ai(state, player_id, hex);
         }
     }
 }
