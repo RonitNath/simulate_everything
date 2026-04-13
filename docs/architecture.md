@@ -189,3 +189,122 @@ SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on de
 | `GENERALS_STATIC_DIR` | — | Path to `frontend/dist/` |
 | `GENERALS_PYTHON_CLIENT` | — | Path to Python agent dir |
 | `RUST_LOG` | — | Tracing level |
+
+---
+
+## V2 Engine
+
+V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine-spec.md`. Centurion agent architecture spec: `docs/v2-agent-spec.md`.
+
+**Key differences from V1:**
+
+| Dimension | V1 | V2 |
+|-----------|----|----|
+| Grid | Square tiles | Hex grid (axial coordinates) |
+| Time | Discrete turns | Continuous ticks (10 ticks/second target) |
+| Units | Army values per cell | Entity units with individual IDs and strength |
+| Combat | Instant capture on move | Edge-based engagement: units lock and drain each other over ticks |
+| Terrain | Mountains / cities / empty | Continuous terrain value per hex influencing movement cost |
+| Map size | Variable | 30×30 default for RR |
+
+**Constants (from `crates/engine/src/v2/mod.rs`):**
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `RESOURCE_RATE` | 0.1 / tick | Resource income per player per tick |
+| `UNIT_COST` | 10.0 | Resources to produce one unit |
+| `INITIAL_STRENGTH` | 100.0 | Starting strength for a new unit |
+| `DAMAGE_RATE` | 0.05 | Fraction of strength dealt per tick in combat |
+| `DISENGAGE_PENALTY` | 0.3 | Strength loss on breaking engagement |
+| `BASE_MOVE_COOLDOWN` | 2 ticks | Minimum ticks between moves |
+| `TERRAIN_MOVE_PENALTY` | 0.5 | Additional cooldown scaling per terrain point |
+| `VISION_RADIUS` | 3 hexes | Fog-of-war visibility range |
+| `INITIAL_UNITS` | 5 | Units each player starts with |
+| `TICKS_PER_SECOND` | 10 | Simulation rate |
+| `AGENT_POLL_INTERVAL` | 5 ticks | How often agents are queried for directives |
+
+**V2 engine modules (`crates/engine/src/v2/`):**
+
+| Module | Role |
+|--------|------|
+| `state` | `GameState`, `Unit`, `Player`, `HexCell` |
+| `sim` | Tick loop: resource accrual, movement, combat resolution, win condition |
+| `combat` | Edge-based engagement: lock, damage, disengage |
+| `hex` | Axial coordinate math, neighbor enumeration, distance |
+| `mapgen` | Perlin terrain + player general placement |
+| `observation` | Fog-of-war filtered `Observation` per player |
+| `directive` | `Directive` enum: `Produce`, `Move`, `Engage` |
+| `agent` | `Agent` trait + `SpreadAgent` |
+| `pathfinding` | Hex A* for movement |
+| `vision` | Visibility computation |
+| `ascii` | ASCII renderer for debugging |
+| `replay` | `UnitSnapshot` and replay recording types |
+| `runner` | Synchronous game runner (used by `/api/v2/game`) |
+
+### V2 Web Routes
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `GET /v2` | HTTP | V2 simulator HTML page |
+| `GET /v2/rr` | HTTP | V2 round-robin spectator HTML page |
+| `GET /api/v2/game` | HTTP | Run a V2 game synchronously, return replay JSON |
+| `GET /api/v2/ascii` | HTTP | Run a V2 game, return ASCII board at a given tick |
+| `GET /ws/v2/rr` | WebSocket | V2 RR spectator stream |
+| `POST /api/v2/rr/config` | HTTP | Set tick speed (`{"tick_ms": N}`) |
+| `POST /api/v2/rr/pause` | HTTP | Pause V2 RR loop |
+| `POST /api/v2/rr/resume` | HTTP | Resume V2 RR loop |
+| `POST /api/v2/rr/reset` | HTTP | Reset current game and start a new one |
+| `GET /api/v2/rr/status` | HTTP | Health metrics |
+
+### V2 WebSocket Protocol
+
+All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crates/web/src/v2_protocol.rs`.
+
+**Server → Spectator:**
+
+| `type` | Fields | Description |
+|--------|--------|-------------|
+| `v2_game_start` | `width`, `height`, `terrain: Vec<f32>`, `num_players`, `agent_names` | Sent once at game start. `terrain` is a flat array of per-hex terrain values (length = width × height). |
+| `v2_frame` | `tick: u64`, `units: Vec<UnitSnapshot>`, `player_resources: Vec<f32>`, `alive: Vec<bool>` | Sent every tick. Full unit list with positions, strength, and engagement state. |
+| `v2_game_end` | `winner: Option<u8>`, `tick: u64` | Sent when the game ends. `winner` is `null` on timeout. |
+| `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
+
+`UnitSnapshot` fields: `id`, `owner`, `q`, `r`, `strength`, `engaged` (bool), `is_general` (bool).
+
+Late-joining spectators receive a catchup burst of the last `game_start` and most recent `frame` before being subscribed to the live stream.
+
+### V2 Round-Robin
+
+Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuously in a background Tokio task.
+
+- 2-player games on 30×30 hex maps.
+- Seeds increment from 1000 each game.
+- Max 5000 ticks per game before forced `game_end`.
+- Agents are polled every `AGENT_POLL_INTERVAL` (5) ticks.
+- Currently runs **SpreadAgent vs SpreadAgent** — both players use the same placeholder agent.
+- Supports pause / resume / reset without process restart.
+- Spectators receive a broadcast from a `tokio::broadcast::Sender<V2ServerToSpectator>` (capacity 512).
+
+### V2 Agents
+
+**Trait** (`crates/engine/src/v2/agent.rs`):
+
+```rust
+pub trait Agent: Send {
+    fn name(&self) -> &str;
+    fn act(&mut self, obs: &Observation) -> Vec<Directive>;
+    fn reset(&mut self) {}
+}
+```
+
+Directives are accumulated and applied to the game state by `directive::apply_directives`. The `reset` hook is called between games.
+
+**SpreadAgent** — current placeholder:
+
+- Early game: fans out from spawn toward map center in angular sectors (one sector per unit by index).
+- Late game: advances in 2–3 lanes toward the estimated enemy position.
+- Produces units continuously whenever resources allow (`resources / UNIT_COST` produces per poll).
+- Engages adjacent enemies when it has numerical advantage or ≥ 50% of the enemy's strength.
+- General moves toward map center once 10+ escorts are available.
+
+SpreadAgent is a structural placeholder. The target architecture is **Centurion** (see `docs/v2-agent-spec.md`): a hierarchy of specialized sub-agents (economic, tactical, strategic) with shared state and coordinated directives.
