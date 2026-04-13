@@ -70,6 +70,7 @@ const V2App: Component = () => {
                   width: msg.width,
                   height: msg.height,
                   terrain: msg.terrain,
+                  material_map: msg.material_map ?? [],
                   num_players: msg.num_players,
                   agent_names: msg.agent_names,
                 },
@@ -81,7 +82,8 @@ const V2App: Component = () => {
             const frame: V2Frame = {
               tick: msg.tick,
               units: msg.units,
-              player_resources: msg.player_resources,
+              player_food: msg.player_food,
+              player_material: msg.player_material,
               alive: msg.alive,
             };
             setFrames((prev) => [...prev, frame]);
@@ -91,7 +93,7 @@ const V2App: Component = () => {
             const p = phase();
             const game = (p.kind === "playing" || p.kind === "game_over")
               ? (p as any).game as V2GameInfo
-              : { width: 0, height: 0, terrain: [], num_players: 0, agent_names: [] };
+              : { width: 0, height: 0, terrain: [], material_map: [], num_players: 0, agent_names: [] };
             setPhase({ kind: "game_over", game, winner: msg.winner, tick: msg.tick });
             setFollowing(false);
             break;
@@ -152,7 +154,8 @@ const V2App: Component = () => {
     return Array.from({ length: g.num_players }, (_, i) => ({
       id: i,
       units: f.units.filter((u) => u.owner === i).length,
-      resources: f.player_resources[i] ?? 0,
+      food: f.player_food[i] ?? 0,
+      material: f.player_material[i] ?? 0,
       alive: f.alive[i] ?? false,
     }));
   };
@@ -244,7 +247,7 @@ const V2App: Component = () => {
                     <div class={styles.playerDot} style={{ background: PLAYER_COLORS[stat.id % PLAYER_COLORS.length] }} />
                     <span>{gameInfo()!.agent_names[stat.id]}</span>
                     <span class={styles.statValue}>
-                      {stat.units} units &middot; {stat.resources.toFixed(1)} res
+                      {stat.units} units &middot; {stat.food.toFixed(1)} food / {stat.material.toFixed(1)} mat
                     </span>
                   </div>
                 )}

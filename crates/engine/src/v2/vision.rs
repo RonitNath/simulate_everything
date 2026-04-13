@@ -1,6 +1,6 @@
+use super::VISION_RADIUS;
 use super::hex::{axial_to_offset, within_radius};
 use super::state::GameState;
-use super::VISION_RADIUS;
 
 /// Compute visibility bitmask for a player. Returns row-major Vec<bool> matching grid layout.
 /// A cell is visible if any of the player's units is within VISION_RADIUS hex distance.
@@ -8,7 +8,11 @@ pub fn visible_cells(state: &GameState, player_id: u8) -> Vec<bool> {
     let mut visible = vec![false; state.width * state.height];
 
     for unit in state.units.iter().filter(|u| u.owner == player_id) {
-        for ax in within_radius(unit.pos, VISION_RADIUS) {
+        let vision_bonus = state
+            .cell_at(unit.pos)
+            .map(|c| if c.height > 0.7 { 1 } else { 0 })
+            .unwrap_or(0);
+        for ax in within_radius(unit.pos, VISION_RADIUS + vision_bonus) {
             let (row, col) = axial_to_offset(ax);
             if row >= 0 && col >= 0 {
                 let (row, col) = (row as usize, col as usize);
@@ -25,12 +29,17 @@ pub fn visible_cells(state: &GameState, player_id: u8) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v2::hex::{axial_to_offset, within_radius};
-    use crate::v2::mapgen::{generate, MapConfig};
     use crate::v2::VISION_RADIUS;
+    use crate::v2::hex::{axial_to_offset, within_radius};
+    use crate::v2::mapgen::{MapConfig, generate};
 
     fn test_state() -> GameState {
-        generate(&MapConfig { width: 20, height: 20, num_players: 2, seed: 42 })
+        generate(&MapConfig {
+            width: 20,
+            height: 20,
+            num_players: 2,
+            seed: 42,
+        })
     }
 
     #[test]
@@ -74,7 +83,11 @@ mod tests {
         let vis = visible_cells(&state, 0);
         // Count invisible cells — on a 20x20 map with ~6 units, many cells should be invisible
         let invisible_count = vis.iter().filter(|&&v| !v).count();
-        assert!(invisible_count > 100, "too few invisible cells: {}", invisible_count);
+        assert!(
+            invisible_count > 100,
+            "too few invisible cells: {}",
+            invisible_count
+        );
     }
 
     #[test]

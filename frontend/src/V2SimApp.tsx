@@ -107,7 +107,8 @@ const V2SimApp: Component = () => {
     return Array.from({ length: r.num_players }, (_, i) => ({
       id: i,
       units: f.units.filter((u) => u.owner === i).length,
-      resources: f.player_resources[i] ?? 0,
+      food: f.player_food[i] ?? 0,
+      material: f.player_material[i] ?? 0,
       alive: f.alive[i] ?? false,
     }));
   };
@@ -251,7 +252,7 @@ const V2SimApp: Component = () => {
                     <div class={styles.playerDot} style={{ background: PLAYER_COLORS[stat.id % PLAYER_COLORS.length] }} />
                     <span>{replay()!.agent_names[stat.id]}</span>
                     <span class={styles.statValue}>
-                      {stat.units} units &middot; {stat.resources.toFixed(1)} res
+                      {stat.units} units &middot; {stat.food.toFixed(1)} food / {stat.material.toFixed(1)} mat
                     </span>
                   </div>
                 )}

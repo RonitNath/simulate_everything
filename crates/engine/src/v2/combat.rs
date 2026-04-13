@@ -180,8 +180,18 @@ pub fn resolve_combat(state: &mut GameState) {
             if let Some(&(enemy_str, enemy_n)) = unit_info.get(&eng.enemy_id)
                 && enemy_n > 0
             {
+                let unit_height = state.cell_at(unit.pos).map(|c| c.height).unwrap_or(0.0);
+                let enemy_height = state
+                    .units
+                    .iter()
+                    .find(|u| u.id == eng.enemy_id)
+                    .and_then(|u| state.cell_at(u.pos))
+                    .map(|c| c.height)
+                    .unwrap_or(0.0);
                 let enemy_eff = 1.0 / (enemy_n as f32).sqrt();
-                *damage.entry(unit.id).or_insert(0.0) += enemy_str * DAMAGE_RATE * enemy_eff;
+                let uphill_penalty = (unit_height - enemy_height).max(0.0) * 0.2;
+                *damage.entry(unit.id).or_insert(0.0) +=
+                    enemy_str * DAMAGE_RATE * enemy_eff * (1.0 - uphill_penalty).clamp(0.5, 1.0);
             }
         }
     }
@@ -222,6 +232,17 @@ mod tests {
             Cell {
                 terrain_value: 1.0,
                 material_value: 1.0,
+                food_stockpile: 0.0,
+                material_stockpile: 0.0,
+                has_depot: false,
+                road_level: 0,
+                height: 0.5,
+                moisture: 0.5,
+                biome: Biome::Grassland,
+                is_river: false,
+                water_access: 0.0,
+                region_id: 0,
+                stockpile_owner: None,
             };
             width * height
         ];
@@ -247,8 +268,13 @@ mod tests {
             grid,
             units,
             players,
+            population: Vec::new(),
+            convoys: Vec::new(),
+            regions: Vec::new(),
             tick: 0,
             next_unit_id: 300,
+            next_pop_id: 0,
+            next_convoy_id: 0,
         }
     }
 

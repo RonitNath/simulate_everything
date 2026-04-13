@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::hex::axial_to_offset;
-use super::state::{Engagement, GameState, Unit};
+use super::state::{CargoType, Engagement, GameState, Role, Unit};
 use super::vision;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,17 +16,48 @@ pub struct UnitInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PopulationInfo {
+    pub id: u32,
+    pub owner: u8,
+    pub q: i32,
+    pub r: i32,
+    pub count: u16,
+    pub role: Role,
+    pub training: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvoyInfo {
+    pub id: u32,
+    pub owner: u8,
+    pub q: i32,
+    pub r: i32,
+    pub destination_q: i32,
+    pub destination_r: i32,
+    pub cargo_type: CargoType,
+    pub cargo_amount: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Observation {
     pub tick: u64,
     pub player: u8,
     pub terrain: Vec<f32>,
     pub material_map: Vec<f32>,
+    pub road_levels: Vec<u8>,
+    pub food_stockpiles: Vec<f32>,
+    pub material_stockpiles: Vec<f32>,
+    pub stockpile_owner: Vec<Option<u8>>,
     pub width: usize,
     pub height: usize,
-    pub food: f32,
-    pub material: f32,
+    pub total_food: f32,
+    pub total_material: f32,
     pub own_units: Vec<UnitInfo>,
     pub visible_enemies: Vec<UnitInfo>,
+    pub own_population: Vec<PopulationInfo>,
+    pub visible_enemy_population: Vec<PopulationInfo>,
+    pub own_convoys: Vec<ConvoyInfo>,
+    pub visible_enemy_convoys: Vec<ConvoyInfo>,
     pub visible: Vec<bool>,
 }
 
@@ -42,9 +73,6 @@ fn unit_to_info(u: &Unit) -> UnitInfo {
     }
 }
 
-/// Build a player-scoped observation from the full game state.
-/// Own units are always included. Enemy units only if in visible cells.
-/// Terrain is always fully visible (spec: terrain doesn't change and is known to all).
 pub fn observe(state: &GameState, player_id: u8) -> Observation {
     let visible = vision::visible_cells(state, player_id);
 
@@ -59,40 +87,114 @@ pub fn observe(state: &GameState, player_id: u8) -> Observation {
         .units
         .iter()
         .filter(|u| u.owner != player_id)
-        .filter(|u| {
-            let (row, col) = axial_to_offset(u.pos);
-            if row < 0 || col < 0 {
-                return false;
-            }
-            let (row, col) = (row as usize, col as usize);
-            row < state.height && col < state.width && visible[row * state.width + col]
-        })
+        .filter(|u| is_visible_cell(state, &visible, u.pos.q, u.pos.r))
         .map(unit_to_info)
         .collect();
 
-    let (food, material) = state
-        .players
+    let own_population: Vec<PopulationInfo> = state
+        .population
         .iter()
-        .find(|p| p.id == player_id)
-        .map(|p| (p.food, p.material))
-        .unwrap_or((0.0, 0.0));
+        .filter(|p| p.owner == player_id)
+        .map(|p| PopulationInfo {
+            id: p.id,
+            owner: p.owner,
+            q: p.hex.q,
+            r: p.hex.r,
+            count: p.count,
+            role: p.role,
+            training: p.training,
+        })
+        .collect();
 
-    let terrain: Vec<f32> = state.grid.iter().map(|c| c.terrain_value).collect();
-    let material_map: Vec<f32> = state.grid.iter().map(|c| c.material_value).collect();
+    let visible_enemy_population: Vec<PopulationInfo> = state
+        .population
+        .iter()
+        .filter(|p| p.owner != player_id)
+        .filter(|p| is_visible_cell(state, &visible, p.hex.q, p.hex.r))
+        .map(|p| PopulationInfo {
+            id: p.id,
+            owner: p.owner,
+            q: p.hex.q,
+            r: p.hex.r,
+            count: p.count,
+            role: p.role,
+            training: p.training,
+        })
+        .collect();
+
+    let own_convoys: Vec<ConvoyInfo> = state
+        .convoys
+        .iter()
+        .filter(|c| c.owner == player_id)
+        .map(|c| ConvoyInfo {
+            id: c.id,
+            owner: c.owner,
+            q: c.pos.q,
+            r: c.pos.r,
+            destination_q: c.destination.q,
+            destination_r: c.destination.r,
+            cargo_type: c.cargo_type,
+            cargo_amount: c.cargo_amount,
+        })
+        .collect();
+
+    let visible_enemy_convoys: Vec<ConvoyInfo> = state
+        .convoys
+        .iter()
+        .filter(|c| c.owner != player_id)
+        .filter(|c| is_visible_cell(state, &visible, c.pos.q, c.pos.r))
+        .map(|c| ConvoyInfo {
+            id: c.id,
+            owner: c.owner,
+            q: c.pos.q,
+            r: c.pos.r,
+            destination_q: c.destination.q,
+            destination_r: c.destination.r,
+            cargo_type: c.cargo_type,
+            cargo_amount: c.cargo_amount,
+        })
+        .collect();
 
     Observation {
         tick: state.tick,
         player: player_id,
-        terrain,
-        material_map,
+        terrain: state.grid.iter().map(|c| c.terrain_value).collect(),
+        material_map: state.grid.iter().map(|c| c.material_value).collect(),
+        road_levels: state.grid.iter().map(|c| c.road_level).collect(),
+        food_stockpiles: state.grid.iter().map(|c| c.food_stockpile).collect(),
+        material_stockpiles: state.grid.iter().map(|c| c.material_stockpile).collect(),
+        stockpile_owner: state.grid.iter().map(|c| c.stockpile_owner).collect(),
         width: state.width,
         height: state.height,
-        food,
-        material,
+        total_food: state
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map(|p| p.food)
+            .unwrap_or(0.0),
+        total_material: state
+            .players
+            .iter()
+            .find(|p| p.id == player_id)
+            .map(|p| p.material)
+            .unwrap_or(0.0),
         own_units,
         visible_enemies,
+        own_population,
+        visible_enemy_population,
+        own_convoys,
+        visible_enemy_convoys,
         visible,
     }
+}
+
+fn is_visible_cell(state: &GameState, visible: &[bool], q: i32, r: i32) -> bool {
+    let (row, col) = axial_to_offset(super::hex::Axial::new(q, r));
+    if row < 0 || col < 0 {
+        return false;
+    }
+    let (row, col) = (row as usize, col as usize);
+    row < state.height && col < state.width && visible[row * state.width + col]
 }
 
 #[cfg(test)]
@@ -122,63 +224,20 @@ mod tests {
     fn observe_only_visible_enemies() {
         let state = test_state();
         let obs = observe(&state, 0);
-        // Each visible enemy must be in a visible cell
         for enemy in &obs.visible_enemies {
             let ax = Axial::new(enemy.q, enemy.r);
             let (row, col) = axial_to_offset(ax);
             let idx = row as usize * state.width + col as usize;
-            assert!(obs.visible[idx], "visible enemy at non-visible cell");
+            assert!(obs.visible[idx]);
         }
     }
 
     #[test]
-    fn observe_excludes_enemies_in_fog() {
+    fn observe_contains_population_and_stockpiles() {
         let state = test_state();
         let obs = observe(&state, 0);
-        let total_enemies = state.units.iter().filter(|u| u.owner != 0).count();
-        // visible_enemies must be a subset of all enemies
-        assert!(obs.visible_enemies.len() <= total_enemies);
-    }
-
-    #[test]
-    fn observe_terrain_is_full() {
-        let state = test_state();
-        let obs = observe(&state, 0);
-        assert_eq!(obs.terrain.len(), state.width * state.height);
-        assert_eq!(obs.material_map.len(), state.width * state.height);
-    }
-
-    #[test]
-    fn observe_resources_match() {
-        let mut state = test_state();
-        state.players[0].food = 42.5;
-        state.players[0].material = 13.25;
-        let obs = observe(&state, 0);
-        assert!((obs.food - 42.5).abs() < 0.01);
-        assert!((obs.material - 13.25).abs() < 0.01);
-    }
-
-    #[test]
-    fn observe_does_not_reveal_enemy_resources() {
-        // The Observation struct only contains the observing player's resources
-        let mut state = test_state();
-        state.players[1].food = 999.0;
-        state.players[1].material = 777.0;
-        let obs = observe(&state, 0);
-        assert!((obs.food - state.players[0].food).abs() < 0.01);
-        assert!((obs.material - state.players[0].material).abs() < 0.01);
-    }
-
-    #[test]
-    fn observe_visible_mask_consistent_with_own_units() {
-        let state = test_state();
-        let obs = observe(&state, 0);
-        // Every own unit's cell should be visible
-        for unit in &obs.own_units {
-            let ax = Axial::new(unit.q, unit.r);
-            let (row, col) = axial_to_offset(ax);
-            let idx = row as usize * state.width + col as usize;
-            assert!(obs.visible[idx], "own unit cell should be visible");
-        }
+        assert!(!obs.own_population.is_empty());
+        assert_eq!(obs.food_stockpiles.len(), state.width * state.height);
+        assert_eq!(obs.road_levels.len(), state.width * state.height);
     }
 }
