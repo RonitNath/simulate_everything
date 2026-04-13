@@ -130,7 +130,13 @@ impl SpreadAgent {
         let enemy_target = enemy_direction(obs);
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
+            // Handle engaged units: disengage if losing.
             if !unit.engagements.is_empty() {
+                if should_disengage(unit, &obs.visible_enemies) {
+                    directives.push(Directive::DisengageAll {
+                        unit_id: unit.id,
+                    });
+                }
                 continue;
             }
             if let Some(target) = find_engageable_enemy(unit, &enemy_by_pos, &friendly_near_enemy) {
@@ -401,7 +407,13 @@ impl StrikerAgent {
         };
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
+            // Handle engaged units: disengage if losing.
             if !unit.engagements.is_empty() {
+                if should_disengage(unit, &obs.visible_enemies) {
+                    directives.push(Directive::DisengageAll {
+                        unit_id: unit.id,
+                    });
+                }
                 continue;
             }
 
@@ -620,7 +632,13 @@ impl TurtleAgent {
         let enemy_target = enemy_direction(obs);
 
         for (idx, unit) in obs.own_units.iter().enumerate() {
+            // Handle engaged units: disengage if losing.
             if !unit.engagements.is_empty() {
+                if should_disengage(unit, &obs.visible_enemies) {
+                    directives.push(Directive::DisengageAll {
+                        unit_id: unit.id,
+                    });
+                }
                 continue;
             }
 
@@ -1026,10 +1044,39 @@ fn find_engageable_enemy(
         .filter_map(|nb| enemy_by_pos.get(&(nb.q, nb.r)).copied())
         .filter(|e| {
             let friends = friendly_counts.get(&e.id).copied().unwrap_or(0);
-            friends >= 2 || unit.strength >= e.strength * 0.5
+            // Require 2+ friendlies nearby, or significant strength advantage solo.
+            // Solo engagements against stronger/equal enemies are wasteful attrition.
+            friends >= 2 || unit.strength >= e.strength * 0.8
         })
         .min_by(|a, b| a.strength.partial_cmp(&b.strength).unwrap())
         .map(|e| e.id)
+}
+
+/// Check if an engaged unit should disengage. Returns true when the unit is
+/// losing badly enough that staying engaged is worse than the disengage penalty.
+fn should_disengage(unit: &UnitInfo, visible_enemies: &[UnitInfo]) -> bool {
+    if unit.engagements.is_empty() {
+        return false;
+    }
+    // Don't disengage generals — they should never be engaging in the first place.
+    if unit.is_general {
+        return true; // generals always disengage if somehow engaged
+    }
+    // Look up total enemy strength we're fighting.
+    let total_enemy_strength: f32 = unit
+        .engagements
+        .iter()
+        .filter_map(|eng| visible_enemies.iter().find(|e| e.id == eng.enemy_id))
+        .map(|e| e.strength)
+        .sum();
+    // Disengage if enemy total strength is much higher than ours, or we're very weak.
+    // The disengage penalty is 30% of current strength, so we should disengage before
+    // combat damage exceeds that cost. At DAMAGE_RATE=0.05 per tick with 5-tick poll
+    // interval, we'd take ~25% of enemy strength in damage over the next poll window.
+    // Disengage if we'd lose more staying than the 30% penalty.
+    let projected_damage = total_enemy_strength * 0.05 * 5.0; // 5 ticks until next decision
+    let disengage_cost = unit.strength * 0.3;
+    unit.strength < 30.0 || projected_damage > disengage_cost
 }
 
 fn pick_sector_destination(
