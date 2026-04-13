@@ -10,6 +10,9 @@ __pycache__/
 .env*
 simulate_everything.service
 
+# Private research
+docs/research/private/
+
 # Generated artifacts
 replays/
 docker/replays/
