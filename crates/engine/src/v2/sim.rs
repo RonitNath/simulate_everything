@@ -300,7 +300,7 @@ fn grow_population(state: &mut GameState) {
         if cell.stockpile_owner != Some(owner) || cell.food_stockpile < 2.0 {
             continue;
         }
-        let carrying_capacity = 10.0 + cell.terrain_value * 12.0 + cell.water_access * 8.0;
+        let carrying_capacity = 20.0 + cell.terrain_value * 20.0 + cell.water_access * 12.0;
         let headroom = (1.0 - total_pop as f32 / carrying_capacity).max(0.0);
         let raw_growth = farmers as f32 * POPULATION_GROWTH_RATE * headroom;
         if raw_growth > 0.0 {
