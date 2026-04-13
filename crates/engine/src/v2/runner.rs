@@ -97,7 +97,7 @@ mod tests {
             num_players: 2,
             seed: 42,
         });
-        let mut agents: Vec<Box<dyn Agent>> = vec![Box::new(SpreadAgent), Box::new(SpreadAgent)];
+        let mut agents: Vec<Box<dyn Agent>> = vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
         run_game(&mut state, &mut agents, 5000);
         assert!(sim::is_over(&state), "game should be over after run_game");
     }
@@ -110,7 +110,7 @@ mod tests {
             num_players: 2,
             seed: 100,
         });
-        let mut agents: Vec<Box<dyn Agent>> = vec![Box::new(SpreadAgent), Box::new(SpreadAgent)];
+        let mut agents: Vec<Box<dyn Agent>> = vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
         // Either a winner or a draw — no panics either way
         let _result = run_game(&mut state, &mut agents, 5000);
     }
@@ -124,9 +124,9 @@ mod tests {
             seed: 77,
         });
         let mut agents: Vec<Box<dyn Agent>> = vec![
-            Box::new(SpreadAgent),
-            Box::new(SpreadAgent),
-            Box::new(SpreadAgent),
+            Box::new(SpreadAgent::new()),
+            Box::new(SpreadAgent::new()),
+            Box::new(SpreadAgent::new()),
         ];
         let _result = run_game(&mut state, &mut agents, 3000);
     }
@@ -139,7 +139,7 @@ mod tests {
             num_players: 2,
             seed: 42,
         });
-        let mut agents: Vec<Box<dyn Agent>> = vec![Box::new(SpreadAgent), Box::new(SpreadAgent)];
+        let mut agents: Vec<Box<dyn Agent>> = vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
         run_game(&mut state, &mut agents, 100);
         assert!(state.tick > 0, "ticks should have advanced");
     }

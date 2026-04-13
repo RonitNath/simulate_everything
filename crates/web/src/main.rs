@@ -182,7 +182,7 @@ async fn api_v2_game(Query(params): Query<V2GameParams>) -> impl IntoResponse {
     let max_ticks = params.ticks.unwrap_or(2000);
     let replay = tokio::task::spawn_blocking(move || {
         let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
-            .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
+            .map(|_| Box::new(v2::agent::SpreadAgent::new()) as Box<dyn v2::agent::Agent>)
             .collect();
         v2::replay::record_game(&config, &mut agents, max_ticks, 10)
     })
@@ -212,7 +212,7 @@ async fn api_v2_ascii(Query(params): Query<V2AsciiParams>) -> impl IntoResponse 
     let at = params.at;
     tokio::task::spawn_blocking(move || {
         let mut agents: Vec<Box<dyn v2::agent::Agent>> = (0..config.num_players)
-            .map(|_| Box::new(v2::agent::SpreadAgent) as Box<dyn v2::agent::Agent>)
+            .map(|_| Box::new(v2::agent::SpreadAgent::new()) as Box<dyn v2::agent::Agent>)
             .collect();
         let replay = v2::replay::record_game(&config, &mut agents, max_ticks, 10);
 

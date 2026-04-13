@@ -144,7 +144,7 @@ impl V2RoundRobin {
             };
 
             let mut agents: Vec<Box<dyn Agent>> =
-                vec![Box::new(SpreadAgent), Box::new(SpreadAgent)];
+                vec![Box::new(SpreadAgent::new()), Box::new(SpreadAgent::new())];
             let agent_names: Vec<String> = agents.iter().map(|a| a.name().to_string()).collect();
 
             let mut state = mapgen::generate(&config);
