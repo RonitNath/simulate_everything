@@ -2,9 +2,11 @@ use generals_engine::agent::{self, Agent};
 use generals_engine::game::Game;
 use generals_engine::mapgen::{self, MapConfig};
 use generals_engine::replay::Replay;
+use generals_engine::state::Tile;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
+use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
 
 const VIEWER_CSS: &str = include_str!("viewer.css");
@@ -206,6 +208,107 @@ fn generate_replay(
 }
 
 // ---------------------------------------------------------------------------
+// Compact replay format — delta-encoded with periodic keyframes
+// ---------------------------------------------------------------------------
+
+/// Serialize a Replay into a compact JSON format for the viewer.
+///
+/// Format:
+/// - `w`, `h`: board dimensions
+/// - `np`: number of players
+/// - `an`: agent names array
+/// - `wi`: winner player index (-1 = draw)
+/// - `ki`: keyframe interval
+/// - Frames `f` array where each frame has:
+///   - `t`: turn number
+///   - `s`: stats as `[[player, land, armies, alive], ...]`
+///   - `g`: (keyframes only) interleaved `[tile,owner,armies,...]` for all cells
+///   - `d`: (delta frames) flat `[idx,tile,owner,armies,...]` for changed cells only
+fn compact_replay_json(replay: &Replay, keyframe_interval: usize) -> String {
+    let total = replay.width * replay.height;
+    let est_size = total * 10 + replay.frames.len() * 200;
+    let mut out = String::with_capacity(est_size);
+
+    out.push_str("{\"w\":");
+    write!(out, "{}", replay.width).unwrap();
+    out.push_str(",\"h\":");
+    write!(out, "{}", replay.height).unwrap();
+    out.push_str(",\"np\":");
+    write!(out, "{}", replay.num_players).unwrap();
+    out.push_str(",\"an\":[");
+    for (i, name) in replay.agent_names.iter().enumerate() {
+        if i > 0 { out.push(','); }
+        out.push('"');
+        out.push_str(name);
+        out.push('"');
+    }
+    out.push_str("],\"wi\":");
+    write!(out, "{}", replay.winner.map_or(-1i32, |w| w as i32)).unwrap();
+    out.push_str(",\"ki\":");
+    write!(out, "{}", keyframe_interval).unwrap();
+    out.push_str(",\"f\":[");
+
+    let mut prev_grid: Option<&[generals_engine::state::Cell]> = None;
+
+    for (i, frame) in replay.frames.iter().enumerate() {
+        if i > 0 { out.push(','); }
+
+        let is_keyframe = i % keyframe_interval == 0;
+
+        out.push_str("{\"t\":");
+        write!(out, "{}", frame.turn).unwrap();
+
+        if is_keyframe || prev_grid.is_none() {
+            out.push_str(",\"g\":[");
+            for (j, cell) in frame.grid.iter().enumerate() {
+                if j > 0 { out.push(','); }
+                write_cell_compact(&mut out, cell);
+            }
+            out.push(']');
+        } else if let Some(prev) = prev_grid {
+            out.push_str(",\"d\":[");
+            let mut first = true;
+            for (j, cell) in frame.grid.iter().enumerate() {
+                let p = &prev[j];
+                if cell.tile != p.tile || cell.owner != p.owner || cell.armies != p.armies {
+                    if !first { out.push(','); }
+                    write!(out, "{},", j).unwrap();
+                    write_cell_compact(&mut out, cell);
+                    first = false;
+                }
+            }
+            out.push(']');
+        }
+
+        out.push_str(",\"s\":[");
+        for (j, stat) in frame.stats.iter().enumerate() {
+            if j > 0 { out.push(','); }
+            write!(out, "[{},{},{},{}]",
+                stat.player, stat.land, stat.armies,
+                if stat.alive { 1 } else { 0 }
+            ).unwrap();
+        }
+        out.push_str("]}");
+
+        prev_grid = Some(&frame.grid);
+    }
+
+    out.push_str("]}");
+    out
+}
+
+fn write_cell_compact(out: &mut String, cell: &generals_engine::state::Cell) {
+    let tile: u8 = match cell.tile {
+        Tile::Empty => 0,
+        Tile::Mountain => 1,
+        Tile::City => 2,
+        Tile::General => 3,
+    };
+    let owner = cell.owner.map_or(-1i32, |o| o as i32);
+    write!(out, "{},{},{}", tile, owner, cell.armies).unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // Self-contained HTML renderer
 // ---------------------------------------------------------------------------
 
@@ -215,8 +318,17 @@ fn render_standalone_html(
     agent_names: &[&str],
     title: &str,
 ) -> String {
-    let replay_json = serde_json::to_string(replay).unwrap();
-    let matchup = agent_names.join(" vs ");
+    let keyframe_interval = if replay.width * replay.height > 10_000 { 50 } else { 100 };
+    let replay_json = compact_replay_json(replay, keyframe_interval);
+    // For many players, show "12p FFA (pressure, expander, swarm)" instead of listing all
+    let matchup = if agent_names.len() > 4 {
+        let mut unique: Vec<&str> = agent_names.to_vec();
+        unique.sort();
+        unique.dedup();
+        format!("{}p FFA ({})", agent_names.len(), unique.join(", "))
+    } else {
+        agent_names.join(" vs ")
+    };
     let winner_text = match replay.winner {
         Some(w) => format!("Winner: {}", replay.agent_names[w as usize]),
         None => "Draw".to_string(),
@@ -264,7 +376,7 @@ fn render_standalone_html(
     <button id="btn-numbers" class="speed-btn">&#x0023;&#x0338;</button>
   </div>
   <div class="main">
-    <div class="board-container"><div id="board"></div></div>
+    <div class="board-container"><canvas id="board"></canvas></div>
     <div class="sidebar" id="stats"></div>
   </div>
 </div>
