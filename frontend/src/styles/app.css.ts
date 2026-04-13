@@ -235,6 +235,29 @@ export const statRow = style({
   paddingLeft: "18px",
 });
 
+export const legend = style({
+  padding: `${vars.space.sm} ${vars.space.md}`,
+  borderTop: `1px solid ${vars.color.border}`,
+  fontSize: vars.font.size.xs,
+  color: vars.color.textMuted,
+});
+
+export const legendTitle = style({
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+  marginBottom: "4px",
+  fontSize: "9px",
+  color: vars.color.textMuted,
+});
+
+export const legendGrid = style({
+  display: "grid",
+  gridTemplateColumns: "18px 1fr",
+  gap: "3px 6px",
+  alignItems: "center",
+});
+
 export const btnPrimary = style({
   background: vars.color.players.p0,
   border: "none",
