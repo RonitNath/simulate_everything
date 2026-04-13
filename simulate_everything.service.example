@@ -5,15 +5,17 @@ After=network.target
 [Service]
 Type=simple
 User=YOUR_USER
-WorkingDirectory=./
+WorkingDirectory=/path/to/generals
 
 # Rebuild frontend + Rust binary on every (re)start
 ExecStartPre=/bin/bash -lc "cd frontend && bun install && bun run vite build"
 ExecStartPre=/bin/bash -lc "cargo build --release --bin simulate_everything"
 
-ExecStart=.//target/release/simulate_everything
+ExecStart=/path/to/generals/target/release/simulate_everything
 
-Environment=GENERALS_STATIC_DIR=.//frontend/dist
+Environment=GENERALS_STATIC_DIR=/path/to/generals/frontend/dist
+Environment=GENERALS_BIND_ADDR=0.0.0.0
+Environment=GENERALS_PORT=3333
 Environment=RUST_LOG=info
 
 Restart=on-failure

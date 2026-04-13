@@ -742,7 +742,15 @@ async fn main() {
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3333));
+    let bind_addr: std::net::IpAddr = std::env::var("GENERALS_BIND_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0".into())
+        .parse()
+        .expect("GENERALS_BIND_ADDR must be a valid IP address");
+    let bind_port: u16 = std::env::var("GENERALS_PORT")
+        .unwrap_or_else(|_| "3333".into())
+        .parse()
+        .expect("GENERALS_PORT must be a valid port number");
+    let addr = SocketAddr::from((bind_addr, bind_port));
     info!("Listening on http://{}", addr);
 
     // Retry bind to handle port still held by a dying predecessor.

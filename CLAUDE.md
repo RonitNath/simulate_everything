@@ -1,14 +1,5 @@
 # generals — Claude Code Context
 
-## Critical: Server process management
-
-The web server binds to `localhost:3333` (hardcoded). Only one instance can run.
-
-- **Never start `cargo run --bin simulate_everything` while systemd is running.** Check with `systemctl is-active simulate_everything`.
-- **Never `pkill simulate_everything`** — use `systemctl stop`. pkill triggers restart loops.
-- **To deploy changes:** `sudo systemctl restart simulate_everything.service` (rebuilds via ExecStartPre).
-- **Port conflicts on restart:** The old process may hold the port. Kill it first: `sudo fuser -k 3333/tcp; sleep 1; sudo systemctl restart simulate_everything`.
-
 ## Critical: Agent pools
 
 Two separate pools in `crates/engine/src/agent.rs`:
@@ -45,8 +36,19 @@ docs/            — detailed documentation
 | All HTTP routes | `crates/web/src/main.rs` |
 | WS protocol types | `crates/web/src/protocol.rs` |
 | Replay exporter + viewer | `crates/replay/src/main.rs` |
-| Systemd service | `simulate_everything.service` |
+| Systemd service template | `simulate_everything.service.example` |
 | Python agent example | `examples/agent.py` |
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GENERALS_BIND_ADDR` | `0.0.0.0` | IP address to bind the server to |
+| `GENERALS_PORT` | `3333` | Port to listen on |
+| `GENERALS_STATIC_DIR` | `frontend/dist` | Path to built frontend assets |
+| `GENERALS_PLAYERS` | (varies) | Number of players |
+| `GENERALS_TICK_MS` | (varies) | Tick interval in milliseconds |
+| `GENERALS_SEED` | (random) | RNG seed |
 
 ## Commits and docs hygiene
 
@@ -60,8 +62,8 @@ docs/            — detailed documentation
 - Changed game rules (growth, combat, fog) → update "Game Rules" in `docs/architecture.md`
 - Changed mapgen defaults or algorithm → update "Map Generation" in `docs/architecture.md`
 - Changed RR defaults (board size, player count, tick) → update `docs/architecture.md` RR section
-- Changed systemd service or deploy process → update "Server process management" above
-- Added new env vars → update env var table in `docs/architecture.md`
+- Changed systemd service or deploy process → update "Server process management" in `.claude/CLAUDE.local.md`
+- Added new env vars → update env var table above and in `docs/architecture.md`
 - Added new files/modules → update "Workspace layout" above and "Key references" table
 
 ## Testing agents
