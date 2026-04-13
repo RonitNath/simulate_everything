@@ -7,7 +7,8 @@ use slotmap::SlotMap;
 use super::hex::{axial_to_offset, distance, offset_to_axial, within_radius};
 use super::spatial::SpatialIndex;
 use super::state::{
-    Biome, Cell, GameState, Player, Population, Region, RegionArchetype, Role, Unit,
+    Biome, Cell, GameState, Player, Population, Region, RegionArchetype, Role, Settlement,
+    SettlementType, Unit,
 };
 use super::{INITIAL_STRENGTH, INITIAL_UNITS};
 
@@ -113,8 +114,10 @@ pub fn generate(config: &MapConfig) -> GameState {
     let mut units = SlotMap::with_key();
     let mut players: Vec<Player> = Vec::new();
     let mut population = SlotMap::with_key();
+    let mut settlements = SlotMap::with_key();
     let mut next_id: u32 = 0;
     let mut next_pop_id: u32 = 0;
+    let mut next_settlement_id: u32 = 0;
 
     for (player_idx, &gen_pos) in general_positions.iter().enumerate() {
         let owner = player_idx as u8;
@@ -193,8 +196,19 @@ pub fn generate(config: &MapConfig) -> GameState {
             cell.food_stockpile = 80.0;
             cell.material_stockpile = 50.0;
         }
+
+        // Each player starts with a Village settlement at their general's hex.
+        // Pop is 28 (Idle 20 + Farmer 5 + Worker 3) which is >= VILLAGE_THRESHOLD.
+        settlements.insert(Settlement {
+            public_id: next_settlement_id,
+            hex: gen_pos,
+            owner,
+            settlement_type: SettlementType::Village,
+        });
+        next_settlement_id += 1;
     }
 
+    let total_cells = config.width * config.height;
     let mut state = GameState {
         width: config.width,
         height: config.height,
@@ -203,22 +217,27 @@ pub fn generate(config: &MapConfig) -> GameState {
         players,
         population,
         convoys: SlotMap::with_key(),
+        settlements,
         regions,
         tick: 0,
         next_unit_id: next_id,
         next_pop_id,
         next_convoy_id: 0,
-        scouted: vec![vec![false; config.width * config.height]; config.num_players as usize],
+        next_settlement_id,
+        scouted: vec![vec![false; total_cells]; config.num_players as usize],
         spatial: SpatialIndex::new(config.width, config.height),
-        dirty_hexes: BitVec::repeat(false, config.width * config.height),
-        hex_revisions: vec![0; config.width * config.height],
+        dirty_hexes: BitVec::repeat(false, total_cells),
+        hex_revisions: vec![0; total_cells],
         next_hex_revision: 0,
+        territory_cache: vec![None; total_cells],
         #[cfg(debug_assertions)]
         tick_accumulator: None,
         game_log: None,
     };
     seed_starting_scouted(&mut state);
     state.rebuild_spatial();
+    // Compute initial territory from starting settlements and units.
+    super::sim::compute_territory(&mut state);
     recompute_player_totals(&mut state);
 
     state

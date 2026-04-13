@@ -3,6 +3,7 @@ use slotmap::SlotMap;
 
 use super::combat;
 use super::hex::{self, Axial};
+use super::sim::territory_owner;
 use super::state::{
     CargoType, Convoy, ConvoyKey, GameState, PopKey, Population, Role, Unit, UnitKey,
 };
@@ -156,9 +157,8 @@ fn apply_one(state: &mut GameState, player_id: u8, directive: &Directive) {
 }
 
 fn owner_controls_hex(state: &GameState, player_id: u8, hex: Axial) -> bool {
-    state
-        .cell_at(hex)
-        .map(|c| c.stockpile_owner == Some(player_id))
+    territory_owner(state, hex)
+        .map(|o| o == player_id)
         .unwrap_or(false)
         || state
             .units
@@ -276,10 +276,7 @@ fn produce_unit(state: &mut GameState, player_id: u8, production_hex: Axial) {
     let Some(cell) = state.cell_at(production_hex) else {
         return;
     };
-    if cell.stockpile_owner != Some(player_id)
-        || cell.food_stockpile < UNIT_FOOD_COST
-        || cell.material_stockpile < UNIT_MATERIAL_COST
-    {
+    if cell.food_stockpile < UNIT_FOOD_COST || cell.material_stockpile < UNIT_MATERIAL_COST {
         return;
     }
 
@@ -353,13 +350,6 @@ fn produce_unit(state: &mut GameState, player_id: u8, production_hex: Axial) {
             pos: spawn_pos,
         });
     }
-    if let Some(cell) = state.cell_at_mut(spawn_pos) {
-        let changed = cell.stockpile_owner != Some(player_id);
-        cell.stockpile_owner = Some(player_id);
-        if changed {
-            state.mark_dirty_axial(spawn_pos);
-        }
-    }
     state.rebuild_spatial();
 }
 
@@ -387,9 +377,7 @@ fn load_convoy(
     let Some(cell) = state.cell_at_mut(hex) else {
         return;
     };
-    if cell.stockpile_owner != Some(player_id) {
-        return;
-    }
+    // Only load from cells we control (territory check already done above via owner_controls_hex).
     let capacity = CONVOY_CAPACITY.min(amount);
     let cargo_amount = match cargo_type {
         CargoType::Food => {
@@ -495,10 +483,7 @@ fn build_depot(state: &mut GameState, player_id: u8, hex: Axial) {
     let Some(cell) = state.cell_at_mut(hex) else {
         return;
     };
-    if cell.stockpile_owner != Some(player_id)
-        || cell.has_depot
-        || cell.material_stockpile < DEPOT_BUILD_COST
-    {
+    if cell.has_depot || cell.material_stockpile < DEPOT_BUILD_COST {
         return;
     }
     cell.material_stockpile -= DEPOT_BUILD_COST;
@@ -515,7 +500,7 @@ fn build_road(state: &mut GameState, player_id: u8, hex: Axial, level: u8) {
     let Some(cell) = state.cell_at_mut(hex) else {
         return;
     };
-    if cell.stockpile_owner != Some(player_id) || level <= cell.road_level || level > 3 {
+    if level <= cell.road_level || level > 3 {
         return;
     }
     let cost = match level {

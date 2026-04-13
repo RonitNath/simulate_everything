@@ -1,17 +1,14 @@
 use slotmap::Key;
 use std::collections::HashMap;
 
+use super::SETTLEMENT_THRESHOLD;
 use super::directive::Directive;
 use super::hex::{self, Axial};
 use super::observation::{
     InitialObservation, NewScoutedHex, Observation, ObservationDelta, UnitInfo,
     apply_delta_to_observation, materialize_observation,
 };
-use super::state::{CargoType, Role, UnitKey};
-use super::{
-    SETTLEMENT_SUPPORT_RADIUS, SETTLEMENT_THRESHOLD, SETTLER_CONVOY_SIZE, SOLDIERS_PER_UNIT,
-    UNIT_FOOD_COST, UNIT_MATERIAL_COST,
-};
+use super::state::UnitKey;
 
 pub trait Agent: Send {
     fn name(&self) -> &str;
@@ -69,57 +66,21 @@ pub fn agent_by_name(name: &str) -> Option<Box<dyn Agent>> {
 }
 
 pub struct SpreadAgent {
-    pending_settlement: Option<Axial>,
     cached_observation: Option<Observation>,
 }
 
 impl SpreadAgent {
     pub fn new() -> Self {
         Self {
-            pending_settlement: None,
             cached_observation: None,
         }
     }
-    
+
     fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
         let mut directives = Vec::new();
-        let general = obs.own_units.iter().find(|u| u.is_general);
-        let general_hex = general.map(|u| Axial::new(u.q, u.r));
-        let settlements = settlement_hexes(obs);
 
-        if let Some(target) = self.pending_settlement {
-            if settlement_hexes(obs).contains(&target) {
-                self.pending_settlement = None;
-            } else if let Some(convoy) = obs
-                .own_convoys
-                .iter()
-                .find(|c| c.cargo_type == CargoType::Settlers)
-            {
-                directives.push(Directive::SendConvoy {
-                    convoy_id: convoy.id,
-                    dest_q: target.q,
-                    dest_r: target.r,
-                });
-            }
-        }
-
-        if let Some(hex) = general_hex {
-            manage_settlement_infrastructure(obs, hex, &mut directives);
-            manage_settlement_population(obs, hex, &mut directives);
-            produce_units_at_settlement(obs, hex, &mut directives);
-            try_send_settlers(obs, hex, &settlements, &mut self.pending_settlement, &mut directives);
-            load_surplus_convoys(obs, general_hex, &mut directives);
-
-            // Manage remote settlements
-            for &settlement in &settlements {
-                if Some(settlement) == general_hex {
-                    continue;
-                }
-                manage_settlement_infrastructure(obs, settlement, &mut directives);
-                manage_settlement_population(obs, settlement, &mut directives);
-                produce_units_at_settlement(obs, settlement, &mut directives);
-            }
-        }
+        // Economy (population roles, infrastructure, production, settler dispatch)
+        // is now managed by the city AI. Agents issue only military/movement directives.
 
         let enemy_by_pos: HashMap<(i32, i32), &UnitInfo> = obs
             .visible_enemies
@@ -143,16 +104,7 @@ impl SpreadAgent {
                 continue;
             }
             if unit.is_general {
-                if obs.own_units.len() > 10 {
-                    let gen_pos = Axial::new(unit.q, unit.r);
-                    if hex::distance(gen_pos, map_center) > 5 {
-                        directives.push(Directive::Move {
-                            unit_id: unit.id,
-                            q: map_center.q,
-                            r: map_center.r,
-                        });
-                    }
-                }
+                flee_general_if_threatened(obs, unit, &mut directives);
                 continue;
             }
 
@@ -203,18 +155,17 @@ impl Agent for SpreadAgent {
     }
 
     fn reset(&mut self) {
-        self.pending_settlement = None;
         self.cached_observation = None;
     }
 }
 
 // ---------------------------------------------------------------------------
-// StrikerAgent: economy-first, scout, rally, then decisive general kill
+// StrikerAgent: military-focused, scout, rally, then decisive general kill
 // ---------------------------------------------------------------------------
 
 const STRIKER_RALLY_DISTANCE: i32 = 6;
 const STRIKER_MIN_RALLY_SIZE: usize = 4;
-const STRIKER_EXPAND_THRESHOLD: usize = 15;
+const STRIKER_EXPAND_THRESHOLD: usize = 10;
 const STRIKER_RETREAT_THRESHOLD: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -228,7 +179,6 @@ enum StrikerMode {
 pub struct StrikerAgent {
     mode: StrikerMode,
     last_known_enemy_general: Option<Axial>,
-    pending_settlement: Option<Axial>,
     rally_point: Option<Axial>,
     cached_observation: Option<Observation>,
 }
@@ -238,7 +188,6 @@ impl StrikerAgent {
         Self {
             mode: StrikerMode::Expand,
             last_known_enemy_general: None,
-            pending_settlement: None,
             rally_point: None,
             cached_observation: None,
         }
@@ -285,7 +234,6 @@ impl StrikerAgent {
         let mut directives = Vec::new();
         let general = obs.own_units.iter().find(|u| u.is_general);
         let general_hex = general.map(|u| Axial::new(u.q, u.r));
-        let settlements = settlement_hexes(obs);
 
         // Update intel.
         if let Some(eg) = obs.visible_enemies.iter().find(|e| e.is_general) {
@@ -303,8 +251,8 @@ impl StrikerAgent {
                     if enemy_general_known {
                         // We know where they are — rally then strike.
                         self.mode = StrikerMode::Rally;
-                        self.rally_point = strike_target
-                            .and_then(|t| self.compute_rally_point(obs, t));
+                        self.rally_point =
+                            strike_target.and_then(|t| self.compute_rally_point(obs, t));
                     } else {
                         // Need to find enemy general first.
                         self.mode = StrikerMode::Scout;
@@ -314,8 +262,7 @@ impl StrikerAgent {
             StrikerMode::Scout => {
                 if enemy_general_known {
                     self.mode = StrikerMode::Rally;
-                    self.rally_point = strike_target
-                        .and_then(|t| self.compute_rally_point(obs, t));
+                    self.rally_point = strike_target.and_then(|t| self.compute_rally_point(obs, t));
                 }
                 if non_general_count < STRIKER_RETREAT_THRESHOLD {
                     self.mode = StrikerMode::Expand;
@@ -348,40 +295,7 @@ impl StrikerAgent {
             }
         }
 
-        // Pending settlement convoy dispatch.
-        if let Some(target) = self.pending_settlement {
-            if settlement_hexes(obs).contains(&target) {
-                self.pending_settlement = None;
-            } else if let Some(convoy) = obs
-                .own_convoys
-                .iter()
-                .find(|c| c.cargo_type == CargoType::Settlers)
-            {
-                directives.push(Directive::SendConvoy {
-                    convoy_id: convoy.id,
-                    dest_q: target.q,
-                    dest_r: target.r,
-                });
-            }
-        }
-
-        // Economy (shared with SpreadAgent).
-        if let Some(hex) = general_hex {
-            manage_settlement_infrastructure(obs, hex, &mut directives);
-            manage_settlement_population(obs, hex, &mut directives);
-            produce_units_at_settlement(obs, hex, &mut directives);
-            try_send_settlers(obs, hex, &settlements, &mut self.pending_settlement, &mut directives);
-            load_surplus_convoys(obs, general_hex, &mut directives);
-
-            for &settlement in &settlements {
-                if Some(settlement) == general_hex {
-                    continue;
-                }
-                manage_settlement_infrastructure(obs, settlement, &mut directives);
-                manage_settlement_population(obs, settlement, &mut directives);
-                produce_units_at_settlement(obs, settlement, &mut directives);
-            }
-        }
+        // Economy is now handled by city AI. Agent only issues military/movement directives.
 
         // Unit movement.
         let enemy_by_pos: HashMap<(i32, i32), &UnitInfo> = obs
@@ -408,34 +322,8 @@ impl StrikerAgent {
                 continue;
             }
 
-            // General: flee from threats, otherwise stay put in combat modes.
             if unit.is_general {
-                let gen_pos = Axial::new(unit.q, unit.r);
-                if self.mode != StrikerMode::Expand {
-                    let threat = obs
-                        .visible_enemies
-                        .iter()
-                        .filter(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)) <= 3)
-                        .min_by_key(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)));
-                    if let Some(enemy) = threat {
-                        let ep = Axial::new(enemy.q, enemy.r);
-                        let (gr, gc) = hex::axial_to_offset(gen_pos);
-                        let (er, ec) = hex::axial_to_offset(ep);
-                        let flee_r = (gr + (gr - er)).clamp(1, obs.height as i32 - 2);
-                        let flee_c = (gc + (gc - ec)).clamp(1, obs.width as i32 - 2);
-                        directives.push(Directive::Move {
-                            unit_id: unit.id,
-                            q: hex::offset_to_axial(flee_r, flee_c).q,
-                            r: hex::offset_to_axial(flee_r, flee_c).r,
-                        });
-                    }
-                } else if obs.own_units.len() > 10 && hex::distance(gen_pos, map_center) > 5 {
-                    directives.push(Directive::Move {
-                        unit_id: unit.id,
-                        q: map_center.q,
-                        r: map_center.r,
-                    });
-                }
+                flee_general_if_threatened(obs, unit, &mut directives);
                 continue;
             }
 
@@ -542,7 +430,6 @@ impl Agent for StrikerAgent {
     fn reset(&mut self) {
         self.mode = StrikerMode::Expand;
         self.last_known_enemy_general = None;
-        self.pending_settlement = None;
         self.rally_point = None;
         self.cached_observation = None;
     }
@@ -553,75 +440,21 @@ impl Agent for StrikerAgent {
 // ---------------------------------------------------------------------------
 
 pub struct TurtleAgent {
-    pending_settlement: Option<Axial>,
     cached_observation: Option<Observation>,
 }
 
 impl TurtleAgent {
     pub fn new() -> Self {
         Self {
-            pending_settlement: None,
             cached_observation: None,
         }
     }
 
     fn decide(&mut self, obs: &Observation) -> Vec<Directive> {
         let mut directives = Vec::new();
-        let general = obs.own_units.iter().find(|u| u.is_general);
-        let general_hex = general.map(|u| Axial::new(u.q, u.r));
         let settlements = settlement_hexes(obs);
 
-        if let Some(target) = self.pending_settlement {
-            if settlement_hexes(obs).contains(&target) {
-                self.pending_settlement = None;
-            } else if let Some(convoy) = obs
-                .own_convoys
-                .iter()
-                .find(|c| c.cargo_type == CargoType::Settlers)
-            {
-                directives.push(Directive::SendConvoy {
-                    convoy_id: convoy.id,
-                    dest_q: target.q,
-                    dest_r: target.r,
-                });
-            }
-        }
-
-        if let Some(hex) = general_hex {
-            manage_settlement_infrastructure(obs, hex, &mut directives);
-            manage_turtle_population(obs, hex, &mut directives);
-            produce_units_at_settlement(obs, hex, &mut directives);
-
-            let general_population = total_population_on_hex(obs, hex);
-            if self.pending_settlement.is_none()
-                && !obs
-                    .own_convoys
-                    .iter()
-                    .any(|c| c.cargo_type == CargoType::Settlers)
-                && general_population >= SETTLEMENT_THRESHOLD + SETTLER_CONVOY_SIZE
-            {
-                if let Some(target) = pick_settlement_target(obs, &settlements, hex) {
-                    directives.push(Directive::LoadConvoy {
-                        hex_q: hex.q,
-                        hex_r: hex.r,
-                        cargo_type: CargoType::Settlers,
-                        amount: SETTLER_CONVOY_SIZE as f32,
-                    });
-                    self.pending_settlement = Some(target);
-                }
-            }
-
-            load_surplus_convoys(obs, general_hex, &mut directives);
-
-            for &settlement in &settlements {
-                if Some(settlement) == general_hex {
-                    continue;
-                }
-                manage_settlement_infrastructure(obs, settlement, &mut directives);
-                manage_turtle_population(obs, settlement, &mut directives);
-                produce_units_at_settlement(obs, settlement, &mut directives);
-            }
-        }
+        // Economy handled by city AI. Turtle focuses on defensive positioning.
 
         let enemy_by_pos: HashMap<(i32, i32), &UnitInfo> = obs
             .visible_enemies
@@ -646,24 +479,7 @@ impl TurtleAgent {
             }
 
             if unit.is_general {
-                let gen_pos = Axial::new(unit.q, unit.r);
-                let threat = obs
-                    .visible_enemies
-                    .iter()
-                    .filter(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)) <= 4)
-                    .min_by_key(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)));
-                if let Some(enemy) = threat {
-                    let enemy_pos = Axial::new(enemy.q, enemy.r);
-                    let (gr, gc) = hex::axial_to_offset(gen_pos);
-                    let (er, ec) = hex::axial_to_offset(enemy_pos);
-                    let flee_r = (gr + (gr - er)).clamp(1, obs.height as i32 - 2);
-                    let flee_c = (gc + (gc - ec)).clamp(1, obs.width as i32 - 2);
-                    directives.push(Directive::Move {
-                        unit_id: unit.id,
-                        q: hex::offset_to_axial(flee_r, flee_c).q,
-                        r: hex::offset_to_axial(flee_r, flee_c).r,
-                    });
-                }
+                flee_general_if_threatened(obs, unit, &mut directives);
                 continue;
             }
 
@@ -739,36 +555,28 @@ impl Agent for TurtleAgent {
     }
 
     fn reset(&mut self) {
-        self.pending_settlement = None;
         self.cached_observation = None;
     }
 }
 
-/// Turtle population management: 60% farmers, 15% workers for maximum growth.
-fn manage_turtle_population(obs: &Observation, hex: Axial, directives: &mut Vec<Directive>) {
-    let (idle, farmers, workers, _trained, _untrained) = population_mix(obs, hex);
-    let total = idle + farmers + workers + _trained + _untrained;
-    let target_farmers = (total as f32 * 0.60).ceil() as u16;
-    let target_workers = (total as f32 * 0.15).ceil() as u16;
-
-    if farmers < target_farmers && idle > 0 {
-        directives.push(Directive::AssignRole {
-            hex_q: hex.q,
-            hex_r: hex.r,
-            role: Role::Farmer,
-            count: (target_farmers - farmers).min(5),
-        });
-    } else if workers < target_workers && idle > 0 {
-        directives.push(Directive::AssignRole {
-            hex_q: hex.q,
-            hex_r: hex.r,
-            role: Role::Worker,
-            count: (target_workers - workers).min(2),
-        });
-    } else if idle > 0 {
-        directives.push(Directive::TrainSoldier {
-            hex_q: hex.q,
-            hex_r: hex.r,
+/// General flees if an enemy is within 4 hexes, otherwise stays put.
+fn flee_general_if_threatened(obs: &Observation, unit: &UnitInfo, directives: &mut Vec<Directive>) {
+    let gen_pos = Axial::new(unit.q, unit.r);
+    let threat = obs
+        .visible_enemies
+        .iter()
+        .filter(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)) <= 4)
+        .min_by_key(|e| hex::distance(gen_pos, Axial::new(e.q, e.r)));
+    if let Some(enemy) = threat {
+        let ep = Axial::new(enemy.q, enemy.r);
+        let (gr, gc) = hex::axial_to_offset(gen_pos);
+        let (er, ec) = hex::axial_to_offset(ep);
+        let flee_r = (gr + (gr - er)).clamp(1, obs.height as i32 - 2);
+        let flee_c = (gc + (gc - ec)).clamp(1, obs.width as i32 - 2);
+        directives.push(Directive::Move {
+            unit_id: unit.id,
+            q: hex::offset_to_axial(flee_r, flee_c).q,
+            r: hex::offset_to_axial(flee_r, flee_c).r,
         });
     }
 }
@@ -801,161 +609,9 @@ fn cell_index(obs: &Observation, ax: Axial) -> Option<usize> {
     }
 }
 
-fn index_to_hex(obs: &Observation, idx: usize) -> Axial {
-    let row = idx / obs.width;
-    let col = idx % obs.width;
-    hex::offset_to_axial(row as i32, col as i32)
-}
-
-// ---------------------------------------------------------------------------
-// Shared economy helpers (used by SpreadAgent and StrikerAgent)
-// ---------------------------------------------------------------------------
-
-fn manage_settlement_population(obs: &Observation, hex: Axial, directives: &mut Vec<Directive>) {
-    let (idle, farmers, workers, _trained, _untrained) = population_mix(obs, hex);
-    let total = idle + farmers + workers + _trained + _untrained;
-    let target_farmers = (total as f32 * 0.45).ceil() as u16;
-    let target_workers = (total as f32 * 0.2).ceil() as u16;
-
-    if farmers < target_farmers && idle > 0 {
-        directives.push(Directive::AssignRole {
-            hex_q: hex.q,
-            hex_r: hex.r,
-            role: Role::Farmer,
-            count: (target_farmers - farmers).min(3),
-        });
-    } else if workers < target_workers && idle > 0 {
-        directives.push(Directive::AssignRole {
-            hex_q: hex.q,
-            hex_r: hex.r,
-            role: Role::Worker,
-            count: (target_workers - workers).min(2),
-        });
-    } else if idle > 0 {
-        directives.push(Directive::TrainSoldier {
-            hex_q: hex.q,
-            hex_r: hex.r,
-        });
-    }
-}
-
-fn manage_settlement_infrastructure(obs: &Observation, hex: Axial, directives: &mut Vec<Directive>) {
-    if let Some(idx) = cell_index(obs, hex) {
-        if obs.material_stockpiles[idx] >= 20.0 {
-            directives.push(Directive::BuildDepot {
-                hex_q: hex.q,
-                hex_r: hex.r,
-            });
-        }
-        if obs.road_levels[idx] == 0 {
-            directives.push(Directive::BuildRoad {
-                hex_q: hex.q,
-                hex_r: hex.r,
-                level: 1,
-            });
-        }
-    }
-}
-
-fn produce_units_at_settlement(obs: &Observation, hex: Axial, directives: &mut Vec<Directive>) {
-    let (_idle, _farmers, _workers, trained_soldiers, _untrained) = population_mix(obs, hex);
-    if let Some(idx) = cell_index(obs, hex) {
-        let mut remaining_food = obs.food_stockpiles[idx];
-        let mut remaining_material = obs.material_stockpiles[idx];
-        let mut ready = trained_soldiers;
-        while remaining_food >= UNIT_FOOD_COST
-            && remaining_material >= UNIT_MATERIAL_COST
-            && ready >= SOLDIERS_PER_UNIT
-        {
-            directives.push(Directive::Produce { hex_q: hex.q, hex_r: hex.r });
-            remaining_food -= UNIT_FOOD_COST;
-            remaining_material -= UNIT_MATERIAL_COST;
-            ready -= SOLDIERS_PER_UNIT;
-        }
-    }
-}
-
-fn try_send_settlers(
-    obs: &Observation,
-    general_hex: Axial,
-    settlements: &[Axial],
-    pending: &mut Option<Axial>,
-    directives: &mut Vec<Directive>,
-) {
-    let general_population = total_population_on_hex(obs, general_hex);
-    if pending.is_none()
-        && !obs
-            .own_convoys
-            .iter()
-            .any(|c| c.cargo_type == CargoType::Settlers)
-        && general_population >= SETTLEMENT_THRESHOLD + SETTLER_CONVOY_SIZE + 5
-    {
-        if let Some(target) = pick_settlement_target(obs, settlements, general_hex) {
-            directives.push(Directive::LoadConvoy {
-                hex_q: general_hex.q,
-                hex_r: general_hex.r,
-                cargo_type: CargoType::Settlers,
-                amount: SETTLER_CONVOY_SIZE as f32,
-            });
-            *pending = Some(target);
-        }
-    }
-}
-
-fn load_surplus_convoys(obs: &Observation, general_hex: Option<Axial>, directives: &mut Vec<Directive>) {
-    for (idx, owner) in obs.stockpile_owner.iter().enumerate() {
-        if *owner != Some(obs.player) {
-            continue;
-        }
-        let hex = index_to_hex(obs, idx);
-        if Some(hex) == general_hex {
-            continue;
-        }
-        if obs.food_stockpiles[idx] > 15.0 {
-            directives.push(Directive::LoadConvoy {
-                hex_q: hex.q,
-                hex_r: hex.r,
-                cargo_type: CargoType::Food,
-                amount: 10.0,
-            });
-        } else if obs.material_stockpiles[idx] > 10.0 {
-            directives.push(Directive::LoadConvoy {
-                hex_q: hex.q,
-                hex_r: hex.r,
-                cargo_type: CargoType::Material,
-                amount: 10.0,
-            });
-        }
-    }
-}
-
-fn population_mix(obs: &Observation, hex: Axial) -> (u16, u16, u16, u16, u16) {
-    let mut idle = 0;
-    let mut farmers = 0;
-    let mut workers = 0;
-    let mut trained_soldiers = 0;
-    let mut untrained_soldiers = 0;
-    for pop in obs
-        .own_population
-        .iter()
-        .filter(|p| p.q == hex.q && p.r == hex.r)
-    {
-        match pop.role {
-            Role::Idle => idle += pop.count,
-            Role::Farmer => farmers += pop.count,
-            Role::Worker => workers += pop.count,
-            Role::Soldier => {
-                if pop.training >= 1.0 {
-                    trained_soldiers += pop.count;
-                } else {
-                    untrained_soldiers += pop.count;
-                }
-            }
-        }
-    }
-    (idle, farmers, workers, trained_soldiers, untrained_soldiers)
-}
-
+// Economy helpers (manage_settlement_population, manage_settlement_infrastructure,
+// produce_units_at_settlement, try_send_settlers, load_surplus_convoys, etc.)
+// have been moved to city_ai.rs and run automatically.
 fn total_population_on_hex(obs: &Observation, hex: Axial) -> u16 {
     obs.own_population
         .iter()
@@ -968,49 +624,12 @@ fn settlement_hexes(obs: &Observation) -> Vec<Axial> {
     let mut settlements = Vec::new();
     for pop in &obs.own_population {
         let hex = Axial::new(pop.q, pop.r);
-        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex) {
+        if total_population_on_hex(obs, hex) >= SETTLEMENT_THRESHOLD && !settlements.contains(&hex)
+        {
             settlements.push(hex);
         }
     }
     settlements
-}
-
-fn pick_settlement_target(obs: &Observation, settlements: &[Axial], origin: Axial) -> Option<Axial> {
-    let mut best: Option<(Axial, f32)> = None;
-    for (idx, owner) in obs.stockpile_owner.iter().enumerate() {
-        if *owner != Some(obs.player) {
-            continue;
-        }
-        let hex = index_to_hex(obs, idx);
-        if settlements.contains(&hex) {
-            continue;
-        }
-        if total_population_on_hex(obs, hex) > 0 {
-            continue;
-        }
-        let support_distance = settlements
-            .iter()
-            .map(|s| hex::distance(*s, hex))
-            .min()
-            .unwrap_or(i32::MAX);
-        if support_distance <= SETTLEMENT_SUPPORT_RADIUS {
-            continue;
-        }
-        let distance_from_origin = hex::distance(origin, hex);
-        if distance_from_origin < 2 || distance_from_origin > 8 {
-            continue;
-        }
-        let fertility = obs.terrain[idx];
-        if fertility <= 0.0 {
-            continue;
-        }
-        let score = fertility * 2.0 + obs.material_map[idx] - distance_from_origin as f32 * 0.25;
-        match best {
-            Some((_, best_score)) if best_score >= score => {}
-            _ => best = Some((hex, score)),
-        }
-    }
-    best.map(|(hex, _)| hex)
 }
 
 fn count_friendlies_near_enemies(obs: &Observation) -> HashMap<UnitKey, usize> {
@@ -1148,11 +767,12 @@ fn enemy_direction(obs: &Observation) -> Option<Axial> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v2::mapgen::{generate, MapConfig};
-    use crate::v2::observation::{initial_observation, observe_delta, ObservationSession};
+    use crate::v2::mapgen::{MapConfig, generate};
+    use crate::v2::observation::{ObservationSession, initial_observation, observe_delta};
 
     #[test]
-    fn spread_agent_manages_population() {
+    fn spread_agent_issues_military_directives() {
+        // Economy is handled by city AI; SpreadAgent only issues Move/Engage/BuildRoad.
         let mut state = generate(&MapConfig {
             width: 20,
             height: 20,
@@ -1165,14 +785,16 @@ mod tests {
         let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
         let delta = observe_delta(&mut state, 0, &mut session);
         let directives = agent.act(&delta);
-        assert!(directives.iter().any(|d| {
-            matches!(
+        // Should not issue economy directives; those are city AI's domain.
+        assert!(
+            !directives.iter().any(|d| matches!(
                 d,
                 Directive::AssignRole { .. }
                     | Directive::TrainSoldier { .. }
-                    | Directive::BuildDepot { .. }
-            )
-        }));
+                    | Directive::LoadConvoy { .. }
+            )),
+            "SpreadAgent issued economy directives that should come from city AI"
+        );
     }
 
     #[test]

@@ -1,8 +1,7 @@
-use bitvec::prelude::BitVec;
-use super::SETTLEMENT_THRESHOLD;
 use super::gamelog::GameLog;
 use super::hex::{Axial, axial_to_offset};
 use super::spatial::SpatialIndex;
+use bitvec::prelude::BitVec;
 use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 
@@ -10,6 +9,27 @@ new_key_type! {
     pub struct UnitKey;
     pub struct PopKey;
     pub struct ConvoyKey;
+    pub struct SettlementKey;
+}
+
+/// Settlement tier determines radius of territory claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SettlementType {
+    /// Small farming community (pop 2–9). Claims only its own hex.
+    Farm,
+    /// Established village (pop 10–29). Claims radius-1 hex ring.
+    Village,
+    /// Major city (pop 30+). Claims radius-2 hex ring.
+    City,
+}
+
+/// A persistent settlement entity that anchors territory for a player.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settlement {
+    pub public_id: u32,
+    pub hex: Axial,
+    pub owner: u8,
+    pub settlement_type: SettlementType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +71,8 @@ pub struct Cell {
     pub is_river: bool,
     pub water_access: f32,
     pub region_id: u16,
+    /// Derived from territory_cache; written back each tick so the rest of the
+    /// codebase (observation, replay) can read it without structural changes.
     pub stockpile_owner: Option<u8>,
 }
 
@@ -142,12 +164,14 @@ pub struct GameState {
     pub players: Vec<Player>,
     pub population: SlotMap<PopKey, Population>,
     pub convoys: SlotMap<ConvoyKey, Convoy>,
+    pub settlements: SlotMap<SettlementKey, Settlement>,
     pub regions: Vec<Region>,
     pub tick: u64,
     /// Monotonically increasing counters for frontend/replay-facing IDs.
     pub next_unit_id: u32,
     pub next_pop_id: u32,
     pub next_convoy_id: u32,
+    pub next_settlement_id: u32,
     pub scouted: Vec<Vec<bool>>,
     #[serde(skip)]
     pub spatial: SpatialIndex,
@@ -157,6 +181,10 @@ pub struct GameState {
     pub hex_revisions: Vec<u64>,
     #[serde(skip)]
     pub next_hex_revision: u64,
+    /// Rebuilt each tick from settlement radii + unit presence.
+    /// Index matches grid (row-major). None means unclaimed.
+    #[serde(skip)]
+    pub territory_cache: Vec<Option<u8>>,
     #[cfg(debug_assertions)]
     #[serde(skip)]
     pub tick_accumulator: Option<TickAccumulator>,
@@ -245,8 +273,15 @@ impl GameState {
             .sum()
     }
 
+    /// Whether a player has a Settlement entity on the given hex.
     pub fn is_settlement(&self, owner: u8, ax: Axial) -> bool {
-        self.population_on_hex(owner, ax) >= SETTLEMENT_THRESHOLD
+        self.settlements
+            .values()
+            .any(|s| s.owner == owner && s.hex == ax)
+    }
+
+    pub fn settlement_on_hex(&self, ax: Axial) -> Option<&Settlement> {
+        self.settlements.values().find(|s| s.hex == ax)
     }
 
     pub fn unit_key_by_public_id(&self, public_id: u32) -> Option<UnitKey> {
