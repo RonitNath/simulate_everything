@@ -317,20 +317,34 @@ const V3App: Component = () => {
         <div class={css.v3Main}>
           <div class={css.v3Canvas}>
             <Show when={initData()}>
-              {(init) => (
-                <V3HexCanvas
-                  width={init().width}
-                  height={init().height}
-                  biomes={init().terrain.map(
-                    (t: number) =>
-                      (["desert", "steppe", "grassland", "forest", "jungle", "tundra", "mountain"][t] ?? "grassland") as BiomeName,
-                  )}
-                  heights={init().height_map}
-                  rivers={[]}
-                  frame={currentFrame()}
-                  layers={layers()}
-                />
-              )}
+              {(init) => {
+                // V3 backend sends raw height floats, not biome indices.
+                // Normalize height_map to [0,1] and derive biomes from height.
+                const hm = init().height_map;
+                const minH = hm.length > 0 ? Math.min(...hm) : 0;
+                const maxH = hm.length > 0 ? Math.max(...hm) : 1;
+                const range = maxH - minH || 1;
+                const normHeights = hm.map((h: number) => (h - minH) / range);
+                const biomes = normHeights.map((h: number): BiomeName => {
+                  if (h > 0.85) return "mountain";
+                  if (h > 0.7) return "tundra";
+                  if (h > 0.5) return "forest";
+                  if (h > 0.3) return "grassland";
+                  if (h > 0.15) return "steppe";
+                  return "desert";
+                });
+                return (
+                  <V3HexCanvas
+                    width={init().width}
+                    height={init().height}
+                    biomes={biomes}
+                    heights={normHeights}
+                    rivers={[]}
+                    frame={currentFrame()}
+                    layers={layers()}
+                  />
+                );
+              }}
             </Show>
           </div>
         </div>

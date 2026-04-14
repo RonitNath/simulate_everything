@@ -35,14 +35,14 @@ const PlaybackControls: Component<PlaybackControlsProps> = (props) => {
           onClick={() => props.onTogglePlay()}
           title={props.playing ? "Pause" : "Play"}
         >
-          {props.playing ? "||" : "\u25B6"}
+          {props.playing ? "\u23F8" : "\u25B6"}
         </button>
         <button
           class={css.v3Btn}
           onClick={() => props.onStep()}
           title="Step forward"
         >
-          \u25B6|
+          {"\u25B6|"}
         </button>
         <button
           class={`${css.v3Btn} ${props.following ? css.v3BtnActive : ""}`}

@@ -33,13 +33,15 @@ function parseHexColor(hex: string): [number, number, number] {
 }
 
 function rgbToNum(r: number, g: number, b: number): number {
-  return (r << 16) | (g << 8) | b;
+  // >>> 0 ensures unsigned 32-bit integer (PixiJS rejects negative color values)
+  return ((r << 16) | (g << 8) | b) >>> 0;
 }
 
 function biomeColorNum(biome: BiomeName, height: number, isRiver: boolean): number {
   const [br, bg, bb] = BIOME_BASE[biome] ?? BIOME_BASE.grassland;
-  // Height shading: darker = lower, lighter = higher
-  const t = 0.6 + 0.4 * height;
+  // Height shading: darker = lower, lighter = higher. Clamp height to [0,1].
+  const h = Math.max(0, Math.min(1, isNaN(height) ? 0.5 : height));
+  const t = 0.6 + 0.4 * h;
   let r = Math.round(br * t);
   let g = Math.round(bg * t);
   let b = Math.round(bb * t);
