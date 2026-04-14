@@ -1,5 +1,9 @@
+pub mod armor;
 pub mod collision;
+pub mod equipment;
 pub mod hex;
 pub mod index;
+pub mod projectile;
 pub mod query;
 pub mod spatial;
+pub mod weapon;
