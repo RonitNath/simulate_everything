@@ -10,6 +10,6 @@ rand.workspace = true
 tracing.workspace = true
 noise = "0.9"
 slotmap = { version = "1", features = ["serde"] }
-smallvec = "1"
+smallvec = { version = "1", features = ["serde"] }
 bitvec = "1"
 moka = { version = "0.12", features = ["sync"] }
