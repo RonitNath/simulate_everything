@@ -10,6 +10,7 @@ import V3HexCanvas from "./v3/HexCanvas";
 import PlaybackControls from "./v3/PlaybackControls";
 import ScoreBar from "./v3/ScoreBar";
 import LayerToggles, { type V3RenderLayer } from "./v3/LayerToggles";
+import Inspector from "./v3/Inspector";
 import * as css from "./styles/v3.css";
 
 const MAX_FRAMES = 600;
@@ -38,6 +39,17 @@ const V3App: Component = () => {
 
   // --- Winner ---
   const [winner, setWinner] = createSignal<number | null>(null);
+
+  // --- Inspector ---
+  const [selectedEntityId, setSelectedEntityId] = createSignal<number | null>(null);
+
+  const selectedEntity = () => {
+    const id = selectedEntityId();
+    if (id == null) return null;
+    const frame = currentFrame();
+    if (!frame) return null;
+    return frame.entities.find((e) => e.id === id) ?? null;
+  };
 
   // Current frame for rendering
   const currentFrame = () => {
@@ -353,11 +365,18 @@ const V3App: Component = () => {
                     frame={currentFrame()}
                     layers={layers()}
                     tickIntervalMs={tickMs()}
+                    onEntityClick={(id) => setSelectedEntityId(id)}
                   />
                 );
               }}
             </Show>
           </div>
+
+          {/* Inspector panel (right side) */}
+          <Inspector
+            entity={selectedEntity()}
+            onClose={() => setSelectedEntityId(null)}
+          />
         </div>
 
         {/* Footer: playback controls + layer toggles */}
