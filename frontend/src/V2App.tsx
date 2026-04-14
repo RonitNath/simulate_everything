@@ -45,6 +45,7 @@ function emptyFrame(game: V2GameInfo, tick: number): V2Frame {
   const cellCount = game.width * game.height;
   return {
     tick,
+    entities: [],
     units: [],
     convoys: [],
     territory: Array.from({ length: cellCount }, () => null),
@@ -318,6 +319,7 @@ const V2App: Component = () => {
 
               const next: V2Frame = {
                 tick: msg.tick,
+                entities: msg.entities ?? [],
                 units: [...(msg.units ?? []), ...deadUnits, ...prevGhosts],
                 convoys: msg.convoys ?? [],
                 territory,
