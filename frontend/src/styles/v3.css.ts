@@ -148,6 +148,57 @@ export const v3Connecting = style({
   color: vars.color.textMuted,
 });
 
+export const v3InspectorHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: `${vars.space.sm} ${vars.space.md}`,
+  borderBottom: `1px solid ${vars.color.border}`,
+});
+
+export const v3InspectorBody = style({
+  flex: 1,
+  overflow: "auto",
+  padding: vars.space.sm,
+});
+
+export const v3InspectorSection = style({
+  padding: `${vars.space.xs} 0`,
+  borderBottom: `1px solid ${vars.color.border}`,
+});
+
+export const v3InspectorRow = style({
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  padding: `2px 0`,
+  fontSize: vars.font.size.xs,
+  gap: vars.space.xs,
+});
+
+export const v3InspectorLabel = style({
+  color: vars.color.textMuted,
+  fontSize: vars.font.size.xs,
+  textTransform: "uppercase",
+  letterSpacing: "0.03em",
+  flexShrink: 0,
+});
+
+export const v3BarContainer = style({
+  flex: 1,
+  height: "6px",
+  background: vars.color.bg,
+  borderRadius: "3px",
+  overflow: "hidden",
+  margin: `0 ${vars.space.xs}`,
+});
+
+export const v3BarFill = style({
+  height: "100%",
+  borderRadius: "3px",
+  transition: "width 0.1s",
+});
+
 export const v3Tooltip = style({
   position: "absolute",
   background: "rgba(10, 10, 20, 0.92)",

@@ -30,6 +30,7 @@ interface V3HexCanvasProps {
   frame: V3Snapshot | null;
   layers: Set<V3RenderLayer>;
   tickIntervalMs: number;
+  onEntityClick?: (entityId: number) => void;
 }
 
 interface TooltipData {
@@ -39,7 +40,7 @@ interface TooltipData {
   col: number;
   owner: number | null;
   roadLevel: number;
-  entityCount: number;
+  entities: { id: number; role?: string; owner?: number | null }[];
 }
 
 const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
@@ -221,24 +222,53 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const owner = frame?.hex_ownership?.[idx] ?? null;
     const roadLevel = frame?.hex_roads?.[idx] ?? 0;
 
-    // Count entities in this hex from entity map
-    let entityCount = 0;
-    for (const e of entityMap.entities.values()) {
-      const er = e.info.hex_r;
-      const ec = e.info.hex_q + Math.floor((er - (er & 1)) / 2);
-      if (er === row && ec === col && e.state === "alive") entityCount++;
+    // Collect entities in this hex from entity map
+    const hexEntities: { id: number; role?: string; owner?: number | null }[] = [];
+    for (const es of entityMap.entities.values()) {
+      const er = es.info.hex_r;
+      const ec = es.info.hex_q + Math.floor((er - (er & 1)) / 2);
+      if (er === row && ec === col && es.state === "alive") {
+        hexEntities.push({ id: es.info.id, role: es.info.role, owner: es.info.owner });
+      }
     }
 
     setTooltip({
       screenX: e.clientX - rect.left,
       screenY: e.clientY - rect.top,
-      row, col, owner, roadLevel, entityCount,
+      row, col, owner, roadLevel, entities: hexEntities,
     });
   }
 
   function handlePointerUp(e: PointerEvent) {
+    const wasDragging = isDragging &&
+      (Math.abs(e.clientX - dragStartX) > 3 || Math.abs(e.clientY - dragStartY) > 3);
     isDragging = false;
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+
+    // Click detection — find nearest entity within threshold
+    if (!wasDragging && props.onEntityClick && canvasRef) {
+      const rect = canvasRef.getBoundingClientRect();
+      const worldX = (e.clientX - rect.left - camX) / camZoom;
+      const worldY = (e.clientY - rect.top - camY) / camZoom;
+
+      let bestId: number | null = null;
+      let bestDist = (20 / camZoom) ** 2; // 20px threshold in screen space
+
+      for (const es of entityMap.entities.values()) {
+        if (es.state !== "alive") continue;
+        const dx = es.currPos.x - worldX;
+        const dy = es.currPos.y - worldY;
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestId = es.info.id;
+        }
+      }
+
+      if (bestId != null) {
+        props.onEntityClick(bestId);
+      }
+    }
   }
 
   // --- Lifecycle ---
@@ -421,8 +451,21 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
                   <span style={{ color: playerColorHex(t.owner!) }}>P{t.owner}</span>
                 </div>
               </Show>
-              <Show when={t.entityCount > 0}>
-                <div>{t.entityCount} entity{t.entityCount > 1 ? "s" : ""}</div>
+              <Show when={t.entities.length > 0}>
+                <div>{t.entities.length} entity{t.entities.length > 1 ? "s" : ""}</div>
+                {t.entities.slice(0, 5).map((ent) => (
+                  <div style={{ "padding-left": "6px", "font-size": "10px" }}>
+                    <span style={{ color: ent.owner != null ? playerColorHex(ent.owner) : "#888" }}>
+                      #{ent.id}
+                    </span>
+                    {ent.role ? ` ${ent.role}` : ""}
+                  </div>
+                ))}
+                <Show when={t.entities.length > 5}>
+                  <div style={{ "padding-left": "6px", "font-size": "10px", color: "#666" }}>
+                    +{t.entities.length - 5} more
+                  </div>
+                </Show>
               </Show>
               <Show when={t.roadLevel > 0}>
                 <div>Road level: {t.roadLevel}</div>
