@@ -409,6 +409,8 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         next_pop_id,
         next_convoy_id,
         next_settlement_id,
+        entities: SlotMap::with_key(),
+        next_entity_id: 0,
         scouted: vec![vec![true; total_cells]; replay.num_players],
         spatial: SpatialIndex::new(replay.width, replay.height),
         dirty_hexes: BitVec::repeat(false, total_cells),

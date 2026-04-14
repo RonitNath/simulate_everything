@@ -181,7 +181,7 @@ impl GameLog {
                 Role::Farmer => farmers += pop.count,
                 Role::Worker => workers += pop.count,
                 Role::Soldier => soldiers += pop.count,
-                Role::Idle => {}
+                Role::Idle | Role::Builder => {}
             }
         }
 

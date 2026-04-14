@@ -453,7 +453,7 @@ fn generate_resources(state: &mut GameState) {
                     let new_training = (pop.training + TRAINING_RATE).min(SOLDIER_READY_THRESHOLD);
                     training_updates.push((key, new_training));
                 }
-                Role::Idle => {}
+                Role::Idle | Role::Builder => {}
             }
         }
     }
@@ -1767,6 +1767,8 @@ mod tests {
             next_pop_id: num_players as u32,
             next_convoy_id: 0,
             next_settlement_id: num_players as u32,
+            entities: SlotMap::with_key(),
+            next_entity_id: 0,
             scouted: vec![vec![true; total_cells]; num_players as usize],
             spatial: SpatialIndex::new(width, height),
             dirty_hexes: BitVec::repeat(false, total_cells),

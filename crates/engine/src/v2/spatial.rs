@@ -2,13 +2,14 @@ use slotmap::SlotMap;
 use smallvec::SmallVec;
 
 use super::hex::{Axial, axial_to_offset, neighbors};
-use super::state::{Unit, UnitKey};
+use super::state::{Entity, EntityKey, Unit, UnitKey};
 
 #[derive(Debug, Clone, Default)]
 pub struct SpatialIndex {
     width: usize,
     height: usize,
     cells: Vec<SmallVec<[UnitKey; 4]>>,
+    entity_cells: Vec<SmallVec<[EntityKey; 4]>>,
 }
 
 impl SpatialIndex {
@@ -17,6 +18,7 @@ impl SpatialIndex {
             width,
             height,
             cells: vec![SmallVec::new(); width * height],
+            entity_cells: vec![SmallVec::new(); width * height],
         }
     }
 
@@ -30,6 +32,22 @@ impl SpatialIndex {
         for (key, unit) in units.iter() {
             if let Some(idx) = self.index(unit.pos) {
                 self.cells[idx].push(key);
+            }
+        }
+    }
+
+    pub fn rebuild_entities(&mut self, entities: &SlotMap<EntityKey, Entity>) {
+        if self.entity_cells.len() != self.width * self.height {
+            self.entity_cells = vec![SmallVec::new(); self.width * self.height];
+        }
+        for cell in &mut self.entity_cells {
+            cell.clear();
+        }
+        for (key, entity) in entities.iter() {
+            if let Some(pos) = entity.pos {
+                if let Some(idx) = self.index(pos) {
+                    self.entity_cells[idx].push(key);
+                }
             }
         }
     }
@@ -49,6 +67,23 @@ impl SpatialIndex {
         neighbors(ax)
             .into_iter()
             .flat_map(|neighbor| self.units_at(neighbor).iter().copied())
+    }
+
+    pub fn entities_at(&self, ax: Axial) -> &[EntityKey] {
+        self.index(ax)
+            .and_then(|idx| self.entity_cells.get(idx))
+            .map(|cell| cell.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn has_entity_at(&self, ax: Axial) -> bool {
+        !self.entities_at(ax).is_empty()
+    }
+
+    pub fn entities_adjacent(&self, ax: Axial) -> impl Iterator<Item = EntityKey> + '_ {
+        neighbors(ax)
+            .into_iter()
+            .flat_map(|neighbor| self.entities_at(neighbor).iter().copied())
     }
 
     fn index(&self, ax: Axial) -> Option<usize> {
