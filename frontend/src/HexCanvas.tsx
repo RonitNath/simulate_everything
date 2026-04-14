@@ -1,6 +1,6 @@
-import { Component, createEffect, onCleanup, onMount } from "solid-js";
+import { Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Application, Container, Graphics } from "pixi.js";
-import type { BoardStaticData, BoardFrameData, BiomeName, V2UnitSnapshot } from "./v2types";
+import type { BoardStaticData, BoardFrameData, BiomeName, SpectatorEntity } from "./v2types";
 
 export type RenderLayer =
   | "territory" | "roads" | "depots" | "settlements"
@@ -31,6 +31,67 @@ const BIOME_BASE: Record<BiomeName, [number, number, number]> = {
   tundra: [130, 155, 170],
   mountain: [100, 95, 95],
 };
+
+// --- Entity classification ---
+
+type EntityKind = "combatant" | "structure" | "resource" | "civilian";
+
+function classifyEntity(e: SpectatorEntity): EntityKind {
+  if (e.structure_type) return "structure";
+  if (e.resource_type) return "resource";
+  if (e.health != null) return "combatant";
+  return "civilian";
+}
+
+interface HexStack {
+  row: number;
+  col: number;
+  entities: SpectatorEntity[];
+  combatants: SpectatorEntity[];
+  structures: SpectatorEntity[];
+  resources: SpectatorEntity[];
+  civilians: SpectatorEntity[];
+  totalHealth: number;
+  anyEngaged: boolean;
+  dominantOwner: number | null;
+}
+
+function buildHexStacks(entities: SpectatorEntity[]): Map<string, HexStack> {
+  const stacks = new Map<string, HexStack>();
+  for (const e of entities) {
+    // Axial (q,r) → offset even-r (row,col)
+    const row = e.r;
+    const col = e.q + (e.r - (e.r & 1)) / 2;
+    const key = `${row},${col}`;
+    let stack = stacks.get(key);
+    if (!stack) {
+      stack = {
+        row, col, entities: [], combatants: [], structures: [],
+        resources: [], civilians: [], totalHealth: 0,
+        anyEngaged: false, dominantOwner: null,
+      };
+      stacks.set(key, stack);
+    }
+    stack.entities.push(e);
+    const kind = classifyEntity(e);
+    if (kind === "combatant") {
+      stack.combatants.push(e);
+      stack.totalHealth += e.health ?? 0;
+      if (e.engaged) stack.anyEngaged = true;
+    } else if (kind === "structure") {
+      stack.structures.push(e);
+    } else if (kind === "resource") {
+      stack.resources.push(e);
+    } else {
+      stack.civilians.push(e);
+    }
+    // Dominant owner = most common non-null owner
+    if (e.owner != null) stack.dominantOwner = e.owner;
+  }
+  return stacks;
+}
+
+// --- Color utilities ---
 
 function parseHexColor(hex: string): [number, number, number] {
   return [
@@ -68,10 +129,12 @@ function playerColorDimNum(owner: number, t: number): number {
   return rgbToNum(Math.round(r * t), Math.round(g * t), Math.round(b * t));
 }
 
-function stackBrightness(totalStrength: number, maxStrength: number): number {
-  if (totalStrength <= 0) return 0.5;
-  return 0.5 + 0.5 * Math.log1p(totalStrength) / Math.log1p(Math.max(maxStrength, 1));
+function healthBrightness(totalHealth: number, maxHealth: number): number {
+  if (totalHealth <= 0) return 0.5;
+  return 0.5 + 0.5 * Math.log1p(totalHealth) / Math.log1p(Math.max(maxHealth, 1));
 }
+
+// --- Hex geometry ---
 
 function hexCenter(row: number, col: number, size: number): [number, number] {
   const x = SQRT3 * size * (col + 0.5 * (row & 1));
@@ -84,34 +147,53 @@ function drawHexPath(g: Graphics, cx: number, cy: number, radius: number): void 
     const angle = (Math.PI / 180) * (60 * i - 30);
     const px = cx + radius * Math.cos(angle);
     const py = cy + radius * Math.sin(angle);
-    if (i === 0) {
-      g.moveTo(px, py);
-    } else {
-      g.lineTo(px, py);
-    }
+    if (i === 0) g.moveTo(px, py);
+    else g.lineTo(px, py);
   }
   g.closePath();
-}
-
-function hexEdgeVertices(
-  cx: number, cy: number, size: number, edge: number,
-): [[number, number], [number, number]] {
-  const a1 = (Math.PI / 180) * (60 * edge - 30);
-  const a2 = (Math.PI / 180) * (60 * ((edge + 1) % 6) - 30);
-  return [
-    [cx + size * Math.cos(a1), cy + size * Math.sin(a1)],
-    [cx + size * Math.cos(a2), cy + size * Math.sin(a2)],
-  ];
 }
 
 const EVEN_NEIGHBORS: [number, number][] = [[-1, -1], [-1, 0], [0, 1], [1, 0], [1, -1], [0, -1]];
 const ODD_NEIGHBORS: [number, number][] = [[-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [0, -1]];
 
-interface CellStack {
-  unit: V2UnitSnapshot;
-  count: number;
-  totalStrength: number;
+// Reverse hex lookup: screen coords → (row, col)
+function pixelToHex(wx: number, wy: number, size: number): [number, number] {
+  // Approximate row from y
+  const rowApprox = wy / (1.5 * size);
+  const row = Math.round(rowApprox);
+  const col = Math.round(wx / (SQRT3 * size) - 0.5 * (row & 1));
+
+  // Check nearest candidates for closest center
+  let bestRow = row;
+  let bestCol = col;
+  let bestDist = Infinity;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      const cr = row + dr;
+      const cc = col + dc;
+      const [cx, cy] = hexCenter(cr, cc, size);
+      const dist = (wx - cx) ** 2 + (wy - cy) ** 2;
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestRow = cr;
+        bestCol = cc;
+      }
+    }
+  }
+  return [bestRow, bestCol];
 }
+
+// --- Tooltip types ---
+
+interface TooltipData {
+  screenX: number;
+  screenY: number;
+  row: number;
+  col: number;
+  stack: HexStack;
+}
+
+// --- Component ---
 
 const HexCanvas: Component<HexCanvasProps> = (props) => {
   let containerDiv: HTMLDivElement | undefined;
@@ -131,6 +213,12 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
   let dragStartY = 0;
   let dragStartOffsetX = 0;
   let dragStartOffsetY = 0;
+
+  // Hover state — signals for tooltip
+  const [tooltip, setTooltip] = createSignal<TooltipData | null>(null);
+
+  // Keep latest hex stacks for hover lookup
+  let currentStacks: Map<string, HexStack> = new Map();
 
   function applyCamera() {
     if (!world) return;
@@ -160,67 +248,40 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     }
   }
 
-  function drawDynamic(staticData: BoardStaticData, frameData: BoardFrameData, _showNumbers: boolean, layers: Set<RenderLayer>) {
+  function drawDynamic(
+    staticData: BoardStaticData,
+    frameData: BoardFrameData,
+    _showNumbers: boolean,
+    layers: Set<RenderLayer>,
+  ) {
     if (!dynamicLayer) return;
     dynamicLayer.removeChildren();
 
     const { width, height } = staticData;
-    const { units, territory, roads, depots, population, settlements } = frameData;
+    const { entities, units, territory, roads, depots, settlements } = frameData;
     const size = HEX_SIZE;
 
-    // Build unit map
-    const unitMap = new Map<string, CellStack>();
-    let maxStr = 1;
-    for (const u of units) {
-      if (u._dead) continue;
-      const row = u.r;
-      const col = u.q + (u.r - (u.r & 1)) / 2;
-      const key = `${row},${col}`;
-      const current = unitMap.get(key);
-      if (!current) {
-        unitMap.set(key, { unit: u, count: 1, totalStrength: u.strength });
-      } else {
-        current.count++;
-        current.totalStrength += u.strength;
-        if (u.strength > current.unit.strength) current.unit = u;
-      }
-      maxStr = Math.max(maxStr, unitMap.get(key)!.totalStrength);
+    // Build entity stacks from unified entities; fall back to old units path
+    const useEntities = entities.length > 0;
+    const hexStacks = useEntities ? buildHexStacks(entities) : buildHexStacksFromLegacy(units, settlements, width);
+    currentStacks = hexStacks;
+
+    // Find max health for brightness scaling
+    let maxHealth = 1;
+    for (const stack of hexStacks.values()) {
+      if (stack.totalHealth > maxHealth) maxHealth = stack.totalHealth;
     }
 
-    // Build settlement map
-    const settlementMap = new Map<number, { owner: number; type: "Farm" | "Village" | "City" }>();
-    if (settlements.length > 0) {
-      for (const s of settlements) {
-        const type = s.settlement_type ?? "Village";
-        const r = s.r;
-        const col = s.q + (s.r - (s.r & 1)) / 2;
-        const idx = r * width + col;
-        settlementMap.set(idx, { owner: s.owner, type });
-      }
-    } else {
-      const popByHexOwner = new Map<string, number>();
-      for (const pop of population) {
-        const key = `${pop.q},${pop.r},${pop.owner}`;
-        popByHexOwner.set(key, (popByHexOwner.get(key) ?? 0) + pop.count);
-      }
-      for (const [key, count] of popByHexOwner) {
-        if (count < 10) continue;
-        const [q, r, owner] = key.split(",").map((v) => parseInt(v, 10));
-        const row2 = r;
-        const col2 = q + (r - (r & 1)) / 2;
-        settlementMap.set(row2 * width + col2, { owner, type: "Village" });
-      }
-    }
-
-    // Territory overlay layer
+    // Territory overlay
     const terrOverlay = new Graphics();
     if (layers.has("territory")) {
       for (let row = 0; row < height; row++) {
         for (let col = 0; col < width; col++) {
           const idx = row * width + col;
           const key = `${row},${col}`;
-          const hasUnit = unitMap.has(key);
-          if (hasUnit) continue;
+          // Skip hexes that have combatant entities (they get full fill)
+          const stack = hexStacks.get(key);
+          if (stack && stack.combatants.length > 0) continue;
           const owner = territory[idx];
           if (owner === null || owner === undefined) continue;
           const [cx, cy] = hexCenter(row, col, size);
@@ -231,7 +292,7 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     }
     dynamicLayer.addChild(terrOverlay);
 
-    // Roads layer
+    // Roads
     const roadsGfx = new Graphics();
     if (layers.has("roads")) {
       for (let row = 0; row < height; row++) {
@@ -261,7 +322,7 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     }
     dynamicLayer.addChild(roadsGfx);
 
-    // Depots layer
+    // Depots
     const depotsGfx = new Graphics();
     if (layers.has("depots")) {
       for (let row = 0; row < height; row++) {
@@ -278,110 +339,217 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     }
     dynamicLayer.addChild(depotsGfx);
 
-    // Settlements layer
-    const settlGfx = new Graphics();
-    if (layers.has("settlements")) {
-      for (const [idx, info] of settlementMap) {
-        const row = Math.floor(idx / width);
-        const col = idx % width;
-        const [cx, cy] = hexCenter(row, col, size);
-        const color = playerColorNum(info.owner);
+    // Entity rendering per hex stack
+    const structGfx = new Graphics();
+    const combatGfx = new Graphics();
+    const resourceGfx = new Graphics();
+    const civilianGfx = new Graphics();
+    const badgeGfx = new Graphics();
+    const facingGfx = new Graphics();
 
-        if (info.type === "Farm") {
-          // Background plate
-          settlGfx.circle(cx, cy, size * 0.3);
-          settlGfx.fill({ color, alpha: 0.3 });
-          // Farm circle
-          settlGfx.circle(cx, cy, size * 0.25);
-          settlGfx.fill({ color, alpha: 0.8 });
-          settlGfx.stroke({ color: 0xffffff, width: 0.5 });
-        } else if (info.type === "Village") {
+    for (const stack of hexStacks.values()) {
+      const [cx, cy] = hexCenter(stack.row, stack.col, size);
+
+      // Structures (settlements) — render if layer enabled
+      if (stack.structures.length > 0 && layers.has("settlements")) {
+        const s = stack.structures[0];
+        const owner = s.owner ?? 0;
+        const color = playerColorNum(owner);
+        const stype = s.structure_type ?? "Village";
+
+        if (stype === "Farm") {
+          structGfx.circle(cx, cy, size * 0.3);
+          structGfx.fill({ color, alpha: 0.3 });
+          structGfx.circle(cx, cy, size * 0.25);
+          structGfx.fill({ color, alpha: 0.8 });
+          structGfx.stroke({ color: 0xffffff, width: 0.5 });
+        } else if (stype === "Village") {
           const hs = size * 0.45;
-          // Background halo
-          settlGfx.circle(cx, cy, size * 0.45);
-          settlGfx.fill({ color, alpha: 0.3 });
-          // House shape
+          structGfx.circle(cx, cy, size * 0.45);
+          structGfx.fill({ color, alpha: 0.3 });
           const bx = cx - hs;
           const by = cy - hs * 0.1;
           const bw = hs * 2;
           const bh = hs * 1.2;
           const peakY = cy - hs * 1.1;
-          settlGfx.moveTo(bx, by);
-          settlGfx.lineTo(bx, by + bh);
-          settlGfx.lineTo(bx + bw, by + bh);
-          settlGfx.lineTo(bx + bw, by);
-          settlGfx.lineTo(cx, peakY);
-          settlGfx.closePath();
-          settlGfx.fill({ color, alpha: 0.9 });
-          settlGfx.stroke({ color: 0xffffff, width: 0.5 });
+          structGfx.moveTo(bx, by);
+          structGfx.lineTo(bx, by + bh);
+          structGfx.lineTo(bx + bw, by + bh);
+          structGfx.lineTo(bx + bw, by);
+          structGfx.lineTo(cx, peakY);
+          structGfx.closePath();
+          structGfx.fill({ color, alpha: 0.9 });
+          structGfx.stroke({ color: 0xffffff, width: 0.5 });
         } else {
           // City
           const w = size * 0.4;
           const h = size * 0.45;
-          // Background halo
-          settlGfx.circle(cx, cy, size * 0.55);
-          settlGfx.fill({ color, alpha: 0.35 });
-          // Crenellated tower
-          settlGfx.moveTo(cx - w, cy + h);
-          settlGfx.lineTo(cx - w, cy - h);
-          settlGfx.lineTo(cx - w * 0.6, cy - h);
-          settlGfx.lineTo(cx - w * 0.6, cy - h * 1.3);
-          settlGfx.lineTo(cx - w * 0.2, cy - h * 1.3);
-          settlGfx.lineTo(cx - w * 0.2, cy - h);
-          settlGfx.lineTo(cx + w * 0.2, cy - h);
-          settlGfx.lineTo(cx + w * 0.2, cy - h * 1.3);
-          settlGfx.lineTo(cx + w * 0.6, cy - h * 1.3);
-          settlGfx.lineTo(cx + w * 0.6, cy - h);
-          settlGfx.lineTo(cx + w, cy - h);
-          settlGfx.lineTo(cx + w, cy + h);
-          settlGfx.closePath();
-          settlGfx.fill({ color, alpha: 0.95 });
-          settlGfx.stroke({ color: 0xffffff, width: 1 });
+          structGfx.circle(cx, cy, size * 0.55);
+          structGfx.fill({ color, alpha: 0.35 });
+          structGfx.moveTo(cx - w, cy + h);
+          structGfx.lineTo(cx - w, cy - h);
+          structGfx.lineTo(cx - w * 0.6, cy - h);
+          structGfx.lineTo(cx - w * 0.6, cy - h * 1.3);
+          structGfx.lineTo(cx - w * 0.2, cy - h * 1.3);
+          structGfx.lineTo(cx - w * 0.2, cy - h);
+          structGfx.lineTo(cx + w * 0.2, cy - h);
+          structGfx.lineTo(cx + w * 0.2, cy - h * 1.3);
+          structGfx.lineTo(cx + w * 0.6, cy - h * 1.3);
+          structGfx.lineTo(cx + w * 0.6, cy - h);
+          structGfx.lineTo(cx + w, cy - h);
+          structGfx.lineTo(cx + w, cy + h);
+          structGfx.closePath();
+          structGfx.fill({ color, alpha: 0.95 });
+          structGfx.stroke({ color: 0xffffff, width: 1 });
+        }
+
+        // Population badge on structures
+        if (s.contains_count > 0) {
+          const badgeR = size * 0.2;
+          const bx = cx + size * 0.5;
+          const by = cy - size * 0.5;
+          badgeGfx.circle(bx, by, badgeR);
+          badgeGfx.fill({ color: 0x222222, alpha: 0.85 });
+          badgeGfx.stroke({ color: 0xffffff, width: 0.5 });
         }
       }
-    }
-    dynamicLayer.addChild(settlGfx);
 
-    // Units layer
-    const unitsGfx = new Graphics();
-    for (const [key, entry] of unitMap) {
-      const [rowStr, colStr] = key.split(",");
-      const row = parseInt(rowStr, 10);
-      const col = parseInt(colStr, 10);
-      const [cx, cy] = hexCenter(row, col, size);
-      const t = stackBrightness(entry.totalStrength, maxStr);
-      const color = playerColorDimNum(entry.unit.owner, t);
+      // Combatants — colored hex fill
+      if (stack.combatants.length > 0) {
+        const owner = stack.combatants[0].owner ?? 0;
+        const t = healthBrightness(stack.totalHealth, maxHealth);
+        const color = playerColorDimNum(owner, t);
 
-      drawHexPath(unitsGfx, cx, cy, size * 0.96);
-      unitsGfx.fill({ color });
-      if (entry.unit.engaged) {
-        unitsGfx.stroke({ color: 0xff6644, width: Math.max(1, size * 0.06) });
-      } else {
-        unitsGfx.stroke({ color: 0x1a1a2e, width: Math.max(0.5, size * 0.04) });
+        drawHexPath(combatGfx, cx, cy, size * 0.96);
+        combatGfx.fill({ color });
+        if (stack.anyEngaged) {
+          combatGfx.stroke({ color: 0xff6644, width: Math.max(1, size * 0.06) });
+        } else {
+          combatGfx.stroke({ color: 0x1a1a2e, width: Math.max(0.5, size * 0.04) });
+        }
+
+        // Stack count badge when multiple combatants share a hex
+        if (stack.combatants.length > 1) {
+          const badgeR = size * 0.22;
+          const bx = cx + size * 0.55;
+          const by = cy - size * 0.55;
+          badgeGfx.circle(bx, by, badgeR);
+          badgeGfx.fill({ color: 0x000000, alpha: 0.8 });
+          badgeGfx.stroke({ color: 0xffffff, width: 0.5 });
+          // Draw tick marks for count (1 line per unit, up to 5, then filled circle)
+          const count = stack.combatants.length;
+          if (count <= 5) {
+            const spacing = badgeR * 1.2 / Math.max(count, 1);
+            const startX = bx - (count - 1) * spacing / 2;
+            for (let i = 0; i < count; i++) {
+              badgeGfx.moveTo(startX + i * spacing, by - badgeR * 0.4);
+              badgeGfx.lineTo(startX + i * spacing, by + badgeR * 0.4);
+              badgeGfx.stroke({ color: 0xffffff, width: 0.8 });
+            }
+          } else {
+            // Filled dot = "many"
+            badgeGfx.circle(bx, by, badgeR * 0.5);
+            badgeGfx.fill({ color: 0xffffff });
+          }
+        }
+
+        // Facing arrow at close zoom (scale > 2.0)
+        if (scale > 2.0) {
+          for (const c of stack.combatants) {
+            if (c.facing == null) continue;
+            const angle = c.facing; // radians
+            const arrowLen = size * 0.6;
+            const tipX = cx + Math.cos(angle) * arrowLen;
+            const tipY = cy + Math.sin(angle) * arrowLen;
+            facingGfx.moveTo(cx, cy);
+            facingGfx.lineTo(tipX, tipY);
+            facingGfx.stroke({ color: 0xffffff, alpha: 0.7, width: 1.5, cap: "round" });
+            // Arrowhead
+            const headLen = size * 0.15;
+            const a1 = angle + Math.PI * 0.8;
+            const a2 = angle - Math.PI * 0.8;
+            facingGfx.moveTo(tipX, tipY);
+            facingGfx.lineTo(tipX + Math.cos(a1) * headLen, tipY + Math.sin(a1) * headLen);
+            facingGfx.stroke({ color: 0xffffff, alpha: 0.7, width: 1.5 });
+            facingGfx.moveTo(tipX, tipY);
+            facingGfx.lineTo(tipX + Math.cos(a2) * headLen, tipY + Math.sin(a2) * headLen);
+            facingGfx.stroke({ color: 0xffffff, alpha: 0.7, width: 1.5 });
+            break; // Only show facing for first combatant in stack
+          }
+        }
+      }
+
+      // Resources (convoys) — small colored diamond
+      if (stack.resources.length > 0 && layers.has("convoys")) {
+        const r = stack.resources[0];
+        const owner = r.owner ?? 0;
+        const color = playerColorNum(owner);
+        const ds = size * 0.3;
+        resourceGfx.moveTo(cx, cy - ds);
+        resourceGfx.lineTo(cx + ds, cy);
+        resourceGfx.lineTo(cx, cy + ds);
+        resourceGfx.lineTo(cx - ds, cy);
+        resourceGfx.closePath();
+        resourceGfx.fill({ color, alpha: 0.85 });
+        resourceGfx.stroke({ color: 0xffffff, width: 0.5 });
+      }
+
+      // Civilians — small neutral circle
+      if (stack.civilians.length > 0 && stack.combatants.length === 0 && stack.structures.length === 0) {
+        const owner = stack.civilians[0].owner;
+        const color = owner != null ? playerColorNum(owner) : 0x888888;
+        civilianGfx.circle(cx, cy, size * 0.2);
+        civilianGfx.fill({ color, alpha: 0.6 });
+        civilianGfx.stroke({ color: 0xffffff, width: 0.3 });
       }
     }
-    dynamicLayer.addChild(unitsGfx);
 
-    // Unit count text labels — disabled for now, PixiJS Text triggers
-    // createPattern errors in some browsers. Will revisit with BitmapText.
-
-    // Engagement edges layer
-    const engageGfx = new Graphics();
-    for (const [key, entry] of unitMap) {
-      const [rowStr, colStr] = key.split(",");
-      const row = parseInt(rowStr, 10);
-      const col = parseInt(colStr, 10);
-      const [cx, cy] = hexCenter(row, col, size);
-      for (const engagement of entry.unit.engagements ?? []) {
-        const visualEdge = (engagement.edge + 5) % 6;
-        const [[x1, y1], [x2, y2]] = hexEdgeVertices(cx, cy, size * 0.96, visualEdge);
-        engageGfx.moveTo(x1, y1);
-        engageGfx.lineTo(x2, y2);
-        engageGfx.stroke({ color: 0xff6644, width: Math.max(2, size * 0.1), cap: "round" });
-      }
-    }
-    dynamicLayer.addChild(engageGfx);
+    dynamicLayer.addChild(structGfx);
+    dynamicLayer.addChild(combatGfx);
+    dynamicLayer.addChild(resourceGfx);
+    dynamicLayer.addChild(civilianGfx);
+    dynamicLayer.addChild(badgeGfx);
+    dynamicLayer.addChild(facingGfx);
   }
+
+  // Legacy fallback: build HexStacks from old units[] + settlements[]
+  function buildHexStacksFromLegacy(
+    units: BoardFrameData["units"],
+    settlements: BoardFrameData["settlements"],
+    _width: number,
+  ): Map<string, HexStack> {
+    const fakeEntities: SpectatorEntity[] = [];
+
+    for (const u of units) {
+      if ((u as any)._dead) continue;
+      fakeEntities.push({
+        id: u.id,
+        owner: u.owner,
+        q: u.q,
+        r: u.r,
+        health: u.strength,
+        role: "Soldier",
+        engaged: u.engaged,
+        contains_count: 0,
+      });
+    }
+
+    for (const s of settlements) {
+      fakeEntities.push({
+        id: s.id ?? 0,
+        owner: s.owner,
+        q: s.q,
+        r: s.r,
+        structure_type: s.settlement_type ?? "Village",
+        engaged: false,
+        contains_count: s.population ?? 0,
+      });
+    }
+
+    return buildHexStacks(fakeEntities);
+  }
+
+  // --- Event handlers ---
 
   function handleWheel(e: WheelEvent) {
     e.preventDefault();
@@ -393,7 +561,6 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
     const newScale = Math.min(5.0, Math.max(0.2, scale * zoomFactor));
 
-    // Zoom toward cursor
     offsetX = mouseX - (mouseX - offsetX) * (newScale / scale);
     offsetY = mouseY - (mouseY - offsetY) * (newScale / scale);
     scale = newScale;
@@ -410,10 +577,31 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
   }
 
   function handlePointerMove(e: PointerEvent) {
-    if (!isDragging) return;
-    offsetX = dragStartOffsetX + (e.clientX - dragStartX);
-    offsetY = dragStartOffsetY + (e.clientY - dragStartY);
-    applyCamera();
+    if (isDragging) {
+      offsetX = dragStartOffsetX + (e.clientX - dragStartX);
+      offsetY = dragStartOffsetY + (e.clientY - dragStartY);
+      applyCamera();
+      setTooltip(null);
+      return;
+    }
+
+    // Hover detection — convert screen → world → hex
+    if (!canvasDiv) return;
+    const rect = canvasDiv.getBoundingClientRect();
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    const worldX = (screenX - offsetX) / scale;
+    const worldY = (screenY - offsetY) / scale;
+
+    const [row, col] = pixelToHex(worldX, worldY, HEX_SIZE);
+    const key = `${row},${col}`;
+    const stack = currentStacks.get(key);
+
+    if (stack && stack.entities.length > 0) {
+      setTooltip({ screenX: e.clientX - rect.left, screenY: e.clientY - rect.top, row, col, stack });
+    } else {
+      setTooltip(null);
+    }
   }
 
   function handlePointerUp(e: PointerEvent) {
@@ -442,7 +630,7 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     dynamicLayer = new Container();
     world.addChild(dynamicLayer);
 
-    // Center initial view on board
+    // Center initial view
     const { width, height } = props.staticData;
     const boardPixelW = SQRT3 * HEX_SIZE * (width + 0.5);
     const boardPixelH = 1.5 * HEX_SIZE * height;
@@ -452,20 +640,17 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     offsetY = (canvasH - boardPixelH) / 2;
     applyCamera();
 
-    // Event listeners on canvas element
     const canvas = app.canvas as HTMLCanvasElement;
     canvas.addEventListener("wheel", handleWheel, { passive: false });
     canvas.addEventListener("pointerdown", handlePointerDown);
     canvas.addEventListener("pointermove", handlePointerMove);
     canvas.addEventListener("pointerup", handlePointerUp);
 
-    // Initial draw
     const ls = props.layers ?? new Set<RenderLayer>(["territory", "roads", "depots", "settlements", "convoys"]);
     drawTerrain(props.staticData);
     drawDynamic(props.staticData, props.frameData, props.showNumbers ?? false, ls);
   });
 
-  // Redraw terrain when staticData changes
   createEffect(() => {
     const sd = props.staticData;
     if (!terrainLayer || !app) return;
@@ -474,7 +659,6 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     drawDynamic(sd, props.frameData, props.showNumbers ?? false, ls);
   });
 
-  // Redraw dynamic layers when frameData changes
   createEffect(() => {
     const fd = props.frameData;
     const ls = props.layers ?? new Set<RenderLayer>(["territory", "roads", "depots", "settlements", "convoys"]);
@@ -507,6 +691,63 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
         ref={canvasDiv}
         style={{ width: "100%", height: "100%", display: "block" }}
       />
+      <Show when={tooltip()}>
+        {(tip) => {
+          const t = tip();
+          const stack = t.stack;
+          // Position tooltip near cursor, offset slightly
+          const left = Math.min(t.screenX + 12, (containerDiv?.clientWidth ?? 600) - 220);
+          const top = Math.min(t.screenY + 12, (containerDiv?.clientHeight ?? 400) - 150);
+          return (
+            <div
+              style={{
+                position: "absolute",
+                left: `${left}px`,
+                top: `${top}px`,
+                background: "rgba(10, 10, 20, 0.92)",
+                color: "#e0e0e0",
+                border: "1px solid #444",
+                "border-radius": "4px",
+                padding: "6px 8px",
+                "font-size": "11px",
+                "line-height": "1.4",
+                "pointer-events": "none",
+                "z-index": "10",
+                "max-width": "200px",
+                "font-family": "monospace",
+              }}
+            >
+              <div style={{ "font-weight": "bold", "margin-bottom": "3px" }}>
+                Hex ({t.row}, {t.col})
+              </div>
+              {stack.combatants.length > 0 && (
+                <div>
+                  <span style={{ color: stack.dominantOwner != null ? PLAYER_COLORS[stack.dominantOwner % PLAYER_COLORS.length] : "#888" }}>
+                    {stack.combatants.length} unit{stack.combatants.length > 1 ? "s" : ""}
+                  </span>
+                  {" "} HP: {stack.totalHealth.toFixed(0)}
+                  {stack.anyEngaged && <span style={{ color: "#ff6644" }}> [engaged]</span>}
+                </div>
+              )}
+              {stack.structures.length > 0 && (
+                <div>
+                  {stack.structures[0].structure_type}
+                  {stack.structures[0].contains_count > 0 && ` (pop: ${stack.structures[0].contains_count})`}
+                </div>
+              )}
+              {stack.resources.length > 0 && (
+                <div>
+                  Convoy: {stack.resources[0].resource_type}
+                  {stack.resources[0].resource_amount != null && ` (${stack.resources[0].resource_amount.toFixed(0)})`}
+                </div>
+              )}
+              {stack.civilians.length > 0 && (
+                <div>{stack.civilians.length} civilian{stack.civilians.length > 1 ? "s" : ""}</div>
+              )}
+            </div>
+          );
+        }}
+      </Show>
     </div>
   );
 };
