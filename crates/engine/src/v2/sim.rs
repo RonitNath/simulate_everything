@@ -2400,4 +2400,326 @@ mod tests {
         assert_eq!(friendly.engagements.len(), 1);
         assert_eq!(enemy.engagements.len(), 1);
     }
+
+    // --- Entity economy tests ---
+
+    use crate::v2::state::{
+        Combatant, Entity, EntityKey, Mobile, Person, Resource, Structure, StructureType, Vision,
+    };
+
+    /// Create a minimal state with a structure entity at `hex` and `n` farmer person
+    /// entities contained in it, owned by player 0.
+    fn state_with_farmers(hex: Axial, n: u16) -> (GameState, EntityKey) {
+        let mut state = blank_state(10, 10, 1);
+        // Set terrain fertility for production
+        if let Some(cell) = state.cell_at_mut(hex) {
+            cell.terrain_value = 1.0;
+            cell.material_value = 1.0;
+        }
+        compute_territory(&mut state);
+
+        let skey = state.spawn_entity(Entity {
+            id: 0,
+            pos: Some(hex),
+            owner: Some(0),
+            contained_in: None,
+            contains: vec![],
+            person: None,
+            mobile: None,
+            vision: None,
+            combatant: None,
+            resource: None,
+            structure: Some(Structure {
+                structure_type: StructureType::Village,
+                build_progress: 1.0,
+                health: 1.0,
+                capacity: 100,
+            }),
+        });
+
+        for _ in 0..n {
+            let pkey = state.spawn_entity(Entity {
+                id: 0,
+                pos: None,
+                owner: Some(0),
+                contained_in: Some(skey),
+                contains: vec![],
+                person: Some(Person {
+                    health: 1.0,
+                    combat_skill: 0.0,
+                    role: Role::Farmer,
+                }),
+                mobile: None,
+                vision: None,
+                combatant: None,
+                resource: None,
+                structure: None,
+            });
+            state.entities.get_mut(skey).unwrap().contains.push(pkey);
+        }
+
+        (state, skey)
+    }
+
+    #[test]
+    fn entity_farmer_produces_food() {
+        let hex = offset_to_axial(0, 0);
+        let (mut state, _skey) = state_with_farmers(hex, 5);
+        let before = state.cell_at(hex).unwrap().food_stockpile;
+
+        entity_produce_resources(&mut state);
+
+        let after = state.cell_at(hex).unwrap().food_stockpile;
+        let expected = 5.0 * 1.0 * crate::v2::FARMER_RATE;
+        assert!(
+            (after - before - expected).abs() < 0.001,
+            "expected food increase of {expected}, got {}",
+            after - before
+        );
+    }
+
+    #[test]
+    fn entity_worker_produces_material() {
+        let hex = offset_to_axial(0, 0);
+        let (mut state, skey) = state_with_farmers(hex, 0);
+        // Add worker entities
+        for _ in 0..3 {
+            let pkey = state.spawn_entity(Entity {
+                id: 0,
+                pos: None,
+                owner: Some(0),
+                contained_in: Some(skey),
+                contains: vec![],
+                person: Some(Person {
+                    health: 1.0,
+                    combat_skill: 0.0,
+                    role: Role::Worker,
+                }),
+                mobile: None,
+                vision: None,
+                combatant: None,
+                resource: None,
+                structure: None,
+            });
+            state.entities.get_mut(skey).unwrap().contains.push(pkey);
+        }
+        let before = state.cell_at(hex).unwrap().material_stockpile;
+
+        entity_produce_resources(&mut state);
+
+        let after = state.cell_at(hex).unwrap().material_stockpile;
+        let expected = 3.0 * 1.0 * crate::v2::WORKER_RATE;
+        assert!(
+            (after - before - expected).abs() < 0.001,
+            "expected material increase of {expected}, got {}",
+            after - before
+        );
+    }
+
+    #[test]
+    fn entity_person_fed_when_food_available() {
+        let hex = offset_to_axial(0, 0);
+        let (mut state, _skey) = state_with_farmers(hex, 2);
+        state.cell_at_mut(hex).unwrap().food_stockpile = 10.0;
+        compute_territory(&mut state);
+
+        entity_consume_food(&mut state);
+
+        // Both persons should be fed; health stays at 1.0
+        for (_, e) in state.entities.iter() {
+            if let Some(person) = &e.person {
+                assert_eq!(person.health, 1.0, "person should remain at full health");
+            }
+        }
+        let consumed = 2.0 * crate::v2::PERSON_FOOD_RATE;
+        let after = state.cell_at(hex).unwrap().food_stockpile;
+        assert!(
+            (after - (10.0 - consumed)).abs() < 0.001,
+            "expected stockpile at {}, got {}",
+            10.0 - consumed,
+            after
+        );
+    }
+
+    #[test]
+    fn entity_person_starves_without_food() {
+        let hex = offset_to_axial(0, 0);
+        let (mut state, _skey) = state_with_farmers(hex, 1);
+        state.cell_at_mut(hex).unwrap().food_stockpile = 0.0;
+        compute_territory(&mut state);
+
+        entity_consume_food(&mut state);
+
+        let person = state
+            .entities
+            .values()
+            .find(|e| e.person.is_some() && e.combatant.is_none())
+            .unwrap();
+        let health = person.person.as_ref().unwrap().health;
+        assert!(
+            health < 1.0,
+            "expected health < 1.0 after starvation, got {health}"
+        );
+        assert!(
+            (health - (1.0 - crate::v2::STARVATION_HEALTH_DAMAGE)).abs() < 0.001,
+            "expected health = {}, got {}",
+            1.0 - crate::v2::STARVATION_HEALTH_DAMAGE,
+            health
+        );
+    }
+
+    #[test]
+    fn entity_builder_advances_construction() {
+        let hex = offset_to_axial(0, 0);
+        let mut state = blank_state(10, 10, 1);
+        let skey = state.spawn_entity(Entity {
+            id: 0,
+            pos: Some(hex),
+            owner: Some(0),
+            contained_in: None,
+            contains: vec![],
+            person: None,
+            mobile: None,
+            vision: None,
+            combatant: None,
+            resource: None,
+            structure: Some(Structure {
+                structure_type: StructureType::Farm,
+                build_progress: 0.5,
+                health: 1.0,
+                capacity: 50,
+            }),
+        });
+        let bkey = state.spawn_entity(Entity {
+            id: 0,
+            pos: None,
+            owner: Some(0),
+            contained_in: Some(skey),
+            contains: vec![],
+            person: Some(Person {
+                health: 1.0,
+                combat_skill: 0.0,
+                role: Role::Builder,
+            }),
+            mobile: None,
+            vision: None,
+            combatant: None,
+            resource: None,
+            structure: None,
+        });
+        state.entities.get_mut(skey).unwrap().contains.push(bkey);
+
+        entity_build_structures(&mut state);
+
+        let progress = state
+            .entities
+            .get(skey)
+            .unwrap()
+            .structure
+            .as_ref()
+            .unwrap()
+            .build_progress;
+        let expected = 0.5 + crate::v2::BUILD_RATE;
+        assert!(
+            (progress - expected).abs() < 0.001,
+            "expected build_progress = {expected}, got {progress}"
+        );
+    }
+
+    #[test]
+    fn entity_soldier_trains_combat_skill() {
+        let hex = offset_to_axial(0, 0);
+        let (mut state, skey) = state_with_farmers(hex, 0);
+        let soldier_key = state.spawn_entity(Entity {
+            id: 0,
+            pos: None,
+            owner: Some(0),
+            contained_in: Some(skey),
+            contains: vec![],
+            person: Some(Person {
+                health: 1.0,
+                combat_skill: 0.0,
+                role: Role::Soldier,
+            }),
+            mobile: None,
+            vision: None,
+            combatant: None,
+            resource: None,
+            structure: None,
+        });
+        state
+            .entities
+            .get_mut(skey)
+            .unwrap()
+            .contains
+            .push(soldier_key);
+
+        entity_train_soldiers(&mut state);
+
+        let skill = state
+            .entities
+            .get(soldier_key)
+            .unwrap()
+            .person
+            .as_ref()
+            .unwrap()
+            .combat_skill;
+        assert!(
+            (skill - crate::v2::TRAINING_RATE).abs() < 0.001,
+            "expected combat_skill = {}, got {}",
+            crate::v2::TRAINING_RATE,
+            skill
+        );
+    }
+
+    #[test]
+    fn entity_role_assignment_syncs() {
+        let mut state = test_state();
+        let general = state
+            .units
+            .iter()
+            .find(|(_, u)| u.owner == 0)
+            .unwrap()
+            .1
+            .pos;
+
+        // Count entity farmers before
+        let farmers_before: usize = state
+            .entities
+            .values()
+            .filter(|e| {
+                e.owner == Some(0)
+                    && e.person.as_ref().is_some_and(|p| p.role == Role::Farmer)
+                    && e.combatant.is_none()
+            })
+            .count();
+
+        // Assign 3 workers to farmer role via legacy directive
+        apply_directives(
+            &mut state,
+            0,
+            &[Directive::AssignRole {
+                hex_q: general.q,
+                hex_r: general.r,
+                role: Role::Farmer,
+                count: 3,
+            }],
+        );
+
+        // Count entity farmers after
+        let farmers_after: usize = state
+            .entities
+            .values()
+            .filter(|e| {
+                e.owner == Some(0)
+                    && e.person.as_ref().is_some_and(|p| p.role == Role::Farmer)
+                    && e.combatant.is_none()
+            })
+            .count();
+
+        assert!(
+            farmers_after > farmers_before,
+            "entity farmer count should increase after role assignment: before={farmers_before}, after={farmers_after}"
+        );
+    }
 }
