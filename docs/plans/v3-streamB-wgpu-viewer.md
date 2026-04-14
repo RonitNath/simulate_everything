@@ -1,6 +1,6 @@
 # Stream B: wgpu WASM Viewer
 
-Status: **B1 done, B2 next**
+Status: **B1-B3 done, B4 next (depends on A1 body model)**
 Depends on: Phase 0 (protocol crate)
 Design spec: `docs/plans/v3-wgpu-renderer.md`
 Linear: reference IA issue if one exists
