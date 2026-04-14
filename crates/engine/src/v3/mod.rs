@@ -1,9 +1,13 @@
 pub mod armor;
+pub mod body;
 pub mod collision;
+pub mod damage;
 pub mod equipment;
 pub mod hex;
 pub mod index;
 pub mod projectile;
 pub mod query;
 pub mod spatial;
+pub mod vitals;
 pub mod weapon;
+pub mod wound;
