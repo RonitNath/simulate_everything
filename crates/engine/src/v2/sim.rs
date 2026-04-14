@@ -63,6 +63,7 @@ pub fn tick(state: &mut GameState) {
     consume_upkeep(state);
     entity_build_structures(state);
     combat::resolve_combat(state);
+    combat::entity_resolve_combat(state);
     rout_weakened_units(state);
     move_convoys(state);
     move_units(state);
@@ -1522,6 +1523,7 @@ fn rout_weakened_units(state: &mut GameState) {
 
 fn cleanup(state: &mut GameState) {
     combat::cleanup_engagements(state);
+    combat::entity_cleanup_dead(state);
 
     // Record unit deaths before removing them
     if state.game_log.is_some() {

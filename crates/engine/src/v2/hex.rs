@@ -107,6 +107,16 @@ pub fn ring(center: Axial, radius: i32) -> Vec<Axial> {
     result
 }
 
+/// Convert axial coordinates to pixel center (flat-top hex, unit size).
+/// Used for computing attack angles via atan2.
+pub fn axial_to_pixel(ax: Axial) -> (f32, f32) {
+    let q = ax.q as f32;
+    let r = ax.r as f32;
+    let x = 3.0_f32.sqrt() * (q + r / 2.0);
+    let y = 1.5 * r;
+    (x, y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
