@@ -1,6 +1,6 @@
 import { Component, createEffect, createMemo, createSignal, For, onCleanup, Show, batch } from "solid-js";
-import HexBoard from "./HexBoard";
-import type { RenderLayer } from "./HexBoard";
+import HexCanvas from "./HexCanvas";
+import type { RenderLayer } from "./HexCanvas";
 import Nav from "./Nav";
 import type {
   BoardFrameData,
@@ -937,26 +937,12 @@ const V2App: Component = () => {
 
         <div class={styles.main}>
           <div class={styles.boardContainer}>
-            <HexBoard
+            <HexCanvas
               staticData={staticData()!}
               frameData={currentFrameData()!}
               numPlayers={gameInfo()!.num_players}
               showNumbers={showNumbers()}
               layers={layers()}
-              hoveredHex={resolvedHoverHex()}
-              onHoverHex={(hex) => {
-                if (hex === null) {
-                  setPendingHoverHex(null);
-                  setResolvedHoverHex(null);
-                } else if (reviewBundle() || serverPaused()) {
-                  // Paused or review mode: resolve immediately.
-                  setPendingHoverHex(hex);
-                  setResolvedHoverHex(hex);
-                } else {
-                  // Live mode: buffer until next tick.
-                  setPendingHoverHex(hex);
-                }
-              }}
             />
           </div>
 
