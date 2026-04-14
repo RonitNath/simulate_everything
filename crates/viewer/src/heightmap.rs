@@ -604,7 +604,7 @@ impl HeightmapRenderer {
                 map_height: self.map_height as f32,
                 texel_uv: 1.0 / (self.map_width.max(self.map_height) as f32),
                 sun_dir: [0.4, 0.8, 0.3],
-                fog_density: 0.0003,
+                fog_density: 1.0 / ((self.map_width.max(self.map_height) as f32) * 5.0),
                 fog_color: [0.65, 0.75, 0.85],
                 _pad1: 0.0,
             };
