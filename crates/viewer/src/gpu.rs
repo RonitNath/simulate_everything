@@ -74,10 +74,10 @@ impl GpuState {
             Some(a) => a,
             None => {
                 return Err(
-                    "No WebGPU adapter found. This viewer requires a browser with WebGPU support. \
-                     Chrome/Edge: enabled by default. \
-                     Firefox: enable dom.webgpu.enabled in about:config. \
-                     Safari: enable WebGPU in Develop → Feature Flags."
+                    "No WebGPU adapter found. WebGPU requires HTTPS or localhost \
+                     (secure context). If accessing over plain HTTP from a remote host, \
+                     use an SSH tunnel (ssh -L 3333:localhost:3333 server) and open \
+                     http://localhost:3333/viewer/ instead."
                         .to_string(),
                 );
             }
