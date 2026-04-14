@@ -1,5 +1,6 @@
 {
   "name": "simulate-everything-frontend",
+  "author": "ronitnath",
   "private": true,
   "type": "module",
   "scripts": {

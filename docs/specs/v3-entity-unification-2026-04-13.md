@@ -1076,6 +1076,6 @@ curl -s http://localhost:3333/api/v3/rr/status
   resolves "iron sword vs leather armor at 30° incidence" resolves "AP shell vs
   sloped steel plate at 45° incidence." The pipeline doesn't know what era it's in.
 
-- The observation journal + moka cache pattern for agent learning could apply to
+- The observation journal + moka cache pattern for agent learning is
   domain-general. Any system that observes outcomes and updates its decision
   confidence can use this architecture — the combat agent is one instance.

@@ -4,6 +4,8 @@ members = ["crates/engine", "crates/cli", "crates/web", "crates/replay"]
 
 [workspace.package]
 edition = "2024"
+authors = ["ronitnath"]
+license = "MIT"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
