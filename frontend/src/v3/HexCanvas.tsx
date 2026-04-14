@@ -376,6 +376,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     canvasRef.appendChild(app.canvas);
 
     world = new Container();
+    world.interactiveChildren = false;
     app.stage.addChild(world);
 
     // Rendering layers (bottom to top per spec)

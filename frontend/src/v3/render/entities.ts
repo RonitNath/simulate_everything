@@ -68,12 +68,12 @@ function woundTint(base: number, damage: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
-/** Darken a color by a factor (0 = unchanged, 1 = black). */
+/** Darken a color by a factor (0 = unchanged, 1 = black, negative = lighten). */
 function darken(color: number, amount: number): number {
-  const t = 1 - Math.min(amount, 1.0);
-  const r = Math.round(((color >> 16) & 0xff) * t);
-  const g = Math.round(((color >> 8) & 0xff) * t);
-  const b = Math.round((color & 0xff) * t);
+  const t = 1 - Math.min(Math.max(amount, -1.0), 1.0);
+  const r = Math.min(255, Math.round(((color >> 16) & 0xff) * t));
+  const g = Math.min(255, Math.round(((color >> 8) & 0xff) * t));
+  const b = Math.min(255, Math.round((color & 0xff) * t));
   return (r << 16) | (g << 8) | b;
 }
 
