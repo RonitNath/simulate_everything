@@ -40,7 +40,7 @@ const BundleCard: Component<BundleCardProps> = (props) => {
         <div class={css.cardInfo}>
           <div class={css.cardTitle}>{props.bundle.name}</div>
           <div class={css.cardMeta}>
-            <Show when={props.bundle.agent_names.length > 0}>
+            <Show when={props.bundle.agent_names?.length}>
               <span>{props.bundle.agent_names.join(", ")}</span>
             </Show>
             <span>{props.bundle.tick_count} ticks</span>
