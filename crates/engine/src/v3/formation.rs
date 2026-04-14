@@ -26,6 +26,10 @@ pub enum FormationType {
     Line,
     /// V-shape, leader at point. Assault, breaking through.
     Wedge,
+    /// Hollow rectangle, all-around facing. Defensive formation.
+    Square,
+    /// Loose spacing, irregular. Ranged units, skirmishers.
+    Skirmish,
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +53,8 @@ pub fn compute_slots(formation: FormationType, count: usize, spacing: f32) -> Ve
         FormationType::Column => compute_column(count, sp),
         FormationType::Line => compute_line(count, sp),
         FormationType::Wedge => compute_wedge(count, sp),
+        FormationType::Square => compute_square(count, sp),
+        FormationType::Skirmish => compute_skirmish(count, sp),
     }
 }
 
@@ -103,6 +109,83 @@ fn compute_wedge(count: usize, spacing: f32) -> Vec<Vec2> {
     }
 
     slots
+}
+
+/// Square: hollow rectangle with entities facing outward. Defensive.
+/// Entities distributed evenly around the perimeter.
+fn compute_square(count: usize, spacing: f32) -> Vec<Vec2> {
+    if count == 0 {
+        return vec![];
+    }
+    if count == 1 {
+        return vec![Vec2::ZERO];
+    }
+
+    // Side length based on count: distribute evenly across 4 sides.
+    let per_side = (count as f32 / 4.0).ceil() as usize;
+    let half_side = (per_side as f32 * spacing) / 2.0;
+
+    let mut slots = Vec::with_capacity(count);
+    let mut placed = 0;
+
+    // Front edge (positive y)
+    for i in 0..per_side.min(count - placed) {
+        let x = (i as f32 - (per_side as f32 - 1.0) / 2.0) * spacing;
+        slots.push(Vec2::new(x, half_side));
+        placed += 1;
+    }
+    // Right edge (positive x)
+    for i in 0..per_side.min(count - placed) {
+        let y = half_side - (i as f32 + 1.0) * spacing;
+        slots.push(Vec2::new(half_side, y));
+        placed += 1;
+    }
+    // Back edge (negative y)
+    for i in 0..per_side.min(count - placed) {
+        let x = half_side - (i as f32 + 1.0) * spacing;
+        slots.push(Vec2::new(x, -half_side));
+        placed += 1;
+    }
+    // Left edge (negative x)
+    for i in 0..per_side.min(count - placed) {
+        let y = -half_side + (i as f32 + 1.0) * spacing;
+        slots.push(Vec2::new(-half_side, y));
+        placed += 1;
+    }
+
+    slots
+}
+
+/// Skirmish: loose irregular spacing. Entities spread out to minimize
+/// area-of-effect vulnerability. Uses a grid with jitter derived from index.
+fn compute_skirmish(count: usize, spacing: f32) -> Vec<Vec2> {
+    if count == 0 {
+        return vec![];
+    }
+    if count == 1 {
+        return vec![Vec2::ZERO];
+    }
+
+    // Wider spacing than normal formations.
+    let wide = spacing * 1.5;
+    let cols = (count as f32).sqrt().ceil() as usize;
+    let rows = (count + cols - 1) / cols;
+
+    (0..count)
+        .map(|i| {
+            let row = i / cols;
+            let col = i % cols;
+            let half_cols = (cols as f32 - 1.0) / 2.0;
+            let half_rows = (rows as f32 - 1.0) / 2.0;
+            // Simple deterministic jitter from index.
+            let jx = ((i * 7 + 3) % 5) as f32 / 5.0 - 0.5;
+            let jy = ((i * 11 + 7) % 5) as f32 / 5.0 - 0.5;
+            Vec2::new(
+                (col as f32 - half_cols) * wide + jx * spacing * 0.3,
+                -(row as f32 - half_rows) * wide + jy * spacing * 0.3,
+            )
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -348,16 +431,50 @@ mod tests {
 
     // --- Edge cases ---
 
+    // --- Square ---
+
+    #[test]
+    fn square_distributes_around_perimeter() {
+        let slots = compute_slots(FormationType::Square, 8, 20.0);
+        assert_eq!(slots.len(), 8);
+        // Should have entities on multiple sides (both positive and negative x/y).
+        let has_pos_x = slots.iter().any(|s| s.x > EPS);
+        let has_neg_x = slots.iter().any(|s| s.x < -EPS);
+        assert!(has_pos_x && has_neg_x, "square should span both x sides");
+    }
+
+    // --- Skirmish ---
+
+    #[test]
+    fn skirmish_has_2d_spread() {
+        let skirmish = compute_slots(FormationType::Skirmish, 9, 20.0);
+        assert_eq!(skirmish.len(), 9);
+        let width = skirmish.iter().map(|s| s.x).fold(f32::NEG_INFINITY, f32::max)
+            - skirmish.iter().map(|s| s.x).fold(f32::INFINITY, f32::min);
+        let height = skirmish.iter().map(|s| s.y).fold(f32::NEG_INFINITY, f32::max)
+            - skirmish.iter().map(|s| s.y).fold(f32::INFINITY, f32::min);
+        // Skirmish should spread in both dimensions (unlike Line which is 1D).
+        assert!(width > 10.0, "skirmish should have x spread: {width}");
+        assert!(height > 10.0, "skirmish should have y spread: {height}");
+    }
+
+    // --- Edge cases ---
+
     #[test]
     fn zero_count_returns_empty() {
         assert!(compute_slots(FormationType::Column, 0, 20.0).is_empty());
         assert!(compute_slots(FormationType::Line, 0, 20.0).is_empty());
         assert!(compute_slots(FormationType::Wedge, 0, 20.0).is_empty());
+        assert!(compute_slots(FormationType::Square, 0, 20.0).is_empty());
+        assert!(compute_slots(FormationType::Skirmish, 0, 20.0).is_empty());
     }
 
     #[test]
     fn single_entity_all_formations() {
-        for ft in [FormationType::Column, FormationType::Line, FormationType::Wedge] {
+        for ft in [
+            FormationType::Column, FormationType::Line, FormationType::Wedge,
+            FormationType::Square, FormationType::Skirmish,
+        ] {
             let slots = compute_slots(ft, 1, 20.0);
             assert_eq!(slots.len(), 1, "{ft:?} should produce 1 slot");
             assert!(approx_eq(slots[0].x, 0.0));

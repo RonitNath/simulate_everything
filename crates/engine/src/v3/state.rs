@@ -4,6 +4,7 @@ use smallvec::SmallVec;
 
 use super::armor::{ArmorProperties, MaterialType};
 use super::equipment::Equipment;
+use super::formation::FormationType;
 use super::index::SpatialIndex;
 use super::movement::Mobile;
 use super::projectile::Projectile;
@@ -13,6 +14,25 @@ use super::weapon::{AttackState, CooldownState, WeaponProperties};
 use super::wound::WoundList;
 use crate::v2::hex::Axial;
 use crate::v2::state::EntityKey;
+
+// ---------------------------------------------------------------------------
+// Stacks
+// ---------------------------------------------------------------------------
+
+/// Stable identifier for a stack across ticks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StackId(pub u32);
+
+/// A group of entities operating together under agent control.
+/// Lives in GameState — movement reads stack membership for formation steering.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Stack {
+    pub id: StackId,
+    pub owner: u8,
+    pub members: SmallVec<[EntityKey; 32]>,
+    pub formation: FormationType,
+    pub leader: EntityKey,
+}
 
 // ---------------------------------------------------------------------------
 // Roles and structure types
@@ -315,12 +335,14 @@ pub struct GameState {
     pub entities: SlotMap<EntityKey, Entity>,
     pub spatial_index: SpatialIndex,
     pub heightfield: Heightfield,
+    pub stacks: Vec<Stack>,
     pub map_width: usize,
     pub map_height: usize,
     pub num_players: u8,
     pub game_time: f64,
     pub tick: u64,
     next_id: u32,
+    next_stack_id: u32,
 }
 
 impl GameState {
@@ -334,12 +356,14 @@ impl GameState {
             entities: SlotMap::with_key(),
             spatial_index: SpatialIndex::new(map_width, map_height),
             heightfield,
+            stacks: Vec::new(),
             map_width,
             map_height,
             num_players,
             game_time: 0.0,
             tick: 0,
             next_id: 1,
+            next_stack_id: 1,
         }
     }
 
@@ -348,6 +372,13 @@ impl GameState {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// Allocate a new monotonic stack ID.
+    pub fn alloc_stack_id(&mut self) -> StackId {
+        let id = self.next_stack_id;
+        self.next_stack_id += 1;
+        StackId(id)
     }
 }
 

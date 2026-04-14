@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod armor;
 pub mod body;
 pub mod collision;
@@ -10,6 +11,7 @@ pub mod lifecycle;
 pub mod mapgen;
 pub mod movement;
 pub mod pathfinding;
+pub mod perception;
 pub mod projectile;
 pub mod query;
 pub mod sim;
