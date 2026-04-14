@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use super::hex::{world_to_hex_2d, within_hysteresis};
@@ -7,7 +8,7 @@ use crate::v2::state::EntityKey;
 
 /// Spatial index: flat array indexed by hex offset coordinates.
 /// Each cell holds a SmallVec of entity keys.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpatialIndex {
     width: usize,
     height: usize,
