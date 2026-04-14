@@ -141,9 +141,9 @@ const V3DrillApp: Component = () => {
           tickIntervalMs={50}
           focusRegion={{
             minRow: 0,
-            minCol: 0,
-            maxRow: initData()!.height - 1,
-            maxCol: initData()!.width - 1,
+            minCol: 1,
+            maxRow: 2,
+            maxCol: initData()!.width - 2,
           }}
         />
       </Show>
