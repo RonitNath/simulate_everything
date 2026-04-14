@@ -6,19 +6,19 @@ use simulate_everything_engine::v2::hex::offset_to_axial;
 use simulate_everything_engine::v2::state::EntityKey;
 use simulate_everything_engine::v3::{
     agent::{
-        validate_operational, validate_tactical, AgentOutput, EntityTask, EquipmentType,
-        LayeredAgent, OperationalCommand, StrategyLayer, TacticalCommand,
+        AgentOutput, EntityTask, EquipmentType, LayeredAgent, OperationalCommand, StrategyLayer,
     },
     armor::{self, ArmorConstruction, ArmorProperties, BodyZone, DamageType, MaterialType},
     combat_log::CombatObservation,
+    commands::{CommandStatus, apply_operational_command, apply_tactical_command},
     damage::{self, BlockCapability, DefenderState, Impact, ImpactResult},
     damage_table::DamageEstimateTable,
     equipment::{self, Equipment},
     formation::FormationType,
     hex::hex_to_world,
-    lifecycle::{contain, spawn_entity, uncontain},
+    lifecycle::{contain, spawn_entity},
     mapgen,
-    martial::{self, AttackMotion, BlockManeuver},
+    martial::{AttackMotion, BlockManeuver},
     movement::Mobile,
     operations::{NullOperationsLayer, SharedOperationsLayer},
     projectile,
@@ -38,8 +38,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use simulate_everything_web::v3_protocol;
@@ -3187,135 +3187,14 @@ fn bench_item_cost(item_type: EquipmentType) -> f32 {
     }
 }
 
-fn soldier_needs_item(state: &GameState, soldier_key: EntityKey, item_key: EntityKey) -> bool {
-    let Some(soldier) = state.entities.get(soldier_key) else {
-        return false;
-    };
-    let Some(item) = state.entities.get(item_key) else {
-        return false;
-    };
-    let equipment = soldier.equipment.as_ref();
-
-    if item.weapon_props.is_some() {
-        let is_shield = item
-            .weapon_props
-            .as_ref()
-            .map(|props| props.block_arc >= 1.2 && props.reach <= 1.0)
-            .unwrap_or(false);
-        if is_shield {
-            return equipment.and_then(|eq| eq.shield).is_none();
-        }
-        return equipment.and_then(|eq| eq.weapon).is_none();
-    }
-
-    if let Some(armor_props) = item.armor_props.as_ref() {
-        let eq = equipment.cloned().unwrap_or_else(Equipment::empty);
-        return armor_props
-            .zones_covered
-            .iter()
-            .any(|zone| eq.armor_slots[equipment::zone_index(*zone)].is_none());
-    }
-
-    false
-}
-
-fn equip_entity_item(state: &mut GameState, entity_key: EntityKey, item_key: EntityKey) -> bool {
-    let Some(item) = state.entities.get(item_key) else {
-        return false;
-    };
-    let weapon_props = item.weapon_props.clone();
-    let armor_props = item.armor_props.clone();
-    let is_shield = weapon_props
-        .as_ref()
-        .map(|props| props.block_arc >= 1.2 && props.reach <= 1.0)
-        .unwrap_or(false);
-
-    let Some(entity) = state.entities.get_mut(entity_key) else {
-        return false;
-    };
-    let equipment = entity.equipment.get_or_insert_with(Equipment::empty);
-
-    let assigned = if let Some(props) = armor_props.as_ref() {
-        equipment::equip_armor(equipment, item_key, props);
-        true
-    } else if is_shield {
-        if equipment.shield.is_none() {
-            equipment.shield = Some(item_key);
-            true
-        } else {
-            false
-        }
-    } else if equipment.weapon.is_none() {
-        equipment.weapon = Some(item_key);
-        true
-    } else {
-        false
-    };
-
-    if !assigned {
-        return false;
-    }
-
-    uncontain(state, item_key);
-    contain(state, entity_key, item_key);
-    true
-}
-
-fn auto_equip_soldier(state: &mut GameState, soldier_key: EntityKey) {
-    let owner = match state
-        .entities
-        .get(soldier_key)
-        .and_then(|entity| entity.owner)
-    {
-        Some(owner) => owner,
-        None => return,
-    };
-
-    let inventory: Vec<_> = state
-        .entities
-        .iter()
-        .filter_map(|(key, entity)| {
-            (entity.owner == Some(owner)
-                && entity.person.is_none()
-                && (entity.weapon_props.is_some() || entity.armor_props.is_some())
-                && entity
-                    .contained_in
-                    .and_then(|container| state.entities.get(container))
-                    .map(|container| container.structure.is_some())
-                    .unwrap_or(false))
-            .then_some(key)
-        })
-        .collect();
-
-    for item_key in inventory {
-        if soldier_needs_item(state, soldier_key, item_key) {
-            let _ = equip_entity_item(state, soldier_key, item_key);
-        }
-    }
-}
-
 fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &AgentOutput) {
     for cmd in &output.operational_commands {
-        if !validate_operational(cmd, state) {
-            continue;
+        match apply_operational_command(state, cmd) {
+            CommandStatus::Applied | CommandStatus::Rejected => continue,
+            CommandStatus::Deferred => {}
         }
+
         match cmd {
-            OperationalCommand::RouteStack { stack, waypoints } => {
-                // Find the stack and set waypoints on all mobile members.
-                let members: Vec<_> = state
-                    .stacks
-                    .iter()
-                    .find(|s| s.id == *stack)
-                    .map(|s| s.members.to_vec())
-                    .unwrap_or_default();
-                for member_key in members {
-                    if let Some(entity) = state.entities.get_mut(member_key) {
-                        if let Some(mobile) = &mut entity.mobile {
-                            mobile.waypoints = waypoints.clone();
-                        }
-                    }
-                }
-            }
             OperationalCommand::AssignTask { entity, task } => match task {
                 EntityTask::Farm { field } => {
                     if let Some(owner) = state.entities.get(*entity).and_then(|e| e.owner) {
@@ -3326,26 +3205,12 @@ fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &Ag
                             .map(|s| s.structure_type == StructureType::Farm)
                             .unwrap_or(false)
                         {
-                            if let Some(person) = state
-                                .entities
-                                .get_mut(*entity)
-                                .and_then(|e| e.person.as_mut())
-                            {
-                                person.role = Role::Farmer;
-                            }
                             economy.food[owner as usize] += BENCH_FARM_FOOD_PER_TASK;
                         }
                     }
                 }
                 EntityTask::Build { site } => {
                     if let Some(owner) = state.entities.get(*entity).and_then(|e| e.owner) {
-                        if let Some(person) = state
-                            .entities
-                            .get_mut(*entity)
-                            .and_then(|e| e.person.as_mut())
-                        {
-                            person.role = Role::Worker;
-                        }
                         if state
                             .entities
                             .get(*site)
@@ -3359,13 +3224,6 @@ fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &Ag
                 }
                 EntityTask::Craft { workshop, .. } => {
                     if let Some(owner) = state.entities.get(*entity).and_then(|e| e.owner) {
-                        if let Some(person) = state
-                            .entities
-                            .get_mut(*entity)
-                            .and_then(|e| e.person.as_mut())
-                        {
-                            person.role = Role::Worker;
-                        }
                         if state
                             .entities
                             .get(*workshop)
@@ -3377,78 +3235,11 @@ fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &Ag
                         }
                     }
                 }
-                EntityTask::Patrol { waypoints } => {
-                    if let Some(e) = state.entities.get_mut(*entity) {
-                        if let Some(mobile) = &mut e.mobile {
-                            mobile.waypoints = waypoints.clone();
-                        }
-                    }
-                }
-                EntityTask::Garrison { position } => {
-                    if let Some(e) = state.entities.get_mut(*entity) {
-                        if let Some(mobile) = &mut e.mobile {
-                            mobile.waypoints = vec![*position];
-                        }
-                    }
-                }
-                EntityTask::Train => {
-                    if let Some(e) = state.entities.get_mut(*entity) {
-                        if let Some(person) = e.person.as_mut() {
-                            person.role = Role::Soldier;
-                            person.combat_skill = person.combat_skill.max(0.35);
-                        }
-                        if e.mobile.is_none() {
-                            e.mobile = Some(Mobile::new(2.0, 10.0));
-                        }
-                        if e.vitals.is_none() {
-                            e.vitals = Some(Vitals::new());
-                            e.wounds = Some(Default::default());
-                        }
-                        if e.combatant.is_none() {
-                            e.combatant = Some(Combatant::new());
-                        }
-                        if e.equipment.is_none() {
-                            e.equipment = Some(Equipment::empty());
-                        }
-                    }
-                    auto_equip_soldier(state, *entity);
-                }
-                EntityTask::Idle => {
-                    if let Some(e) = state.entities.get_mut(*entity) {
-                        if let Some(person) = e.person.as_mut() {
-                            person.role = Role::Idle;
-                        }
-                        if let Some(mobile) = e.mobile.as_mut() {
-                            mobile.waypoints.clear();
-                        }
-                    }
-                }
+                EntityTask::Patrol { .. }
+                | EntityTask::Garrison { .. }
+                | EntityTask::Train
+                | EntityTask::Idle => {}
             },
-            OperationalCommand::FormStack {
-                entities,
-                archetype: _,
-            } => {
-                if entities.is_empty() {
-                    continue;
-                }
-                let leader = entities[0];
-                let owner = state
-                    .entities
-                    .get(leader)
-                    .and_then(|e| e.owner)
-                    .unwrap_or(0);
-                let stack_id = state.alloc_stack_id();
-                state.stacks.push(Stack {
-                    id: stack_id,
-                    owner,
-                    members: entities.iter().copied().collect(),
-                    formation: FormationType::Line,
-                    leader,
-                });
-            }
-            OperationalCommand::DisbandStack { stack } => {
-                state.stacks.retain(|existing| existing.id != *stack);
-            }
             OperationalCommand::ProduceEquipment {
                 workshop,
                 item_type,
@@ -3498,16 +3289,22 @@ fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &Ag
                     })
                     .collect();
                 for soldier_key in candidates {
-                    if soldier_needs_item(state, soldier_key, item_key)
-                        && equip_entity_item(state, soldier_key, item_key)
+                    if apply_operational_command(
+                        state,
+                        &OperationalCommand::EquipEntity {
+                            entity: soldier_key,
+                            equipment: item_key,
+                        },
+                    ) == CommandStatus::Applied
                     {
                         break;
                     }
                 }
             }
-            OperationalCommand::EquipEntity { entity, equipment } => {
-                let _ = equip_entity_item(state, *entity, *equipment);
-            }
+            OperationalCommand::RouteStack { .. }
+            | OperationalCommand::FormStack { .. }
+            | OperationalCommand::DisbandStack { .. }
+            | OperationalCommand::EquipEntity { .. } => {}
             OperationalCommand::EstablishSupplyRoute { .. }
             | OperationalCommand::FoundSettlement { .. } => {
                 // Deferred for bench mode.
@@ -3516,75 +3313,7 @@ fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &Ag
     }
 
     for cmd in &output.tactical_commands {
-        if !validate_tactical(cmd, state) {
-            continue;
-        }
-        match cmd {
-            TacticalCommand::Attack { attacker, target } => {
-                let Some(attacker_view) = state.entities.get(*attacker) else {
-                    continue;
-                };
-                let skill = attacker_view
-                    .person
-                    .as_ref()
-                    .map(|person| person.combat_skill)
-                    .unwrap_or(0.5);
-                let attacker_pos = attacker_view.pos.unwrap_or(Vec3::ZERO);
-                let Some(target_pos) = state.entities.get(*target).and_then(|e| e.pos) else {
-                    continue;
-                };
-
-                if let Some(entity) = state.entities.get_mut(*attacker) {
-                    if let Some(combatant) = &mut entity.combatant {
-                        if combatant.attack.is_none() && combatant.cooldown.is_none() {
-                            if let Some(eq) = &entity.equipment {
-                                if let Some(weapon_key) = eq.weapon {
-                                    let motion = martial::select_attack_motion(
-                                        skill,
-                                        state.tick,
-                                        *attacker,
-                                        *target,
-                                        attacker_pos.z - target_pos.z,
-                                    );
-                                    combatant.attack = Some(AttackState::for_melee(
-                                        *target, weapon_key, motion, skill,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            TacticalCommand::SetFacing { entity, angle } => {
-                if let Some(e) = state.entities.get_mut(*entity) {
-                    if let Some(combatant) = &mut e.combatant {
-                        combatant.facing = *angle;
-                    }
-                }
-            }
-            TacticalCommand::Retreat { entity, toward } => {
-                if let Some(e) = state.entities.get_mut(*entity) {
-                    if let Some(mobile) = &mut e.mobile {
-                        mobile.waypoints = vec![*toward];
-                    }
-                }
-            }
-            TacticalCommand::Hold { entity } => {
-                if let Some(e) = state.entities.get_mut(*entity) {
-                    if let Some(mobile) = &mut e.mobile {
-                        mobile.waypoints.clear();
-                    }
-                }
-            }
-            TacticalCommand::SetFormation { stack, formation } => {
-                if let Some(s) = state.stacks.iter_mut().find(|s| s.id == *stack) {
-                    s.formation = *formation;
-                }
-            }
-            TacticalCommand::Block { .. } => {
-                // Block not yet wired to a component.
-            }
-        }
+        let _ = apply_tactical_command(state, cmd);
     }
 }
 

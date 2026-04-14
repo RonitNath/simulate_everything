@@ -1,17 +1,21 @@
-/// V3 agent architecture: three-layer dispatch (Strategy, Operations, Tactical).
-///
-/// Strategy runs every ~50 game-seconds, Operations every ~5, Tactical every
-/// tick for stacks near enemies. Personality differentiates only at the Strategy
-/// layer. Operations and Tactical are shared implementations used by all agents.
-use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
-
 use super::formation::FormationType;
 use super::perception::StrategicView;
 use super::spatial::Vec3;
 use super::state::{GameState, StackId};
 use crate::v2::hex::Axial;
 use crate::v2::state::EntityKey;
+/// V3 agent architecture: three-layer dispatch (Strategy, Operations, Tactical).
+///
+/// Strategy runs every ~50 game-seconds, Operations every ~5, Tactical every
+/// tick for stacks near enemies. Personality differentiates only at the Strategy
+/// layer. Operations and Tactical are shared implementations used by all agents.
+use serde::{Deserialize, Serialize};
+
+pub use super::commands::{
+    CommandApplySummary, CommandStatus, apply_agent_output, apply_operational_command,
+    apply_tactical_command, validate_operational_command as validate_operational,
+    validate_tactical_command as validate_tactical,
+};
 
 // ---------------------------------------------------------------------------
 // Enums shared across layers
@@ -66,11 +70,22 @@ pub enum EquipmentType {
 /// Task assigned to an individual entity by the operations layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EntityTask {
-    Farm { field: EntityKey },
-    Build { site: EntityKey },
-    Craft { workshop: EntityKey, item: EquipmentType },
-    Patrol { waypoints: Vec<Vec3> },
-    Garrison { position: Vec3 },
+    Farm {
+        field: EntityKey,
+    },
+    Build {
+        site: EntityKey,
+    },
+    Craft {
+        workshop: EntityKey,
+        item: EquipmentType,
+    },
+    Patrol {
+        waypoints: Vec<Vec3>,
+    },
+    Garrison {
+        position: Vec3,
+    },
     Train,
     Idle,
 }
@@ -84,33 +99,80 @@ pub enum EntityTask {
 pub enum StrategicDirective {
     SetPosture(Posture),
     SetEconomicFocus(EconomicFocus),
-    PrioritizeRegion { center: Axial, priority: f32 },
-    RequestStack { archetype: StackArchetype, region: Axial },
-    SetExpansionTarget { hex: Axial },
+    PrioritizeRegion {
+        center: Axial,
+        priority: f32,
+    },
+    RequestStack {
+        archetype: StackArchetype,
+        region: Axial,
+    },
+    SetExpansionTarget {
+        hex: Axial,
+    },
 }
 
 /// Concrete entity-level orders from the operations layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OperationalCommand {
-    AssignTask { entity: EntityKey, task: EntityTask },
-    FormStack { entities: Vec<EntityKey>, archetype: StackArchetype },
-    RouteStack { stack: StackId, waypoints: Vec<Vec3> },
-    DisbandStack { stack: StackId },
-    ProduceEquipment { workshop: EntityKey, item_type: EquipmentType },
-    EquipEntity { entity: EntityKey, equipment: EntityKey },
-    EstablishSupplyRoute { from: Axial, to: Axial },
-    FoundSettlement { entity: EntityKey, target: Axial },
+    AssignTask {
+        entity: EntityKey,
+        task: EntityTask,
+    },
+    FormStack {
+        entities: Vec<EntityKey>,
+        archetype: StackArchetype,
+    },
+    RouteStack {
+        stack: StackId,
+        waypoints: Vec<Vec3>,
+    },
+    DisbandStack {
+        stack: StackId,
+    },
+    ProduceEquipment {
+        workshop: EntityKey,
+        item_type: EquipmentType,
+    },
+    EquipEntity {
+        entity: EntityKey,
+        equipment: EntityKey,
+    },
+    EstablishSupplyRoute {
+        from: Axial,
+        to: Axial,
+    },
+    FoundSettlement {
+        entity: EntityKey,
+        target: Axial,
+    },
 }
 
 /// Per-tick combat orders for entities near enemies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TacticalCommand {
-    Attack { attacker: EntityKey, target: EntityKey },
-    SetFacing { entity: EntityKey, angle: f32 },
-    Block { entity: EntityKey },
-    Retreat { entity: EntityKey, toward: Vec3 },
-    Hold { entity: EntityKey },
-    SetFormation { stack: StackId, formation: FormationType },
+    Attack {
+        attacker: EntityKey,
+        target: EntityKey,
+    },
+    SetFacing {
+        entity: EntityKey,
+        angle: f32,
+    },
+    Block {
+        entity: EntityKey,
+    },
+    Retreat {
+        entity: EntityKey,
+        toward: Vec3,
+    },
+    Hold {
+        entity: EntityKey,
+    },
+    SetFormation {
+        stack: StackId,
+        formation: FormationType,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -144,14 +206,30 @@ pub enum AgentTrace {
 impl std::fmt::Display for AgentTrace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AgentTrace::Strategy { posture, trigger, .. } => {
+            AgentTrace::Strategy {
+                posture, trigger, ..
+            } => {
                 write!(f, "Strategy: {:?} ({})", posture, trigger)
             }
-            AgentTrace::Operations { task_type, target, reason, .. } => {
+            AgentTrace::Operations {
+                task_type,
+                target,
+                reason,
+                ..
+            } => {
                 write!(f, "Operations: {} → {} ({})", task_type, target, reason)
             }
-            AgentTrace::Tactical { stack, action, target_stack, .. } => {
-                write!(f, "Tactical: stack {} → {} target={:?}", stack, action, target_stack)
+            AgentTrace::Tactical {
+                stack,
+                action,
+                target_stack,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Tactical: stack {} → {} target={:?}",
+                    stack, action, target_stack
+                )
             }
         }
     }
@@ -257,35 +335,36 @@ impl LayeredAgent {
 
         // Operations layer — runs at operations cadence.
         if tick % self.operations_cadence == 0 {
-            let commands = self.operations.execute(
-                state,
-                &self.active_directives,
-                self.player,
-            );
+            let commands = self
+                .operations
+                .execute(state, &self.active_directives, self.player);
 
             // Emit operations traces.
             for cmd in &commands {
                 let (task_type, target, reason) = match cmd {
-                    OperationalCommand::AssignTask { entity, task } => {
-                        (format!("{:?}", std::mem::discriminant(task)),
-                         format!("entity {:?}", entity),
-                         "task assignment".to_string())
-                    }
-                    OperationalCommand::FormStack { entities, archetype } => {
-                        ("FormStack".to_string(),
-                         format!("{} entities as {:?}", entities.len(), archetype),
-                         "stack formation".to_string())
-                    }
-                    OperationalCommand::RouteStack { stack, waypoints } => {
-                        ("RouteStack".to_string(),
-                         format!("stack {:?}, {} waypoints", stack, waypoints.len()),
-                         "stack routing".to_string())
-                    }
-                    OperationalCommand::DisbandStack { stack } => {
-                        ("DisbandStack".to_string(),
-                         format!("stack {:?}", stack),
-                         "stack disbanding".to_string())
-                    }
+                    OperationalCommand::AssignTask { entity, task } => (
+                        format!("{:?}", std::mem::discriminant(task)),
+                        format!("entity {:?}", entity),
+                        "task assignment".to_string(),
+                    ),
+                    OperationalCommand::FormStack {
+                        entities,
+                        archetype,
+                    } => (
+                        "FormStack".to_string(),
+                        format!("{} entities as {:?}", entities.len(), archetype),
+                        "stack formation".to_string(),
+                    ),
+                    OperationalCommand::RouteStack { stack, waypoints } => (
+                        "RouteStack".to_string(),
+                        format!("stack {:?}, {} waypoints", stack, waypoints.len()),
+                        "stack routing".to_string(),
+                    ),
+                    OperationalCommand::DisbandStack { stack } => (
+                        "DisbandStack".to_string(),
+                        format!("stack {:?}", stack),
+                        "stack disbanding".to_string(),
+                    ),
                     _ => ("Other".to_string(), format!("{:?}", cmd), String::new()),
                 };
                 output.traces.push(AgentTrace::Operations {
@@ -407,117 +486,17 @@ fn stack_near_enemy(state: &GameState, stack: &super::state::Stack, radius: f32)
 }
 
 // ---------------------------------------------------------------------------
-// Command validation
-// ---------------------------------------------------------------------------
-
-/// Validate and execute operational commands. Invalid commands (referencing
-/// deleted entities, etc.) are dropped with a warning.
-pub fn validate_operational(cmd: &OperationalCommand, state: &GameState) -> bool {
-    match cmd {
-        OperationalCommand::AssignTask { entity, .. } => {
-            if state.entities.get(*entity).is_none() {
-                tracing::warn!("AssignTask: entity {:?} not found, dropping", entity);
-                return false;
-            }
-        }
-        OperationalCommand::FormStack { entities, .. } => {
-            for e in entities {
-                if state.entities.get(*e).is_none() {
-                    tracing::warn!("FormStack: entity {:?} not found, dropping", e);
-                    return false;
-                }
-            }
-        }
-        OperationalCommand::RouteStack { stack, .. } => {
-            if !state.stacks.iter().any(|s| s.id == *stack) {
-                tracing::warn!("RouteStack: stack {:?} not found, dropping", stack);
-                return false;
-            }
-        }
-        OperationalCommand::DisbandStack { stack } => {
-            if !state.stacks.iter().any(|s| s.id == *stack) {
-                tracing::warn!("DisbandStack: stack {:?} not found, dropping", stack);
-                return false;
-            }
-        }
-        OperationalCommand::ProduceEquipment { workshop, .. } => {
-            if state.entities.get(*workshop).is_none() {
-                tracing::warn!("ProduceEquipment: workshop {:?} not found, dropping", workshop);
-                return false;
-            }
-        }
-        OperationalCommand::EquipEntity { entity, equipment } => {
-            if state.entities.get(*entity).is_none() {
-                tracing::warn!("EquipEntity: entity {:?} not found, dropping", entity);
-                return false;
-            }
-            if state.entities.get(*equipment).is_none() {
-                tracing::warn!("EquipEntity: equipment {:?} not found, dropping", equipment);
-                return false;
-            }
-        }
-        OperationalCommand::EstablishSupplyRoute { .. } => {}
-        OperationalCommand::FoundSettlement { entity, .. } => {
-            if state.entities.get(*entity).is_none() {
-                tracing::warn!("FoundSettlement: entity {:?} not found, dropping", entity);
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// Validate a tactical command. Invalid commands are dropped with a warning.
-pub fn validate_tactical(cmd: &TacticalCommand, state: &GameState) -> bool {
-    match cmd {
-        TacticalCommand::Attack { attacker, target } => {
-            if state.entities.get(*attacker).is_none() {
-                tracing::warn!("Attack: attacker {:?} not found, dropping", attacker);
-                return false;
-            }
-            if state.entities.get(*target).is_none() {
-                tracing::warn!("Attack: target {:?} not found, dropping", target);
-                return false;
-            }
-        }
-        TacticalCommand::SetFacing { entity, .. }
-        | TacticalCommand::Block { entity }
-        | TacticalCommand::Hold { entity } => {
-            if state.entities.get(*entity).is_none() {
-                tracing::warn!("Tactical: entity {:?} not found, dropping", entity);
-                return false;
-            }
-        }
-        TacticalCommand::Retreat { entity, .. } => {
-            if state.entities.get(*entity).is_none() {
-                tracing::warn!("Retreat: entity {:?} not found, dropping", entity);
-                return false;
-            }
-        }
-        TacticalCommand::SetFormation { stack, .. } => {
-            if !state.stacks.iter().any(|s| s.id == *stack) {
-                tracing::warn!("SetFormation: stack {:?} not found, dropping", stack);
-                return false;
-            }
-        }
-    }
-    true
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::spatial::GeoMaterial;
-    use super::super::state::{
-        Combatant, Entity, EntityBuilder, GameState, Person, Role, Stack, StackId,
-    };
     use super::super::movement::Mobile;
+    use super::super::spatial::GeoMaterial;
     use super::super::spatial::{Heightfield, Vec3};
-    use crate::v2::hex::Axial;
+    use super::super::state::{Combatant, EntityBuilder, GameState, Person, Role, Stack};
+    use super::*;
+    use smallvec::SmallVec;
 
     fn test_state() -> GameState {
         let hf = Heightfield::new(10, 10, 0.0, GeoMaterial::Soil);
@@ -572,8 +551,8 @@ mod tests {
             Box::new(StubOperations),
             Box::new(StubTactical),
             player,
-            50,  // strategy every 50 ticks
-            5,   // operations every 5 ticks
+            50, // strategy every 50 ticks
+            5,  // operations every 5 ticks
         )
     }
 
@@ -584,7 +563,10 @@ mod tests {
             EntityBuilder::new()
                 .pos(pos)
                 .owner(owner)
-                .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new()),
         )
@@ -625,7 +607,10 @@ mod tests {
             if t % 5 == 0 {
                 assert!(output.operations_ran, "operations should run at tick {t}");
             } else {
-                assert!(!output.operations_ran, "operations should NOT run at tick {t}");
+                assert!(
+                    !output.operations_ran,
+                    "operations should NOT run at tick {t}"
+                );
             }
         }
     }
@@ -670,7 +655,10 @@ mod tests {
         let mut agent = make_agent(0);
         let output = agent.tick(&state);
         assert_eq!(output.tactical_stacks, 1, "should run tactical for 1 stack");
-        assert!(!output.tactical_commands.is_empty(), "should emit tactical commands");
+        assert!(
+            !output.tactical_commands.is_empty(),
+            "should emit tactical commands"
+        );
     }
 
     #[test]
@@ -694,7 +682,10 @@ mod tests {
 
         let mut agent = make_agent(0);
         let output = agent.tick(&state);
-        assert_eq!(output.tactical_stacks, 0, "should not run tactical for distant stack");
+        assert_eq!(
+            output.tactical_stacks, 0,
+            "should not run tactical for distant stack"
+        );
     }
 
     #[test]
@@ -703,7 +694,7 @@ mod tests {
         let mut state = GameState::new(30, 30, 2, hf);
         state.tick = 1;
 
-        let p0 = spawn_person(&mut state, Vec3::new(100.0, 100.0, 0.0), 0);
+        let _p0 = spawn_person(&mut state, Vec3::new(100.0, 100.0, 0.0), 0);
         let p1 = spawn_person(&mut state, Vec3::new(200.0, 100.0, 0.0), 1);
 
         // Stack belongs to player 1.
@@ -722,34 +713,8 @@ mod tests {
     }
 
     #[test]
-    fn validate_operational_drops_missing_entity() {
-        let state = test_state();
-        use slotmap::KeyData;
-        let fake_key = EntityKey::from(KeyData::from_ffi(0xDEAD_BEEF_0000_0001));
-
-        let cmd = OperationalCommand::AssignTask {
-            entity: fake_key,
-            task: EntityTask::Idle,
-        };
-        assert!(!validate_operational(&cmd, &state));
-    }
-
-    #[test]
-    fn validate_tactical_drops_missing_attacker() {
-        let state = test_state();
-        use slotmap::KeyData;
-        let fake_key = EntityKey::from(KeyData::from_ffi(0xDEAD_BEEF_0000_0001));
-
-        let cmd = TacticalCommand::Attack {
-            attacker: fake_key,
-            target: fake_key,
-        };
-        assert!(!validate_tactical(&cmd, &state));
-    }
-
-    #[test]
     fn strategy_updates_directives() {
-        let mut state = test_state();
+        let state = test_state();
         let mut agent = make_agent(0);
 
         // Tick 0: strategy runs, sets directives.
