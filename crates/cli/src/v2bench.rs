@@ -317,6 +317,7 @@ impl V2MatchupStats {
 
 const LONG_ENGAGEMENT_THRESHOLD_TICKS: u64 = 100;
 const LONG_DUEL_SAMPLE_RATIO: f64 = 0.8;
+const PERSISTENT_ADJACENCY_THRESHOLD_TICKS: u64 = 50;
 
 #[derive(Debug, Clone)]
 struct ActiveEngagement {
@@ -345,6 +346,29 @@ struct EngagementAnalysis {
     isolated_sample_count: u64,
     isolated_duel: bool,
     approx_location: Option<(i32, i32)>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveAdjacency {
+    unit_a: u32,
+    unit_b: u32,
+    unit_a_owner: u8,
+    unit_b_owner: u8,
+    start_tick: u64,
+    last_tick: u64,
+    last_location: (i32, i32),
+}
+
+#[derive(Debug, Clone)]
+struct AdjacencyInterval {
+    unit_a: u32,
+    unit_b: u32,
+    unit_a_owner: u8,
+    unit_b_owner: u8,
+    start_tick: u64,
+    end_tick: u64,
+    sample_count: u64,
+    approx_location: (i32, i32),
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +531,19 @@ fn canonical_pair(unit_a: u32, unit_b: u32) -> (u32, u32) {
     }
 }
 
+fn canonical_pair_with_owners(
+    unit_a: u32,
+    unit_b: u32,
+    unit_a_owner: u8,
+    unit_b_owner: u8,
+) -> (u32, u32, u8, u8) {
+    if unit_a <= unit_b {
+        (unit_a, unit_b, unit_a_owner, unit_b_owner)
+    } else {
+        (unit_b, unit_a, unit_b_owner, unit_a_owner)
+    }
+}
+
 fn end_reason_label(reason: simulate_everything_engine::v2::gamelog::EngagementEndReason) -> &'static str {
     use simulate_everything_engine::v2::gamelog::EngagementEndReason;
 
@@ -649,6 +686,100 @@ fn analyze_engagements(
         .collect()
 }
 
+fn analyze_unengaged_adjacencies(
+    log: &simulate_everything_engine::v2::gamelog::GameLog,
+) -> Vec<AdjacencyInterval> {
+    use simulate_everything_engine::v2::hex::{self, Axial};
+
+    let mut grouped: HashMap<u64, Vec<&simulate_everything_engine::v2::gamelog::UnitPositionSample>> =
+        HashMap::new();
+    for sample in &log.unit_positions {
+        grouped.entry(sample.tick).or_default().push(sample);
+    }
+
+    let mut ticks: Vec<u64> = grouped.keys().copied().collect();
+    ticks.sort_unstable();
+
+    let mut active: HashMap<(u32, u32), ActiveAdjacency> = HashMap::new();
+    let mut intervals = Vec::new();
+
+    for tick in ticks {
+        let samples = &grouped[&tick];
+        let mut current: HashMap<(u32, u32), (u8, u8, (i32, i32))> = HashMap::new();
+
+        for (idx, a) in samples.iter().enumerate() {
+            for b in samples.iter().skip(idx + 1) {
+                if a.player == b.player || a.engaged || b.engaged {
+                    continue;
+                }
+                if a.engagement_count > 0 || b.engagement_count > 0 {
+                    continue;
+                }
+                if hex::distance(Axial::new(a.q, a.r), Axial::new(b.q, b.r)) != 1 {
+                    continue;
+                }
+                let (unit_a, unit_b, unit_a_owner, unit_b_owner) =
+                    canonical_pair_with_owners(a.unit_id, b.unit_id, a.player, b.player);
+                current.insert((unit_a, unit_b), (unit_a_owner, unit_b_owner, (a.q, a.r)));
+            }
+        }
+
+        let prior_keys: Vec<_> = active.keys().copied().collect();
+        for key in prior_keys {
+            if !current.contains_key(&key) {
+                if let Some(finished) = active.remove(&key) {
+                    intervals.push(AdjacencyInterval {
+                        unit_a: finished.unit_a,
+                        unit_b: finished.unit_b,
+                        unit_a_owner: finished.unit_a_owner,
+                        unit_b_owner: finished.unit_b_owner,
+                        start_tick: finished.start_tick,
+                        end_tick: finished.last_tick,
+                        sample_count: ((finished.last_tick - finished.start_tick) / 10) + 1,
+                        approx_location: finished.last_location,
+                    });
+                }
+            }
+        }
+
+        for (key, (unit_a_owner, unit_b_owner, location)) in current {
+            if let Some(existing) = active.get_mut(&key) {
+                existing.last_tick = tick;
+                existing.last_location = location;
+            } else {
+                active.insert(
+                    key,
+                    ActiveAdjacency {
+                        unit_a: key.0,
+                        unit_b: key.1,
+                        unit_a_owner,
+                        unit_b_owner,
+                        start_tick: tick,
+                        last_tick: tick,
+                        last_location: location,
+                    },
+                );
+            }
+        }
+    }
+
+    intervals.extend(active.into_values().map(|open| AdjacencyInterval {
+        unit_a: open.unit_a,
+        unit_b: open.unit_b,
+        unit_a_owner: open.unit_a_owner,
+        unit_b_owner: open.unit_b_owner,
+        start_tick: open.start_tick,
+        end_tick: open.last_tick,
+        sample_count: ((open.last_tick - open.start_tick) / 10) + 1,
+        approx_location: open.last_location,
+    }));
+
+    intervals.sort_by_key(|interval| {
+        std::cmp::Reverse(interval.end_tick.saturating_sub(interval.start_tick))
+    });
+    intervals
+}
+
 // ---------------------------------------------------------------------------
 // Diagnose mode: 5 automated behavioral health checks
 // ---------------------------------------------------------------------------
@@ -677,6 +808,8 @@ fn run_diagnose(
     let mut long_engagement_counts: Vec<f64> = Vec::new();
     let mut isolated_long_duel_counts: Vec<f64> = Vec::new();
     let mut longest_engagement_ticks: Vec<u64> = Vec::new();
+    let mut persistent_adjacency_counts: Vec<f64> = Vec::new();
+    let mut longest_persistent_adjacency_ticks: Vec<u64> = Vec::new();
 
     for &seed in seeds {
         let mut state = v2_mapgen::generate(&V2MapConfig {
@@ -733,6 +866,22 @@ fn run_diagnose(
             {
                 longest_engagement_ticks.push(longest);
             }
+            let standoffs = analyze_unengaged_adjacencies(&log);
+            let persistent_standoffs: Vec<_> = standoffs
+                .iter()
+                .filter(|interval| {
+                    interval.end_tick.saturating_sub(interval.start_tick)
+                        >= PERSISTENT_ADJACENCY_THRESHOLD_TICKS
+                })
+                .collect();
+            persistent_adjacency_counts.push(persistent_standoffs.len() as f64);
+            if let Some(longest) = standoffs
+                .iter()
+                .map(|interval| interval.end_tick.saturating_sub(interval.start_tick))
+                .max()
+            {
+                longest_persistent_adjacency_ticks.push(longest);
+            }
         }
     }
 
@@ -758,6 +907,8 @@ fn run_diagnose(
     let long_engagement_avg = avg(&long_engagement_counts);
     let isolated_long_duel_avg = avg(&isolated_long_duel_counts);
     let longest_engagement_avg = avg_tick(&longest_engagement_ticks);
+    let persistent_adjacency_avg = avg(&persistent_adjacency_counts);
+    let longest_persistent_adjacency_avg = avg_tick(&longest_persistent_adjacency_ticks);
 
     eprintln!("--- CHECK 1: Spatial Diversity (target >= 4.0 distinct hexes) ---");
     match spatial_avg {
@@ -818,6 +969,21 @@ fn run_diagnose(
             );
         }
         _ => eprintln!("  no engagement duration data"),
+    }
+
+    eprintln!(
+        "\n--- CHECK 6: Persistent Enemy Adjacency (target 0 standoffs >= {} ticks) ---",
+        PERSISTENT_ADJACENCY_THRESHOLD_TICKS
+    );
+    match (persistent_adjacency_avg, longest_persistent_adjacency_avg) {
+        (Some(standoff_avg), Some(longest_avg)) => {
+            let status = if standoff_avg == 0.0 { "PASS" } else { "FAIL" };
+            eprintln!(
+                "  avg persistent standoffs/game: {:.2}, avg longest duration: {:.1} ticks  [{}]",
+                standoff_avg, longest_avg, status
+            );
+        }
+        _ => eprintln!("  no sampled adjacency data"),
     }
 
     eprintln!();
@@ -1034,6 +1200,32 @@ fn print_long_engagements(analyses: &[EngagementAnalysis]) {
     }
 }
 
+fn print_persistent_adjacencies(intervals: &[AdjacencyInterval]) {
+    println!(
+        "\n--- LONGEST UNENGAGED ENEMY ADJACENCIES (>= {} ticks suspicious) ---",
+        PERSISTENT_ADJACENCY_THRESHOLD_TICKS
+    );
+    if intervals.is_empty() {
+        println!("no unengaged enemy adjacencies observed");
+        return;
+    }
+
+    for interval in intervals.iter().take(5) {
+        let duration = interval.end_tick.saturating_sub(interval.start_tick);
+        println!(
+            "P{}:{} next to P{}:{} for {} ticks at ({}, {}) [samples={}]",
+            interval.unit_a_owner,
+            interval.unit_a,
+            interval.unit_b_owner,
+            interval.unit_b,
+            duration,
+            interval.approx_location.0,
+            interval.approx_location.1,
+            interval.sample_count,
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Postmortem mode (single game, full analysis)
 // ---------------------------------------------------------------------------
@@ -1070,8 +1262,10 @@ fn run_postmortem_game(
     if let Some(log) = state.game_log.take() {
         let summary = log.summarize(&names, winner, state.tick, timed_out);
         let analyses = analyze_engagements(&log, state.tick);
+        let adjacencies = analyze_unengaged_adjacencies(&log);
         print!("{}", summary.render());
         print_long_engagements(&analyses);
+        print_persistent_adjacencies(&adjacencies);
     }
 }
 
@@ -1969,6 +2163,72 @@ mod tests {
         assert_eq!(analysis.interval.end_tick, 120);
         assert_eq!(analysis.interval.end_reason, None);
         assert!(!analysis.isolated_duel);
+    }
+
+    #[test]
+    fn analyze_unengaged_adjacencies_reconstructs_persistent_standoff() {
+        let mut log = GameLog::new();
+        for tick in [340_u64, 350, 360, 370, 380, 390, 400] {
+            log.unit_positions.push(UnitPositionSample {
+                tick,
+                player: 0,
+                unit_id: 20,
+                q: 2,
+                r: 13,
+                strength: 80.0,
+                engaged: false,
+                engagement_count: 0,
+            });
+            log.unit_positions.push(UnitPositionSample {
+                tick,
+                player: 1,
+                unit_id: 13,
+                q: 1,
+                r: 14,
+                strength: 70.0,
+                engaged: false,
+                engagement_count: 0,
+            });
+        }
+
+        let intervals = analyze_unengaged_adjacencies(&log);
+        assert_eq!(intervals.len(), 1);
+        let interval = &intervals[0];
+        assert_eq!(interval.unit_a, 13);
+        assert_eq!(interval.unit_b, 20);
+        assert_eq!(interval.start_tick, 340);
+        assert_eq!(interval.end_tick, 400);
+        assert_eq!(interval.sample_count, 7);
+    }
+
+    #[test]
+    fn analyze_unengaged_adjacencies_excludes_engaged_pairs() {
+        let mut log = GameLog::new();
+        for tick in [100_u64, 110, 120] {
+            log.unit_positions.push(UnitPositionSample {
+                tick,
+                player: 0,
+                unit_id: 1,
+                q: 5,
+                r: 6,
+                strength: 80.0,
+                engaged: true,
+                engagement_count: 1,
+            });
+            log.unit_positions.push(UnitPositionSample {
+                tick,
+                player: 1,
+                unit_id: 2,
+                q: 6,
+                r: 6,
+                strength: 75.0,
+                engaged: true,
+                engagement_count: 1,
+            });
+        }
+
+        let intervals = analyze_unengaged_adjacencies(&log);
+        assert!(intervals.is_empty());
     }
 }
 

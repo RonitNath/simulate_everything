@@ -93,6 +93,40 @@ export const slider = style({
   accentColor: vars.color.players.p0,
 });
 
+export const scrubberWrap = style({
+  position: "relative",
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  minWidth: 0,
+});
+
+export const scrubberOverlay = style({
+  position: "absolute",
+  left: 0,
+  right: 0,
+  top: "50%",
+  height: "12px",
+  transform: "translateY(-50%)",
+  pointerEvents: "none",
+});
+
+export const scrubberBand = style({
+  position: "absolute",
+  top: 0,
+  height: "100%",
+  borderRadius: "999px",
+});
+
+export const scrubberMarker = style({
+  position: "absolute",
+  top: "-2px",
+  width: "2px",
+  height: "16px",
+  transform: "translateX(-1px)",
+  borderRadius: "999px",
+});
+
 export const statsPanel = style({
   flex: 1,
   overflow: "auto",

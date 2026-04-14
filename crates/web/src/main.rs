@@ -685,6 +685,7 @@ async fn api_v2_rr_status(State(state): State<Arc<AppState>>) -> impl IntoRespon
         "capturable_start_tick": review.capturable_start_tick,
         "capturable_end_tick": review.capturable_end_tick,
         "pending_capture_count": review.pending_capture_count,
+        "active_capture": review.active_capture,
         "review_dir": review.review_dir,
     }))
 }
@@ -694,6 +695,52 @@ async fn api_v2_rr_flag(
     axum::Json(body): axum::Json<V2RrFlagRequest>,
 ) -> impl IntoResponse {
     match state.v2_rr.flag_tick(body.game_number, body.tick).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "summary": result.summary,
+                "capturable_start_tick": result.capturable_start_tick,
+                "capturable_end_tick": result.capturable_end_tick,
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v2_rr_capture_start(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V2RrFlagRequest>,
+) -> impl IntoResponse {
+    match state.v2_rr.start_capture(body.game_number, body.tick).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "summary": result.summary,
+                "capturable_start_tick": result.capturable_start_tick,
+                "capturable_end_tick": result.capturable_end_tick,
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v2_rr_capture_stop(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V2RrFlagRequest>,
+) -> impl IntoResponse {
+    match state.v2_rr.stop_capture(body.game_number, body.tick).await {
         Ok(result) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -861,6 +908,8 @@ async fn main() {
         .route("/api/v2/rr/resume", axum::routing::post(api_v2_rr_resume))
         .route("/api/v2/rr/reset", axum::routing::post(api_v2_rr_reset))
         .route("/api/v2/rr/flags", axum::routing::post(api_v2_rr_flag))
+        .route("/api/v2/rr/capture/start", axum::routing::post(api_v2_rr_capture_start))
+        .route("/api/v2/rr/capture/stop", axum::routing::post(api_v2_rr_capture_stop))
         .route("/api/v2/rr/reviews", get(api_v2_rr_reviews))
         .route(
             "/api/v2/rr/reviews/{id}",

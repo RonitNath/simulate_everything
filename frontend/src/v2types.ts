@@ -175,9 +175,12 @@ export interface V2ReviewLogWindow {
 export interface V2ReviewBundleSummary {
   id: string;
   created_at: number;
+  kind: "point" | "segment";
   game_number: number;
   seed: number;
   agent_names: string[];
+  start_tick: number;
+  stop_tick: number | null;
   flagged_ticks: number[];
   range_start: number;
   range_end: number;
@@ -190,9 +193,12 @@ export interface V2ReviewBundleSummary {
 export interface V2ReviewBundle {
   id: string;
   created_at: number;
+  kind: "point" | "segment";
   game_number: number;
   seed: number;
   agent_names: string[];
+  start_tick: number;
+  stop_tick: number | null;
   flagged_ticks: number[];
   range_start: number;
   range_end: number;
@@ -225,11 +231,34 @@ export interface BoardFrameData {
   tick: number;
   units: V2UnitSnapshot[];
   territory: Array<number | null>;
+  stockpileOwners: Array<number | null>;
   roads: number[];
   depots: boolean[];
   population: V2PopSnapshot[];
   convoys: V2ConvoySnapshot[];
   settlements: V2Settlement[];
+}
+
+export interface BoardHexHover {
+  index: number;
+  q: number;
+  r: number;
+  row: number;
+  col: number;
+  centerX: number;
+  centerY: number;
+}
+
+export interface V2ReviewStatus {
+  paused: boolean;
+  tick_ms: number;
+  game_number: number | null;
+  current_tick: number | null;
+  capturable_start_tick: number | null;
+  capturable_end_tick: number | null;
+  pending_capture_count: number;
+  active_capture: V2ReviewBundleSummary | null;
+  review_dir: string;
 }
 
 export function normalizeGameInfoStatic(g: V2GameInfo): BoardStaticData {
@@ -265,6 +294,7 @@ export function normalizeWsFrame(f: V2Frame): BoardFrameData {
     tick: f.tick,
     units: f.units,
     territory,
+    stockpileOwners: territory,
     roads,
     depots: f.depots ?? Array.from({ length: territory.length }, () => false),
     population: f.population ?? [],
@@ -278,6 +308,7 @@ export function normalizeReplayFrame(f: V2ReplayFrame): BoardFrameData {
     tick: f.tick,
     units: f.units,
     territory: f.cells.map((c) => c.stockpile_owner),
+    stockpileOwners: f.cells.map((c) => c.stockpile_owner),
     roads: f.cells.map((c) => c.road_level),
     depots: f.cells.map((c) => c.has_depot),
     population: f.population,
