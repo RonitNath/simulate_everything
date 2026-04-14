@@ -1,0 +1,143 @@
+import {
+  Component,
+  Show,
+  batch,
+  createSignal,
+  onCleanup,
+  onMount,
+} from "solid-js";
+import type {
+  V3Init,
+  V3Snapshot,
+  SpectatorEntityInfo,
+} from "./v3types";
+import type { BiomeName } from "./v2types";
+import V3HexCanvas from "./v3/HexCanvas";
+import type { V3RenderLayer } from "./v3/LayerToggles";
+import * as css from "./styles/v3.css";
+
+const V3DrillApp: Component = () => {
+  const [initData, setInitData] = createSignal<V3Init | null>(null);
+  const [frame, setFrame] = createSignal<V3Snapshot | null>(null);
+  const [status, setStatus] = createSignal("Connecting...");
+  const [settled, setSettled] = createSignal(true);
+  const [layers] = createSignal<Set<V3RenderLayer>>(new Set());
+
+  // Minimal biome mapping — flat drill pad.
+  const biomes = () => {
+    const init = initData();
+    if (!init) return [];
+    const count = init.width * init.height;
+    return Array.from({ length: count }, () => "grassland" as BiomeName);
+  };
+
+  const heights = () => {
+    const init = initData();
+    return init?.height_map ?? [];
+  };
+
+  const rivers = () => {
+    const init = initData();
+    if (!init) return [];
+    return Array.from({ length: init.width * init.height }, () => false);
+  };
+
+  onMount(() => {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${location.host}/ws/v3/drill`);
+
+    ws.onopen = () => setStatus("Connected");
+
+    ws.onmessage = (ev) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const msg: any = JSON.parse(ev.data);
+
+      if ("v3_init" in msg) {
+        batch(() => {
+          setInitData(msg.v3_init.init);
+          setFrame(null);
+          setStatus(`Init: ${msg.v3_init.init.width}x${msg.v3_init.init.height}`);
+        });
+      } else if ("v3_snapshot" in msg) {
+        setFrame(msg.v3_snapshot.snapshot);
+        setSettled(true);
+      } else if ("v3_snapshot_delta" in msg) {
+        const delta = msg.v3_snapshot_delta.delta;
+        setFrame((prev) => {
+          if (!prev) return null;
+          // Apply delta to produce new snapshot.
+          const entities: SpectatorEntityInfo[] = [...prev.entities];
+
+          // Remove.
+          const removedSet = new Set(delta.entities_removed);
+          const kept = entities.filter((e) => !removedSet.has(e.id));
+
+          // Update.
+          for (const u of delta.entities_updated) {
+            const e = kept.find((e) => e.id === u.id);
+            if (!e) continue;
+            if (u.x !== undefined) e.x = u.x;
+            if (u.y !== undefined) e.y = u.y;
+            if (u.z !== undefined) e.z = u.z;
+            if (u.hex_q !== undefined) e.hex_q = u.hex_q;
+            if (u.hex_r !== undefined) e.hex_r = u.hex_r;
+            if (u.facing !== undefined) e.facing = u.facing;
+            if (u.blood !== undefined) e.blood = u.blood;
+            if (u.stamina !== undefined) e.stamina = u.stamina;
+            if (u.wounds !== undefined) e.wounds = u.wounds;
+            if (u.attack_phase !== undefined) e.attack_phase = u.attack_phase ?? undefined;
+            if (u.attack_motion !== undefined) e.attack_motion = u.attack_motion ?? undefined;
+            if (u.weapon_angle !== undefined) e.weapon_angle = u.weapon_angle ?? undefined;
+            if (u.attack_progress !== undefined) e.attack_progress = u.attack_progress ?? undefined;
+          }
+
+          // Appeared.
+          kept.push(...delta.entities_appeared);
+
+          return {
+            ...prev,
+            tick: delta.tick,
+            dt: delta.dt,
+            entities: kept,
+            projectiles: prev.projectiles, // drill doesn't use projectiles yet
+            stacks: prev.stacks,
+          };
+        });
+        setSettled(true);
+      }
+    };
+
+    ws.onclose = () => setStatus("Disconnected");
+    ws.onerror = () => setStatus("WS error");
+
+    onCleanup(() => ws.close());
+  });
+
+  return (
+    <div class={css.v3App}>
+      <div style="padding: 8px; font-family: monospace; font-size: 13px;">
+        <span style="color: #888;">Drill Pad</span>
+        {" | "}
+        <span>{status()}</span>
+        {" | "}
+        <span style={`color: ${settled() ? "#4c4" : "#cc4"}`}>
+          {settled() ? "READY" : "SETTLING"}
+        </span>
+      </div>
+      <Show when={initData() != null && frame() != null}>
+        <V3HexCanvas
+          width={800}
+          height={500}
+          biomes={biomes()}
+          heights={heights()}
+          rivers={rivers()}
+          frame={frame()}
+          layers={layers()}
+          tickIntervalMs={50}
+        />
+      </Show>
+    </div>
+  );
+};
+
+export default V3DrillApp;

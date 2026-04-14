@@ -6,6 +6,7 @@ import V2App from "./V2App";
 import V2SimApp from "./V2SimApp";
 import V3App from "./V3App";
 import V3ReplayApp from "./V3ReplayApp";
+import V3DrillApp from "./V3DrillApp";
 
 const root = document.getElementById("app")!;
 const mode = (window as any).__MODE__;
@@ -22,6 +23,8 @@ if (mode === "live") {
   render(() => <V2App />, root);
 } else if (mode === "v2sim") {
   render(() => <V2SimApp />, root);
+} else if (mode === "v3drill") {
+  render(() => <V3DrillApp />, root);
 } else {
   render(() => <App />, root);
 }

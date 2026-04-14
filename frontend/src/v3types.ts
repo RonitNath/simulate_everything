@@ -55,6 +55,11 @@ export interface SpectatorEntityInfo {
   contains_count: number;
   stack_id?: number;
   current_task?: string;
+  // Swordplay visual state
+  attack_phase?: string;   // "idle" | "windup" | "committed" | "recovery"
+  attack_motion?: string;  // "overhead" | "forehand" | "backhand" | "thrust"
+  weapon_angle?: number;   // radians, separate from body facing
+  attack_progress?: number; // 0.0–1.0 windup progress
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +82,10 @@ export interface EntityUpdate {
   contains_count?: number;
   stack_id?: number | null;
   current_task?: string | null;
+  attack_phase?: string | null;
+  attack_motion?: string | null;
+  weapon_angle?: number | null;
+  attack_progress?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +317,10 @@ export function applyDelta(state: V3GameState, delta: V3SnapshotDelta): void {
     if (u.contains_count !== undefined) e.contains_count = u.contains_count;
     if (u.stack_id !== undefined) e.stack_id = u.stack_id ?? undefined;
     if (u.current_task !== undefined) e.current_task = u.current_task ?? undefined;
+    if (u.attack_phase !== undefined) e.attack_phase = u.attack_phase ?? undefined;
+    if (u.attack_motion !== undefined) e.attack_motion = u.attack_motion ?? undefined;
+    if (u.weapon_angle !== undefined) e.weapon_angle = u.weapon_angle ?? undefined;
+    if (u.attack_progress !== undefined) e.attack_progress = u.attack_progress ?? undefined;
   }
 
   // Projectiles

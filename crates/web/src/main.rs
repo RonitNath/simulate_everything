@@ -4,6 +4,7 @@ mod roundrobin;
 mod v2_protocol;
 mod v2_roundrobin;
 mod v2_rr_review;
+mod v3_drill;
 mod v3_protocol;
 mod v3_review;
 mod v3_roundrobin;
@@ -52,6 +53,7 @@ struct AppState {
     rr: Arc<RoundRobin>,
     v2_rr: Arc<V2RoundRobin>,
     v3_rr: Arc<V3RoundRobin>,
+    v3_drill: Arc<v3_drill::V3Drill>,
     scoreboard: Arc<Mutex<Scoreboard>>,
     build_ver: String,
 }
@@ -1158,6 +1160,94 @@ async fn api_v3_rr_delete_review(
 }
 
 // ============================================================
+// V3 Drill Pad
+// ============================================================
+
+#[derive(Template)]
+#[template(path = "v3drill.html")]
+struct V3DrillTemplate {
+    build_ver: String,
+}
+
+async fn v3_drill_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Html(
+        V3DrillTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
+async fn api_v3_drill_exec(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<v3_drill::ExecRequest>,
+) -> impl IntoResponse {
+    let resp = state.v3_drill.exec(req).await;
+    Json(resp)
+}
+
+async fn api_v3_drill_status(
+    State(state): State<Arc<AppState>>,
+    Query(view): Query<v3_drill::ViewParams>,
+) -> impl IntoResponse {
+    let resp = state.v3_drill.status(Some(view)).await;
+    Json(resp)
+}
+
+async fn api_v3_drill_ascii(
+    State(state): State<Arc<AppState>>,
+    Query(view): Query<v3_drill::ViewParams>,
+) -> impl IntoResponse {
+    let resp = state.v3_drill.status(Some(view)).await;
+    resp.ascii
+}
+
+async fn api_v3_drill_reset(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v3_drill.reset().await;
+    Json(serde_json::json!({ "ok": true }))
+}
+
+async fn ws_v3_drill(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let rx = state.v3_drill.spectator_subscribe();
+    let catchup = state.v3_drill.spectator_catchup().await;
+    ws.on_upgrade(move |socket| handle_v3_drill_spectator(socket, rx, catchup))
+}
+
+async fn handle_v3_drill_spectator(
+    mut socket: WebSocket,
+    mut rx: broadcast::Receiver<v3_protocol::V3ServerToSpectator>,
+    catchup: Vec<v3_protocol::V3ServerToSpectator>,
+) {
+    use axum::extract::ws::Message;
+
+    for msg in catchup {
+        let text = serde_json::to_string(&msg).unwrap();
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                let text = serde_json::to_string(&msg).unwrap();
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                warn!("V3 drill spectator lagged, dropped {} messages", n);
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -1227,11 +1317,14 @@ async fn main() {
         .unwrap()
         .as_secs()
         .to_string();
+    let v3_drill = Arc::new(v3_drill::V3Drill::new());
+
     let state = Arc::new(AppState {
         lobby,
         rr,
         v2_rr,
         v3_rr,
+        v3_drill,
         scoreboard,
         build_ver,
     });
@@ -1307,6 +1400,13 @@ async fn main() {
             "/api/v3/rr/reviews/{id}",
             axum::routing::delete(api_v3_rr_delete_review),
         )
+        // V3 Drill Pad routes
+        .route("/v3/drill", get(v3_drill_page))
+        .route("/ws/v3/drill", get(ws_v3_drill))
+        .route("/api/v3/drill/exec", axum::routing::post(api_v3_drill_exec))
+        .route("/api/v3/drill/status", get(api_v3_drill_status))
+        .route("/api/v3/drill/ascii", get(api_v3_drill_ascii))
+        .route("/api/v3/drill/reset", axum::routing::post(api_v3_drill_reset))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 

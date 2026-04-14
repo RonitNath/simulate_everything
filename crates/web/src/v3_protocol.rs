@@ -203,6 +203,19 @@ pub struct SpectatorEntityInfo {
     pub stack_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_task: Option<String>,
+    // -- Swordplay visual state --
+    /// Attack lifecycle phase: "idle", "windup", "committed", "recovery".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_phase: Option<String>,
+    /// Selected attack motion: "overhead", "forehand", "backhand", "thrust".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_motion: Option<String>,
+    /// Weapon angle in radians — separate from body facing so sword can animate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_angle: Option<f32>,
+    /// Attack windup progress 0.0–1.0 (for animation interpolation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_progress: Option<f32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +253,15 @@ pub struct EntityUpdate {
     pub stack_id: Option<Option<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_task: Option<Option<String>>,
+    // -- Swordplay visual state (delta) --
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_phase: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_motion: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_angle: Option<Option<f32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attack_progress: Option<Option<f32>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +532,44 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             .find(|s| s.members.contains(&_key))
             .map(|s| s.id.0);
 
+        // Swordplay visual state — derive from combatant attack/cooldown.
+        let (attack_phase, attack_motion, weapon_angle, attack_progress) =
+            if let Some(c) = entity.combatant.as_ref() {
+                if let Some(atk) = &c.attack {
+                    let weapon_props = state
+                        .entities
+                        .get(atk.weapon)
+                        .and_then(|e| e.weapon_props.as_ref());
+                    let windup = weapon_props.map(|w| w.windup_ticks).unwrap_or(4) as f32;
+                    let progress = (atk.progress / windup).clamp(0.0, 1.0);
+                    let phase = if atk.committed { "committed" } else { "windup" };
+                    // Weapon angle: offset from facing based on motion.
+                    let base_facing = c.facing;
+                    let motion_offset = match atk.motion {
+                        simulate_everything_engine::v3::martial::AttackMotion::Overhead => -std::f32::consts::FRAC_PI_2,
+                        simulate_everything_engine::v3::martial::AttackMotion::Forehand => -std::f32::consts::FRAC_PI_4,
+                        simulate_everything_engine::v3::martial::AttackMotion::Backhand => std::f32::consts::FRAC_PI_4,
+                        simulate_everything_engine::v3::martial::AttackMotion::Thrust => 0.0,
+                        simulate_everything_engine::v3::martial::AttackMotion::Generic => 0.0,
+                    };
+                    // Animate: in windup, weapon goes to ready position; in committed, swings through.
+                    let anim_t = if atk.committed { 1.0 - progress } else { progress };
+                    let w_angle = base_facing + motion_offset * anim_t;
+                    (
+                        Some(phase.to_string()),
+                        Some(format!("{:?}", atk.motion).to_lowercase()),
+                        Some(w_angle),
+                        Some(progress),
+                    )
+                } else if c.cooldown.is_some() {
+                    (Some("recovery".to_string()), None, None, None)
+                } else {
+                    (Some("idle".to_string()), None, None, None)
+                }
+            } else {
+                (None, None, None, None)
+            };
+
         entities.push(SpectatorEntityInfo {
             id: entity.id,
             owner: entity.owner,
@@ -532,7 +592,11 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             build_progress,
             contains_count: entity.contains.len(),
             stack_id,
-            current_task: None, // Agent layer not yet integrated.
+            current_task: None,
+            attack_phase,
+            attack_motion,
+            weapon_angle,
+            attack_progress,
         });
     }
 
@@ -821,6 +885,10 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
         contains_count: None,
         stack_id: None,
         current_task: None,
+        attack_phase: None,
+        attack_motion: None,
+        weapon_angle: None,
+        attack_progress: None,
     };
     let mut changed = false;
 
@@ -891,6 +959,26 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
 
     if cur.current_task != prev.current_task {
         update.current_task = Some(cur.current_task.clone());
+        changed = true;
+    }
+
+    if cur.attack_phase != prev.attack_phase {
+        update.attack_phase = Some(cur.attack_phase.clone());
+        changed = true;
+    }
+
+    if cur.attack_motion != prev.attack_motion {
+        update.attack_motion = Some(cur.attack_motion.clone());
+        changed = true;
+    }
+
+    if cur.weapon_angle != prev.weapon_angle {
+        update.weapon_angle = Some(cur.weapon_angle);
+        changed = true;
+    }
+
+    if cur.attack_progress != prev.attack_progress {
+        update.attack_progress = Some(cur.attack_progress);
         changed = true;
     }
 
