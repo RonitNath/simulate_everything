@@ -86,22 +86,75 @@ Total: 5MB GPU memory for terrain. Trivial.
 
 **Dense triangle grid with vertex shader displacement.** The mesh is a
 flat grid of triangles at heightmap resolution. The vertex shader samples
-the height texture to displace each vertex vertically, and samples the
-material texture for color/shading.
+the height texture with bilinear/bicubic filtering to displace each
+vertex vertically.
+
+### Terrain shading (not Minecraft)
+
+The heightmap resolution (1m) is the same as Minecraft's block size, but
+the rendering is fundamentally different. Key techniques for natural
+terrain:
+
+**Per-pixel normals from heightmap gradient.** The fragment shader reads
+4 adjacent height samples and computes the surface normal via cross
+product. Hills look round, not faceted. Valleys darken naturally under
+directional lighting.
+
+**Slope-based material blending.** Where grassland meets rock, there's
+no hard line. The fragment shader computes slope angle from the normal
+and blends materials: rock on steep slopes, grass on flats, dirt on
+moderate angles. A noise texture breaks up the blend boundary so
+transitions look organic, not grid-aligned.
+
+**Detail textures.** The material map at 1m gives macro color. Up close,
+1m/texel is blurry. A tiling detail texture (repeating at ~0.25m) adds
+fine-grain visual detail. Triplanar mapping on steep faces prevents
+texture stretching on cliff faces.
+
+**Atmospheric depth.** Distance fog fades far terrain to sky color,
+hiding LOD transitions and giving depth.
 
 ```wgsl
 @vertex
 fn vs_terrain(@builtin(vertex_index) vid: u32) -> VertexOutput {
     let grid_pos = index_to_grid(vid, grid_width);
     let uv = grid_pos / vec2f(grid_width, grid_height);
-    let height = textureSampleLevel(heightmap, sampler, uv, 0.0).r;
-    let material = textureLoad(material_map, vec2i(grid_pos), 0).r;
+    // Bicubic sampling eliminates stairstepping at sample boundaries
+    let height = bicubic_sample(heightmap, sampler, uv).r;
 
     var out: VertexOutput;
     out.position = camera.view_proj * vec4f(grid_pos.x, height, grid_pos.y, 1.0);
-    out.material = material;
     out.uv = uv;
     return out;
+}
+
+@fragment
+fn fs_terrain(in: VertexOutput) -> @location(0) vec4f {
+    // Per-pixel normal from heightmap gradient (4 adjacent samples)
+    let h_l = textureSample(heightmap, sampler, in.uv + vec2f(-texel, 0.0)).r;
+    let h_r = textureSample(heightmap, sampler, in.uv + vec2f( texel, 0.0)).r;
+    let h_d = textureSample(heightmap, sampler, in.uv + vec2f(0.0, -texel)).r;
+    let h_u = textureSample(heightmap, sampler, in.uv + vec2f(0.0,  texel)).r;
+    let normal = normalize(vec3f(h_l - h_r, 2.0 * texel_world, h_d - h_u));
+
+    // Material from material map
+    let mat_idx = textureLoad(material_map, vec2i(in.uv * map_size), 0).r;
+
+    // Slope-based blending: steep = rock, flat = grass, moderate = dirt
+    let slope = 1.0 - normal.y;  // 0 = flat, 1 = vertical
+    let noise = textureSample(noise_tex, sampler, in.uv * 7.3).r;
+    let blend = slope_blend(mat_idx, slope, noise);
+
+    // Detail texture (tiling, adds fine grain up close)
+    let detail = triplanar_sample(detail_atlas, in.world_pos, normal, mat_idx);
+
+    // Directional lighting
+    let light = max(dot(normal, sun_dir), 0.0) * 0.7 + 0.3;  // diffuse + ambient
+
+    // Atmospheric fog
+    let fog = exp(-in.view_dist * fog_density);
+
+    return vec4f(mix(fog_color, blend * detail * light, fog), 1.0);
 }
 ```
 
@@ -131,6 +184,37 @@ GPU: next frame vertex shader reads updated heights, mesh deforms
 All mutations use `queue.write_texture()` on a sub-region. No mesh
 rebuild. No full texture re-upload. The vertex shader reads the updated
 texture next frame.
+
+### Hex-scoped chunk dirtying
+
+The heightmap is stored as rectangular GPU texture chunks (e.g., 64×64
+texels per chunk). A precomputed mapping links each medium hex (~150m)
+to the set of rectangular chunks it overlaps. When the server reports
+a terrain mutation within a hex, only the overlapping chunks are marked
+dirty and re-uploaded. This bounds the update cost to the hex's footprint,
+not the entire map.
+
+```rust
+struct TerrainChunkMap {
+    /// For each medium hex, the rectangular chunks that overlap it.
+    /// Precomputed at map init, ~4 chunks per hex on average.
+    hex_to_chunks: HashMap<Axial, SmallVec<[ChunkId; 4]>>,
+    /// Per-chunk dirty flag, cleared after GPU upload.
+    dirty: Vec<bool>,
+}
+```
+
+Mutation flow with hex scoping:
+```
+Server: "ditch dug at (450, 120)"
+  → WASM: find medium hex containing (450, 120)
+  → lookup hex_to_chunks → mark 1-2 chunks dirty
+  → write_texture() for each dirty chunk's sub-region
+  → clear dirty flags
+```
+
+This means a ditch across a hex boundary dirties ~2-4 chunks (not the
+whole map), and a bomb crater affecting 3 hexes dirties ~6-12 chunks.
 
 ### Terrain LOD
 
@@ -276,6 +360,108 @@ and radius stored in the body-point buffer.
 Same pattern as entity interpolation — a compute shader lerps body points
 between ticks. The server sends body points at tick rate; the GPU
 interpolates at frame rate.
+
+## Multi-resolution hex spatial index
+
+### Why multi-resolution
+
+Different engine systems need spatial queries at different scales:
+- **Combat**: "enemies within 5m weapon reach" — needs ~10m cells
+- **Tactical AI**: "terrain and units in this 200m area" — needs ~150m cells
+- **Strategic AI**: "resources and army strength in 2km region" — needs ~500m cells
+- **Rendering**: "which terrain chunks are visible" — needs coarse culling
+- **Terrain mutation**: "which chunks to dirty for this ditch" — needs hex→chunk mapping
+
+A single 150m hex grid (the current `SpatialIndex`) is too coarse for
+combat and too fine for strategic queries.
+
+### Architecture: three independent flat hex grids
+
+NOT H3-style nested hierarchy (aperture-7 rotation breaks LOD/chunk
+alignment). Instead, three independent hex grids at different resolutions.
+No parent-child bit tricks — just three separate indices.
+
+| Level | Hex radius | Cells (3km map) | Updated | Used by |
+|-------|-----------|-----------------|---------|---------|
+| Fine | ~10m | ~90k | Every tick | Combat range queries, body-model collision, narrow-phase |
+| Medium | ~150m (existing) | ~400 | On hex change (hysteresis) | Pathfinding, tactical AI, movement steering, terrain chunk dirtying |
+| Coarse | ~500m | ~36 | On medium change | Strategic AI aggregates, rendering frustum culling |
+
+### Why hexes at all levels (not squares for fine/coarse)
+
+- **Uniform neighbor distance**: all 6 neighbors equidistant. Square grids
+  have diagonal neighbors at √2× distance — a 5m combat range check on a
+  square grid either misses diagonal targets or over-includes corners.
+- **Better circle approximation**: hex k-ring disk is closer to a circle
+  than a square k-ring. Tighter culling for "all entities within Xm."
+- **Consistent mental model**: every system thinks in hexes. No mixing
+  coordinate systems.
+
+### Cross-level mapping
+
+Precomputed at map init, stored as flat arrays:
+
+```rust
+/// For each fine hex, which medium hex contains it.
+fine_to_medium: Vec<Axial>,          // indexed by fine hex linear index
+
+/// For each medium hex, which coarse hex contains it.
+medium_to_coarse: Vec<Axial>,        // indexed by medium hex linear index
+
+/// For each medium hex, which fine hexes it contains.
+medium_to_fine: Vec<SmallVec<[u32; 32]>>,
+
+/// For each medium hex, which rectangular terrain chunks overlap it.
+medium_to_chunks: Vec<SmallVec<[ChunkId; 4]>>,
+```
+
+### Entity update flow across levels
+
+```rust
+fn on_entity_move(entity: EntityKey, old_pos: Vec3, new_pos: Vec3) {
+    // Fine: always update (cheap — hash table insert/remove)
+    let old_fine = pos_to_fine_hex(old_pos);
+    let new_fine = pos_to_fine_hex(new_pos);
+    if new_fine != old_fine {
+        fine_index.move_entity(old_fine, new_fine, entity);
+    }
+
+    // Medium: update only if hex changed (existing hysteresis)
+    let old_med = entity_hex[entity];
+    let new_med = update_hex_membership(old_med, new_pos); // with hysteresis
+    if new_med != old_med {
+        medium_index.move_entity(old_med, new_med, entity);
+        entity_hex[entity] = new_med;
+
+        // Coarse: update only if coarse hex changed (~rare)
+        let old_coarse = medium_to_coarse[old_med];
+        let new_coarse = medium_to_coarse[new_med];
+        if new_coarse != old_coarse {
+            coarse_index.update_aggregates(old_coarse, new_coarse, entity);
+        }
+    }
+}
+```
+
+Fine updates happen every tick for moving entities (~10k moves/tick).
+Medium updates happen only on hex boundary crossing (~100/tick).
+Coarse updates happen rarely (~5/tick).
+
+### Coarse hex aggregates
+
+Each coarse hex stores precomputed summaries for strategic AI:
+
+```rust
+struct CoarseHexAggregate {
+    population: [u16; MAX_PLAYERS],    // entity count per player
+    army_strength: [f32; MAX_PLAYERS], // sum of combat effectiveness
+    resource_totals: ResourceTotals,   // food, material, etc.
+    terrain_profile: TerrainProfile,   // avg height, dominant material, road coverage
+}
+```
+
+Strategic AI queries are O(1) lookups into these aggregates instead of
+iterating all entities.
 
 ## Camera system
 
