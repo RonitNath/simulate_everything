@@ -32,17 +32,6 @@ fi
 
 echo "Building review bundle: $FRAME_COUNT frames"
 
-# Build base64-encoded frame array
-FRAMES_JSON="["
-FIRST=1
-for f in $(ls -1 "$FRAMES_DIR"/*.png | sort); do
-    if [ $FIRST -eq 0 ]; then FRAMES_JSON+=","; fi
-    FIRST=0
-    B64=$(base64 -w0 "$f")
-    FRAMES_JSON+="\"data:image/png;base64,$B64\""
-done
-FRAMES_JSON+="]"
-
 # Read metadata files if they exist
 SUMMARY_JSON="{}"
 [ -f "$SUMMARY" ] && SUMMARY_JSON=$(cat "$SUMMARY")
@@ -89,6 +78,7 @@ cat > "$OUTPUT" <<'HTMLEOF'
     min-width: 120px; text-align: center; font-size: 13px;
   }
   .speed-label { font-size: 11px; color: #888; }
+  .load-progress { font-size: 11px; color: #e94560; }
   main {
     flex: 1; display: flex; overflow: hidden;
   }
@@ -138,10 +128,11 @@ cat > "$OUTPUT" <<'HTMLEOF'
     <button id="btn-prev" title="Previous frame (←)">◄</button>
     <button id="btn-play" title="Play/Pause (Space)">▶</button>
     <button id="btn-next" title="Next frame (→)">►</button>
-    <div class="tick-display" id="tick-display">tick 0 / 0</div>
+    <div class="tick-display" id="tick-display">loading...</div>
     <button id="btn-slower">-</button>
     <span class="speed-label" id="speed-label">10 fps</span>
     <button id="btn-faster">+</button>
+    <span class="load-progress" id="load-progress"></span>
     <span class="kb-hint">← → Space +/- Home End</span>
   </div>
 </header>
@@ -159,13 +150,33 @@ cat > "$OUTPUT" <<'HTMLEOF'
 <script>
 HTMLEOF
 
-# Inject data
-echo "const FRAMES = $FRAMES_JSON;" >> "$OUTPUT"
+# Inject metadata FIRST — small, renders sidebar immediately
 echo "const SUMMARY = $SUMMARY_JSON;" >> "$OUTPUT"
 echo "const TIMELINES = $TIMELINES_JSON;" >> "$OUTPUT"
 echo "const INVARIANTS = $INVARIANTS_JSON;" >> "$OUTPUT"
+echo "const TOTAL_FRAMES = $FRAME_COUNT;" >> "$OUTPUT"
 
+# Inject frames in chunks of 20 — browser can parse and render between chunks
+CHUNK_SIZE=20
+echo "const FRAMES = new Array(TOTAL_FRAMES);" >> "$OUTPUT"
+
+IDX=0
+for f in $(ls -1 "$FRAMES_DIR"/*.png | sort); do
+    if [ $((IDX % CHUNK_SIZE)) -eq 0 ]; then
+        # Start a new script block so the browser can breathe between chunks
+        if [ $IDX -gt 0 ]; then
+            echo "</script><script>" >> "$OUTPUT"
+        fi
+    fi
+    B64=$(base64 -w0 "$f")
+    echo "FRAMES[$IDX]=\"data:image/png;base64,$B64\";" >> "$OUTPUT"
+    IDX=$((IDX + 1))
+done
+
+# Final script block with the player logic
 cat >> "$OUTPUT" <<'JSEOF'
+</script>
+<script>
 let currentFrame = 0;
 let playing = false;
 let fps = 10;
@@ -176,14 +187,18 @@ const tickDisplay = document.getElementById('tick-display');
 const scrubber = document.getElementById('scrubber');
 const speedLabel = document.getElementById('speed-label');
 const btnPlay = document.getElementById('btn-play');
+const loadProgress = document.getElementById('load-progress');
 
-scrubber.max = FRAMES.length - 1;
+scrubber.max = TOTAL_FRAMES - 1;
+tickDisplay.textContent = `tick 0 / ${TOTAL_FRAMES - 1}`;
 
 function showFrame(idx) {
-  idx = Math.max(0, Math.min(FRAMES.length - 1, idx));
+  idx = Math.max(0, Math.min(TOTAL_FRAMES - 1, idx));
   currentFrame = idx;
-  img.src = FRAMES[idx];
-  tickDisplay.textContent = `tick ${idx} / ${FRAMES.length - 1}`;
+  if (FRAMES[idx]) {
+    img.src = FRAMES[idx];
+  }
+  tickDisplay.textContent = `tick ${idx} / ${TOTAL_FRAMES - 1}`;
   scrubber.value = idx;
   highlightTimelines(idx);
 }
@@ -194,7 +209,7 @@ function togglePlay() {
   btnPlay.classList.toggle('active', playing);
   if (playing) {
     playInterval = setInterval(() => {
-      if (currentFrame >= FRAMES.length - 1) { togglePlay(); return; }
+      if (currentFrame >= TOTAL_FRAMES - 1) { togglePlay(); return; }
       showFrame(currentFrame + 1);
     }, 1000 / fps);
   } else {
@@ -208,7 +223,7 @@ function setFps(newFps) {
   if (playing) {
     clearInterval(playInterval);
     playInterval = setInterval(() => {
-      if (currentFrame >= FRAMES.length - 1) { togglePlay(); return; }
+      if (currentFrame >= TOTAL_FRAMES - 1) { togglePlay(); return; }
       showFrame(currentFrame + 1);
     }, 1000 / fps);
   }
@@ -275,7 +290,7 @@ document.addEventListener('keydown', e => {
     case '+': case '=': setFps(fps + 2); break;
     case '-': setFps(fps - 2); break;
     case 'Home': showFrame(0); break;
-    case 'End': showFrame(FRAMES.length - 1); break;
+    case 'End': showFrame(TOTAL_FRAMES - 1); break;
   }
 });
 
