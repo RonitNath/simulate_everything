@@ -71,10 +71,44 @@ export function drawEntitiesClose(
       g.fill({ color: blood > 0.5 ? 0x44cc44 : blood > 0.25 ? 0xcccc44 : 0xcc4444 });
     }
 
-    // Wound indicator
+    // Stamina bar (below blood bar)
+    const stamina = e.info.stamina;
+    if (stamina != null && stamina < 1.0) {
+      const barW = 8;
+      const barH = 1.5;
+      const bx = e.pos.x - barW / 2;
+      const by = e.pos.y - radius - 2;
+      g.rect(bx, by, barW, barH);
+      g.fill({ color: 0x222222, alpha: 0.7 });
+      g.rect(bx, by, barW * stamina, barH);
+      g.fill({ color: 0x4488cc });
+    }
+
+    // Wound zone indicators (colored dots by body zone)
     if (e.info.wounds && e.info.wounds.length > 0) {
-      g.circle(e.pos.x + radius + 2, e.pos.y - radius, 2);
-      g.fill({ color: 0xff4444, alpha: 0.9 });
+      const woundColors: Record<string, number> = {
+        Head: 0xff2222,
+        Torso: 0xff6644,
+        LeftArm: 0xff8844,
+        RightArm: 0xff8844,
+        Legs: 0xffaa44,
+      };
+      const severitySize: Record<string, number> = {
+        Light: 1.0,
+        Serious: 1.5,
+        Critical: 2.0,
+      };
+      let wIdx = 0;
+      for (const [zone, severity] of e.info.wounds) {
+        const wx = e.pos.x + radius + 2 + wIdx * 3;
+        const wy = e.pos.y - radius;
+        const wColor = woundColors[zone] ?? 0xff4444;
+        const wSize = severitySize[severity] ?? 1.5;
+        g.circle(wx, wy, wSize);
+        g.fill({ color: wColor, alpha: 0.9 });
+        wIdx++;
+        if (wIdx >= 4) break; // Max 4 wound indicators
+      }
     }
 
     // Equipment indicators at very close zoom
