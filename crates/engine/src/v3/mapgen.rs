@@ -107,6 +107,7 @@ fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, skill: f32) -> Ent
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: skill,
+                    task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant::new())
@@ -176,6 +177,7 @@ fn spawn_civilian(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> En
             .person(Person {
                 role,
                 combat_skill: 0.1,
+                    task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS)),
     )

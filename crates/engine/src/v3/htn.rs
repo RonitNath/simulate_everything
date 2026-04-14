@@ -219,11 +219,19 @@ fn nearest_friendly_structure(
         .iter()
         .filter(|(_, other)| other.owner == Some(owner))
         .filter(|(_, other)| {
-            other
-                .structure
-                .as_ref()
-                .map(|structure| structure.structure_type == structure_type)
-                .unwrap_or(false)
+            other.site.is_some()
+                && other
+                    .physical
+                    .as_ref()
+                    .map(|p| {
+                        use simulate_everything_protocol::PropertyTag;
+                        match structure_type {
+                            StructureType::Farm => p.has_tag(PropertyTag::Harvestable),
+                            StructureType::Workshop => p.has_tag(PropertyTag::Tool),
+                            _ => p.has_tag(PropertyTag::Shelter),
+                        }
+                    })
+                    .unwrap_or(false)
         })
         .filter_map(|(key, other)| {
             let other_pos = other.pos?;

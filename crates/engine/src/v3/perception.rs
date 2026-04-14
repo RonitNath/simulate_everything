@@ -404,6 +404,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -506,6 +507,7 @@ mod tests {
                 .person(Person {
                     role: Role::Farmer,
                     combat_skill: 0.1,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0)),
         );

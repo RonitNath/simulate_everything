@@ -1311,6 +1311,7 @@ fn swordplay_drill_replay_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.9,
+                    task: None,
             })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())
@@ -1325,6 +1326,7 @@ fn swordplay_drill_replay_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.9,
+                    task: None,
             })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())
@@ -1800,6 +1802,7 @@ fn spawn_arena_side(
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

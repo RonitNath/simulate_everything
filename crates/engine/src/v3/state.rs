@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 use smallvec::SmallVec;
 
+use super::action_queue::ActionQueue;
 use super::armor::ArmorProperties;
 use super::body_model::BodyModel;
 use super::coarse_index::CoarseIndex;
@@ -10,12 +11,16 @@ use super::equipment::Equipment;
 use super::fine_index::FineIndex;
 use super::formation::FormationType;
 use super::hex_mapping::HexMapping;
+use super::htn::{DomainRegistry, MethodTraversalRecord};
 use super::index::SpatialIndex;
 use super::movement::Mobile;
+use super::needs::{EntityNeeds, NeedWeights};
 use super::physical::{MatterStack, PhysicalProperties, SiteProperties, ToolProperties};
 use super::projectile::Projectile;
+use super::social::SocialState;
 use super::spatial::{Heightfield, Vec3};
 use super::terrain_ops::TerrainOpLog;
+use super::utility::Goal;
 use super::vitals::Vitals;
 use super::weapon::{AttackState, CooldownState, WeaponProperties};
 use super::wound::WoundList;
@@ -45,7 +50,7 @@ pub struct Stack {
 // Shared enums — canonical definitions in protocol crate
 // ---------------------------------------------------------------------------
 
-pub use simulate_everything_protocol::{CommodityKind, Role};
+pub use simulate_everything_protocol::{CommodityKind, ResourceType, Role, StructureType};
 
 /// Persistent task assignment for per-tick economy and spectator state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +61,46 @@ pub enum TaskAssignment {
     Garrison,
     Train,
     Idle,
+}
+
+// ---------------------------------------------------------------------------
+// Behavior state (Stream E)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionRecord {
+    pub tick: u64,
+    pub goal: Goal,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehaviorState {
+    pub needs: EntityNeeds,
+    pub current_goal: Option<Goal>,
+    pub decision_reason: Option<String>,
+    pub action_queue: ActionQueue,
+    pub mtr: MethodTraversalRecord,
+    pub decision_history: SmallVec<[DecisionRecord; 4]>,
+    pub next_decision_tick: u64,
+    pub last_decision_tick: u64,
+    pub social: SocialState,
+}
+
+impl Default for BehaviorState {
+    fn default() -> Self {
+        Self {
+            needs: EntityNeeds::default(),
+            current_goal: None,
+            decision_reason: None,
+            action_queue: ActionQueue::default(),
+            mtr: MethodTraversalRecord::default(),
+            decision_history: SmallVec::new(),
+            next_decision_tick: 0,
+            last_decision_tick: 0,
+            social: SocialState::default(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +193,10 @@ pub struct Entity {
     /// actions at sufficient tick resolution. None for idle/aggregate entities.
     /// Boxed to keep Entity small — most entities don't have a body model.
     pub body: Option<Box<BodyModel>>,
+    /// Autonomous behavior state: needs, goals, action queue, HTN state.
+    /// Present for all person entities. None for items, terrain features.
+    /// Boxed to keep Entity small — most entities don't have behavior.
+    pub behavior: Option<Box<BehaviorState>>,
 }
 
 impl Entity {
@@ -174,6 +223,7 @@ impl Entity {
             matter: None,
             site: None,
             body: None,
+            behavior: None,
         }
     }
 }
@@ -353,6 +403,9 @@ pub struct GameState {
     /// Combat observation log. Drained by the protocol layer after each tick.
     #[serde(skip)]
     pub combat_log: CombatLog,
+    pub faction_need_weights: Vec<NeedWeights>,
+    #[serde(skip)]
+    pub domain_registry: DomainRegistry,
     next_id: u32,
     next_stack_id: u32,
 }
@@ -379,6 +432,8 @@ impl GameState {
             game_time: 0.0,
             tick: 0,
             combat_log: CombatLog::new(),
+            faction_need_weights: vec![NeedWeights::default(); num_players as usize],
+            domain_registry: DomainRegistry::for_players(num_players),
             next_id: 1,
             next_stack_id: 1,
         }

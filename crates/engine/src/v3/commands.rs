@@ -845,9 +845,11 @@ mod tests {
         let soldier = spawn_person(&mut state, Vec3::new(10.0, 10.0, 0.0), 0);
         let fake_key = EntityKey::from(KeyData::from_ffi(0xDEAD_BEEF_0000_0001));
         let output = AgentOutput {
+            player: 0,
             strategy_ran: false,
             operations_ran: false,
             tactical_stacks: 0,
+            directives: Vec::new(),
             operational_commands: vec![
                 OperationalCommand::AssignTask {
                     entity: soldier,

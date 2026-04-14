@@ -416,17 +416,15 @@ fn apply_work_effect(state: &mut GameState, entity_key: EntityKey, target: Entit
     let Some(owner) = owner else {
         return;
     };
-    let structure_type = state
-        .entities
-        .get(target)
-        .and_then(|entity| entity.structure.as_ref())
-        .map(|structure| structure.structure_type);
-    match structure_type {
-        Some(StructureType::Farm) => add_player_stockpile(state, owner, super::state::ResourceType::Food, 1.5),
-        Some(StructureType::Workshop) => {
-            add_player_stockpile(state, owner, super::state::ResourceType::Material, 0.75)
+    if let Some(entity) = state.entities.get(target) {
+        if let Some(physical) = &entity.physical {
+            use simulate_everything_protocol::{CommodityKind, PropertyTag};
+            if physical.has_tag(PropertyTag::Harvestable) {
+                add_player_stockpile(state, owner, CommodityKind::Food, 1.5);
+            } else if physical.has_tag(PropertyTag::Tool) {
+                add_player_stockpile(state, owner, CommodityKind::Material, 0.75);
+            }
         }
-        Some(StructureType::Village | StructureType::City | StructureType::Wall | StructureType::Tower | StructureType::Depot) | None => {}
     }
     if let Some(behavior) = state
         .entities
@@ -442,8 +440,9 @@ fn apply_consume_effect(state: &mut GameState, entity_key: EntityKey) {
     let Some(owner) = state.entities.get(entity_key).and_then(|entity| entity.owner) else {
         return;
     };
-    if economy::player_stockpile_amount(state, owner, super::state::ResourceType::Food) > 0.0 {
-        consume_player_stockpile(state, owner, super::state::ResourceType::Food, 1.0);
+    use simulate_everything_protocol::CommodityKind;
+    if economy::player_stockpile_amount(state, owner, CommodityKind::Food) > 0.0 {
+        consume_player_stockpile(state, owner, CommodityKind::Food, 1.0);
         if let Some(behavior) = state
             .entities
             .get_mut(entity_key)
@@ -1539,6 +1538,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1564,6 +1564,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1616,6 +1617,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1639,6 +1641,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

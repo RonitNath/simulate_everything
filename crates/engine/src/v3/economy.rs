@@ -305,7 +305,7 @@ pub fn player_stockpile_amount(state: &GameState, owner: u8, commodity: Commodit
         .sum()
 }
 
-fn add_player_stockpile(state: &mut GameState, owner: u8, commodity: CommodityKind, amount: f32) {
+pub(crate) fn add_player_stockpile(state: &mut GameState, owner: u8, commodity: CommodityKind, amount: f32) {
     if amount <= 0.0 {
         return;
     }
@@ -319,7 +319,7 @@ fn add_player_stockpile(state: &mut GameState, owner: u8, commodity: CommodityKi
     }
 }
 
-fn consume_player_stockpile(
+pub(crate) fn consume_player_stockpile(
     state: &mut GameState,
     owner: u8,
     commodity: CommodityKind,
