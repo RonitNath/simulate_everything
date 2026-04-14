@@ -120,7 +120,23 @@ impl ApplicationHandler for ViewerApp {
         let state_ref = self.state.clone();
         let win = window.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let gpu = GpuState::new(win.clone()).await;
+            let gpu = match GpuState::new(win.clone()).await {
+                Ok(gpu) => gpu,
+                Err(msg) => {
+                    log::error!("{msg}");
+                    let doc = web_sys::window().unwrap().document().unwrap();
+                    if let Some(root) = doc.get_element_by_id("viewer-root") {
+                        root.set_inner_html(&format!(
+                            "<div style=\"display:flex;align-items:center;justify-content:center;\
+                             height:100%;color:#f3efe7;font:500 16px/1.5 ui-sans-serif,system-ui,sans-serif;\
+                             text-align:center;padding:2em\">\
+                             <div><p style=\"font-size:20px;margin-bottom:0.5em\">WebGPU not available</p>\
+                             <p style=\"opacity:0.7;max-width:36em\">{msg}</p></div></div>"
+                        ));
+                    }
+                    return;
+                }
+            };
             let size = win.inner_size();
             let mut camera = Camera::new(size.width as f32, size.height as f32);
             camera.target = glam::Vec3::new(15.0, 0.0, 15.0);

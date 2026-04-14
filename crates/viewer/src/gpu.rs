@@ -14,7 +14,7 @@ pub struct GpuState {
 }
 
 impl GpuState {
-    pub async fn new(window: Arc<Window>) -> Self {
+    pub async fn new(window: Arc<Window>) -> Result<Self, String> {
         let size = window.inner_size();
         let instance = Instance::new(InstanceDescriptor {
             backends: Backends::BROWSER_WEBGPU,
@@ -70,11 +70,18 @@ impl GpuState {
             }
         }
 
-        let adapter = adapter.expect(
-            "No WebGPU adapter found after trying all strategies. \
-             Check chrome://gpu — WebGPU must be hardware-accelerated and the GPU driver \
-             must support a surface-compatible format.",
-        );
+        let adapter = match adapter {
+            Some(a) => a,
+            None => {
+                return Err(
+                    "No WebGPU adapter found. This viewer requires a browser with WebGPU support. \
+                     Chrome/Edge: enabled by default. \
+                     Firefox: enable dom.webgpu.enabled in about:config. \
+                     Safari: enable WebGPU in Develop → Feature Flags."
+                        .to_string(),
+                );
+            }
+        };
 
         if !used_surface {
             log::warn!(
@@ -125,7 +132,7 @@ impl GpuState {
 
         let (depth_texture, depth_view) = Self::create_depth(&device, size.width, size.height);
 
-        Self {
+        Ok(Self {
             device,
             queue,
             surface,
@@ -133,7 +140,7 @@ impl GpuState {
             format,
             depth_texture,
             depth_view,
-        }
+        })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
