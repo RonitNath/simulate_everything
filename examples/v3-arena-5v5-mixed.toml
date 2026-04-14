@@ -1,0 +1,21 @@
+mode = "mutual"
+max_ticks = 250
+cluster_radius_m = 30.0
+side_a_center = [50.0, 50.0]
+side_b_center = [200.0, 50.0]
+
+[side_a]
+agent = "striker"
+soldiers = 5
+weapon_preset = "mixed"
+armor = "leather_cuirass"
+armor_ratio = 0.4
+formation = "line"
+
+[side_b]
+agent = "striker"
+soldiers = 5
+weapon_preset = "mixed"
+armor = "leather_cuirass"
+armor_ratio = 0.4
+formation = "line"

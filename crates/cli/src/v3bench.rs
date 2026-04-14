@@ -1,3 +1,5 @@
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use simulate_everything_engine::v2::state::EntityKey;
@@ -6,7 +8,7 @@ use simulate_everything_engine::v3::{
         AgentOutput, EntityTask, EquipmentType, LayeredAgent, OperationalCommand, StrategyLayer,
         TacticalCommand, validate_operational, validate_tactical,
     },
-    armor::{ArmorConstruction, ArmorProperties, BodyZone, DamageType, MaterialType},
+    armor::{self, ArmorConstruction, ArmorProperties, BodyZone, DamageType, MaterialType},
     damage_table::DamageEstimateTable,
     equipment::{self, Equipment},
     formation::FormationType,
@@ -36,7 +38,10 @@ use std::time::Instant;
 pub fn main(args: &[String]) {
     if args.iter().any(|a| a == "--arena") {
         let arena_mode = flag_value(args, "--arena-mode").unwrap_or("null-vs-striker");
-        run_arena(arena_mode);
+        let arena_config = flag_value(args, "--arena-config")
+            .map(load_arena_config)
+            .unwrap_or_else(|| ArenaConfigFile::for_mode(arena_mode));
+        run_arena(&arena_config);
         return;
     }
 
@@ -447,9 +452,8 @@ struct ArenaSideScenario {
 
 #[derive(Debug, Clone)]
 struct ArenaSideState {
-    owner: u8,
     agent: String,
-    members: Vec<simulate_everything_engine::v2::state::EntityKey>,
+    members: Vec<EntityKey>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -525,15 +529,16 @@ impl ArenaConfigFile {
                 default_cluster
             }
         });
+        let matchup_label = if side_a.agent == "striker" && side_b.agent == "striker" {
+            "Mutual Combat".to_string()
+        } else if side_a.agent == "null" && side_b.agent == "striker" {
+            "Null-vs-Striker".to_string()
+        } else {
+            format!("{}-vs-{}", side_a.agent, side_b.agent)
+        };
         let title = format!(
             "=== V3 Arena: {}v{} {} ===",
-            side_a.soldiers,
-            side_b.soldiers,
-            if side_a.agent == "striker" && side_b.agent == "striker" {
-                "Mutual Combat"
-            } else {
-                "Configured Scenario"
-            }
+            side_a.soldiers, side_b.soldiers, matchup_label
         );
 
         ArenaScenario {
@@ -581,8 +586,15 @@ fn resolve_arena_side(
 fn load_arena_config(path: &str) -> ArenaConfigFile {
     let raw = fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("failed to read arena config {}: {}", path, err));
-    toml::from_str(&raw)
-        .unwrap_or_else(|err| panic!("failed to parse arena config {}: {}", path, err))
+    let mut config: ArenaConfigFile = toml::from_str(&raw)
+        .unwrap_or_else(|err| panic!("failed to parse arena config {}: {}", path, err));
+    if config.side_a_center.is_none() {
+        config.side_a_center = Some([50.0, 50.0]);
+    }
+    if config.side_b_center.is_none() {
+        config.side_b_center = Some([200.0, 50.0]);
+    }
+    config
 }
 
 fn parse_arena_weapon_preset(value: &str) -> ArenaWeaponPreset {
@@ -1051,248 +1063,86 @@ fn run_bench_game(
 }
 
 // ---------------------------------------------------------------------------
-// Arena: minimal 1v1 duel
+// Arena: config-driven scenarios
 // ---------------------------------------------------------------------------
 
-fn run_arena(mode: &str) {
-    let mutual = mode == "mutual";
-    if mutual {
-        eprintln!("=== V3 Arena: Mutual Combat ===");
-        eprintln!("P0 = striker, P1 = striker (both fight back)\n");
-    } else {
-        eprintln!("=== V3 Arena: 1v1 Duel ===");
-        eprintln!("P0 = null agent (does nothing), P1 = striker (seeks and attacks)\n");
-    }
-
-    // Tiny 5x5 map, flat terrain
-    let hf = Heightfield::new(5, 5, 0.0, GeoMaterial::Soil);
-    let mut state = GameState::new(5, 5, 2, hf);
-
-    // Spawn soldier A (player 0) — null agent, will do nothing
-    let soldier_a = spawn_entity(
-        &mut state,
-        EntityBuilder::new()
-            .pos(Vec3::new(50.0, 50.0, 0.0))
-            .owner(0)
-            .person(Person {
-                role: Role::Soldier,
-                combat_skill: 0.5,
-            })
-            .mobile(Mobile::new(2.0, 10.0))
-            .combatant(Combatant::new())
-            .vitals()
-            .equipment(Equipment::empty()),
+fn run_arena(config: &ArenaConfigFile) {
+    let scenario = config.resolve();
+    eprintln!("{}", scenario.title);
+    eprintln!(
+        "P0 = {} ({} soldiers, {:?}, {:?} {:.0}%)",
+        scenario.side_a.agent,
+        scenario.side_a.soldiers,
+        scenario.side_a.weapon_preset,
+        scenario.side_a.armor_preset,
+        scenario.side_a.armor_ratio * 100.0,
     );
-    let sword_a = spawn_entity(
-        &mut state,
-        EntityBuilder::new()
-            .owner(0)
-            .weapon_props(weapon::iron_sword()),
+    eprintln!(
+        "P1 = {} ({} soldiers, {:?}, {:?} {:.0}%)\n",
+        scenario.side_b.agent,
+        scenario.side_b.soldiers,
+        scenario.side_b.weapon_preset,
+        scenario.side_b.armor_preset,
+        scenario.side_b.armor_ratio * 100.0,
     );
-    contain(&mut state, soldier_a, sword_a);
-    state.entities[soldier_a].equipment.as_mut().unwrap().weapon = Some(sword_a);
 
-    // Spawn soldier B (player 1) — real tactical agent, will attack
-    // 20m apart — close enough to reach in a few ticks
-    let soldier_b = spawn_entity(
-        &mut state,
-        EntityBuilder::new()
-            .pos(Vec3::new(70.0, 50.0, 0.0))
-            .owner(1)
-            .person(Person {
-                role: Role::Soldier,
-                combat_skill: 0.5,
-            })
-            .mobile(Mobile::new(2.0, 10.0))
-            .combatant(Combatant::new())
-            .vitals()
-            .equipment(Equipment::empty()),
-    );
-    let sword_b = spawn_entity(
-        &mut state,
-        EntityBuilder::new()
-            .owner(1)
-            .weapon_props(weapon::iron_sword()),
-    );
-    contain(&mut state, soldier_b, sword_b);
-    state.entities[soldier_b].equipment.as_mut().unwrap().weapon = Some(sword_b);
-
-    // Pre-form stacks (one member each) so tactical layer can fire
-    let stack_a_id = state.alloc_stack_id();
-    state.stacks.push(Stack {
-        id: stack_a_id,
-        owner: 0,
-        members: [soldier_a].into_iter().collect(),
-        formation: FormationType::Line,
-        leader: soldier_a,
-    });
-
-    let stack_b_id = state.alloc_stack_id();
-    state.stacks.push(Stack {
-        id: stack_b_id,
-        owner: 1,
-        members: [soldier_b].into_iter().collect(),
-        formation: FormationType::Line,
-        leader: soldier_b,
-    });
-
-    // Give B an initial waypoint toward A so it moves before ops kicks in
-    state.entities[soldier_b]
-        .mobile
-        .as_mut()
-        .unwrap()
-        .waypoints
-        .push(Vec3::new(50.0, 50.0, 0.0));
-
-    // In mutual mode, A also walks toward B
-    if mutual {
-        state.entities[soldier_a]
-            .mobile
-            .as_mut()
-            .unwrap()
-            .waypoints
-            .push(Vec3::new(70.0, 50.0, 0.0));
-    }
-
-    // Create agents
-    let damage_table = DamageEstimateTable::from_physics();
-    let mut agents: Vec<LayeredAgent> = if mutual {
-        let damage_table_2 = DamageEstimateTable::from_physics();
-        vec![
-            // Player 0: striker with real tactical layer
-            LayeredAgent::new(
-                Box::new(StrikerStrategy::new()),
-                Box::new(SharedOperationsLayer::new()),
-                Box::new(SharedTacticalLayer::new(damage_table)),
-                0,
-                50,
-                5,
-            ),
-            // Player 1: striker with real tactical layer
-            LayeredAgent::new(
-                Box::new(StrikerStrategy::new()),
-                Box::new(SharedOperationsLayer::new()),
-                Box::new(SharedTacticalLayer::new(damage_table_2)),
-                1,
-                50,
-                5,
-            ),
-        ]
-    } else {
-        vec![
-            // Player 0: null agent (does nothing)
-            LayeredAgent::new(
-                Box::new(NullStrategy),
-                Box::new(NullOperationsLayer),
-                Box::new(NullTacticalLayer),
-                0,
-                50,
-                5,
-            ),
-            // Player 1: striker with real tactical layer
-            LayeredAgent::new(
-                Box::new(StrikerStrategy::new()),
-                Box::new(SharedOperationsLayer::new()),
-                Box::new(SharedTacticalLayer::new(damage_table)),
-                1,
-                50,
-                5,
-            ),
-        ]
-    };
-
+    let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
+    let mut state = GameState::new(20, 20, 2, hf);
     let mut economy = EconomyState {
         food: vec![0.0; state.num_players as usize],
         material: vec![0.0; state.num_players as usize],
     };
+    let mut rng = StdRng::seed_from_u64(0xA63E_0F11);
 
-    // Run tick by tick
-    let max_ticks = 200;
-    for t in 0..max_ticks {
-        let a = &state.entities[soldier_a];
-        let b = &state.entities[soldier_b];
+    let side_a = spawn_arena_side(
+        &mut state,
+        &scenario.side_a,
+        scenario.cluster_radius_m,
+        &mut rng,
+    );
+    let side_b = spawn_arena_side(
+        &mut state,
+        &scenario.side_b,
+        scenario.cluster_radius_m,
+        &mut rng,
+    );
 
-        let a_pos = a.pos.unwrap_or(Vec3::ZERO);
-        let b_pos = b.pos.unwrap_or(Vec3::ZERO);
-        let dist = (b_pos - a_pos).length();
+    let mut agents = vec![
+        make_agent(&scenario.side_a.agent, 0),
+        make_agent(&scenario.side_b.agent, 1),
+    ];
 
-        let a_blood = a.vitals.as_ref().map(|v| v.blood).unwrap_or(-1.0);
-        let b_blood = b.vitals.as_ref().map(|v| v.blood).unwrap_or(-1.0);
-        let a_stamina = a.vitals.as_ref().map(|v| v.stamina).unwrap_or(-1.0);
-        let b_stamina = b.vitals.as_ref().map(|v| v.stamina).unwrap_or(-1.0);
+    for t in 0..scenario.max_ticks {
+        let summary_a = summarize_arena_side(&state, &side_a.members);
+        let summary_b = summarize_arena_side(&state, &side_b.members);
+        let dist = average_inter_side_distance(&state, &side_a.members, &side_b.members);
 
-        let a_atk = a
-            .combatant
-            .as_ref()
-            .and_then(|c| c.attack.as_ref())
-            .is_some();
-        let b_atk = b
-            .combatant
-            .as_ref()
-            .and_then(|c| c.attack.as_ref())
-            .is_some();
-        let a_cd = a
-            .combatant
-            .as_ref()
-            .and_then(|c| c.cooldown.as_ref())
-            .is_some();
-        let b_cd = b
-            .combatant
-            .as_ref()
-            .and_then(|c| c.cooldown.as_ref())
-            .is_some();
-
-        let a_wounds = a.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
-        let b_wounds = b.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
-
-        let a_wps = a.mobile.as_ref().map(|m| m.waypoints.len()).unwrap_or(0);
-        let b_wps = b.mobile.as_ref().map(|m| m.waypoints.len()).unwrap_or(0);
-
-        // Print every tick for first 10, every 5 until 50, every 10 after
         let should_print = t < 10 || (t < 50 && t % 5 == 0) || t % 10 == 0;
         if should_print {
             eprintln!(
-                "T{:>4} | dist={:>6.1} | A({:>6.1},{:>6.1}) bl={:.2} st={:.2} w={} atk={} cd={} wp={} | B({:>6.1},{:>6.1}) bl={:.2} st={:.2} w={} atk={} cd={} wp={}",
+                "T{:>4} | dist={:>6.1} | A alive={:>2}/{:>2} w={} avg_bl={:.2} atk={} cd={} | B alive={:>2}/{:>2} w={} avg_bl={:.2} atk={} cd={}",
                 t,
                 dist,
-                a_pos.x,
-                a_pos.y,
-                a_blood,
-                a_stamina,
-                a_wounds,
-                a_atk as u8,
-                a_cd as u8,
-                a_wps,
-                b_pos.x,
-                b_pos.y,
-                b_blood,
-                b_stamina,
-                b_wounds,
-                b_atk as u8,
-                b_cd as u8,
-                b_wps,
+                summary_a.alive,
+                summary_a.total,
+                summary_a.wounds,
+                summary_a.avg_blood,
+                summary_a.attacking,
+                summary_a.cooling_down,
+                summary_b.alive,
+                summary_b.total,
+                summary_b.wounds,
+                summary_b.avg_blood,
+                summary_b.attacking,
+                summary_b.cooling_down,
             );
         }
 
-        // Check for death
-        let a_dead = a.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
-        let b_dead = b.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
-        if a_dead || b_dead {
-            let a_label = if mutual { "striker-A" } else { "null" };
-            let b_label = if mutual { "striker-B" } else { "striker" };
-            if a_dead {
-                eprintln!("\n>>> Soldier A ({}) DIED at tick {} <<<", a_label, t);
-            }
-            if b_dead {
-                eprintln!("\n>>> Soldier B ({}) DIED at tick {} <<<", b_label, t);
-            }
+        if summary_a.alive == 0 || summary_b.alive == 0 {
             break;
         }
 
-        // Run agents
         let outputs: Vec<AgentOutput> = agents.iter_mut().map(|a| a.tick(&state)).collect();
-
-        // Log agent commands when they happen
         for (pi, po) in outputs.iter().enumerate() {
             if !po.operational_commands.is_empty() {
                 eprintln!(
@@ -1316,7 +1166,6 @@ fn run_arena(mode: &str) {
         }
 
         let result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
-
         if result.impacts > 0 {
             eprintln!("  [combat] {} impacts this tick", result.impacts);
         }
@@ -1325,51 +1174,219 @@ fn run_arena(mode: &str) {
         }
     }
 
-    // Outcome summary
-    let a = &state.entities[soldier_a];
-    let b = &state.entities[soldier_b];
-    let a_wounds = a.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
-    let b_wounds = b.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
-    let a_blood = a.vitals.as_ref().map(|v| v.blood).unwrap_or(0.0);
-    let b_blood = b.vitals.as_ref().map(|v| v.blood).unwrap_or(0.0);
-    let a_dead = a.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
-    let b_dead = b.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
-
+    let summary_a = summarize_arena_side(&state, &side_a.members);
+    let summary_b = summarize_arena_side(&state, &side_b.members);
     eprintln!("\n=== Arena complete at tick {} ===", state.tick);
     eprintln!(
-        "  Soldier A: {} wounds, blood={:.2}, {}",
-        a_wounds,
-        a_blood,
-        if a_dead { "DEAD" } else { "alive" }
+        "  Side A ({}): alive={}/{}, wounds={}, avg_blood={:.2}",
+        side_a.agent, summary_a.alive, summary_a.total, summary_a.wounds, summary_a.avg_blood,
     );
     eprintln!(
-        "  Soldier B: {} wounds, blood={:.2}, {}",
-        b_wounds,
-        b_blood,
-        if b_dead { "DEAD" } else { "alive" }
+        "  Side B ({}): alive={}/{}, wounds={}, avg_blood={:.2}",
+        side_b.agent, summary_b.alive, summary_b.total, summary_b.wounds, summary_b.avg_blood,
     );
 
-    if a_dead && b_dead {
-        eprintln!("  Result: MUTUAL KILL");
-    } else if a_dead {
-        eprintln!(
-            "  Winner: Soldier B (blood={:.2}, {} wounds taken)",
-            b_blood, b_wounds
+    match (summary_a.alive, summary_b.alive) {
+        (0, 0) => eprintln!("  Result: MUTUAL KILL"),
+        (0, _) => eprintln!("  Winner: Side B"),
+        (_, 0) => eprintln!("  Winner: Side A"),
+        _ => eprintln!(
+            "  Result: TIME OUT — no winner after {} ticks",
+            scenario.max_ticks
+        ),
+    }
+}
+
+fn spawn_arena_side(
+    state: &mut GameState,
+    side: &ArenaSideScenario,
+    cluster_radius_m: f32,
+    rng: &mut StdRng,
+) -> ArenaSideState {
+    let mut members = Vec::with_capacity(side.soldiers);
+    let bow_count = match side.weapon_preset {
+        ArenaWeaponPreset::Swords => 0,
+        ArenaWeaponPreset::Mixed => ((side.soldiers as f32) * 0.4).round() as usize,
+    };
+    let armor_count = ((side.soldiers as f32) * side.armor_ratio)
+        .round()
+        .clamp(0.0, side.soldiers as f32) as usize;
+
+    for i in 0..side.soldiers {
+        let pos = arena_spawn_position(side.center, cluster_radius_m, rng);
+        let soldier = spawn_entity(
+            state,
+            EntityBuilder::new()
+                .pos(pos)
+                .owner(side.owner)
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
+                .vitals()
+                .equipment(Equipment::empty()),
         );
-    } else if b_dead {
-        eprintln!(
-            "  Winner: Soldier A (blood={:.2}, {} wounds taken)",
-            a_blood, a_wounds
+
+        let weapon_props = if i < bow_count {
+            weapon::wooden_bow()
+        } else {
+            weapon::iron_sword()
+        };
+        let weapon_key = spawn_entity(
+            state,
+            EntityBuilder::new()
+                .owner(side.owner)
+                .weapon_props(weapon_props),
         );
-    } else {
-        eprintln!("  Result: TIME OUT — no winner after {} ticks", max_ticks);
+        contain(state, soldier, weapon_key);
+        state.entities[soldier].equipment.as_mut().unwrap().weapon = Some(weapon_key);
+
+        if i < armor_count {
+            let armor_props: Option<ArmorProperties> = match side.armor_preset {
+                ArenaArmorPreset::None => None,
+                ArenaArmorPreset::LeatherCuirass => Some(armor::leather_cuirass()),
+                ArenaArmorPreset::BronzeBreastplate => Some(armor::bronze_breastplate()),
+            };
+            if let Some(armor_props) = armor_props {
+                let armor_key = spawn_entity(
+                    state,
+                    EntityBuilder::new()
+                        .owner(side.owner)
+                        .armor_props(armor_props.clone()),
+                );
+                contain(state, soldier, armor_key);
+                equipment::equip_armor(
+                    state.entities[soldier].equipment.as_mut().unwrap(),
+                    armor_key,
+                    &armor_props,
+                );
+            }
+        }
+
+        members.push(soldier);
     }
 
-    if mutual && (a_wounds > 0 && b_wounds > 0) {
-        eprintln!("  Combat was COMPETITIVE — both soldiers dealt damage");
-    } else if mutual {
-        eprintln!("  Combat was ONE-SIDED — only one soldier dealt damage");
+    let leader = members[0];
+    let stack_id = state.alloc_stack_id();
+    state.stacks.push(Stack {
+        id: stack_id,
+        owner: side.owner,
+        members: members.iter().copied().collect(),
+        formation: side.formation,
+        leader,
+    });
+
+    ArenaSideState {
+        agent: side.agent.clone(),
+        members,
     }
+}
+
+fn arena_spawn_position(center: Vec3, radius: f32, rng: &mut StdRng) -> Vec3 {
+    if radius <= 0.0 {
+        return center;
+    }
+    let theta = rng.gen_range(0.0..std::f32::consts::TAU);
+    let dist = rng.gen_range(0.0..radius);
+    Vec3::new(
+        center.x + theta.cos() * dist,
+        center.y + theta.sin() * dist,
+        center.z,
+    )
+}
+
+fn summarize_arena_side(state: &GameState, members: &[EntityKey]) -> ArenaSideSummary {
+    let mut alive = 0usize;
+    let mut wounds = 0usize;
+    let mut total_blood = 0.0f32;
+    let mut attacking = 0usize;
+    let mut cooling_down = 0usize;
+
+    for &member_key in members {
+        let Some(entity) = state.entities.get(member_key) else {
+            continue;
+        };
+        let is_dead = entity.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
+        if !is_dead {
+            alive += 1;
+        }
+        wounds += entity.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
+        total_blood += entity.vitals.as_ref().map(|v| v.blood).unwrap_or(0.0);
+        if entity
+            .combatant
+            .as_ref()
+            .and_then(|c| c.attack.as_ref())
+            .is_some()
+        {
+            attacking += 1;
+        }
+        if entity
+            .combatant
+            .as_ref()
+            .and_then(|c| c.cooldown.as_ref())
+            .is_some()
+        {
+            cooling_down += 1;
+        }
+    }
+
+    ArenaSideSummary {
+        alive,
+        total: members.len(),
+        wounds,
+        avg_blood: if members.is_empty() {
+            0.0
+        } else {
+            total_blood / members.len() as f32
+        },
+        attacking,
+        cooling_down,
+    }
+}
+
+fn average_inter_side_distance(
+    state: &GameState,
+    side_a: &[EntityKey],
+    side_b: &[EntityKey],
+) -> f32 {
+    let living_a: Vec<_> = side_a
+        .iter()
+        .filter_map(|&key| {
+            let entity = state.entities.get(key)?;
+            if entity.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true) {
+                None
+            } else {
+                entity.pos
+            }
+        })
+        .collect();
+    let living_b: Vec<_> = side_b
+        .iter()
+        .filter_map(|&key| {
+            let entity = state.entities.get(key)?;
+            if entity.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true) {
+                None
+            } else {
+                entity.pos
+            }
+        })
+        .collect();
+
+    if living_a.is_empty() || living_b.is_empty() {
+        return 0.0;
+    }
+
+    let mut total = 0.0f32;
+    let mut count = 0usize;
+    for a in &living_a {
+        for b in &living_b {
+            total += (*b - *a).length();
+            count += 1;
+        }
+    }
+    total / count as f32
 }
 
 // ---------------------------------------------------------------------------

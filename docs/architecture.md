@@ -130,6 +130,49 @@ simulate_everything_cli bench --profile --seeds 202 --agents pressure,swarm
 simulate_everything_cli bench --converge --agents pressure,swarm --ci 0.02 --max-seeds 10000
 ```
 
+### V3 bench mode
+```bash
+simulate_everything_cli v3bench [flags]
+```
+V3 agent benchmark and arena harness. Supports fixed-seed matchups, profiling, ASCII dumps, and config-driven arena scenarios.
+
+**Arena flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--arena` | — | Run the V3 arena harness instead of the full bench flow |
+| `--arena-config PATH` | — | Load a TOML arena scenario file with per-side agent/loadout/formation settings |
+| `--arena-mode mutual\|null-vs-striker` | `null-vs-striker` | Legacy fallback when `--arena-config` is omitted |
+
+**Arena config example:**
+```toml
+mode = "mutual"
+max_ticks = 300
+cluster_radius_m = 30.0
+side_a_center = [50.0, 50.0]
+side_b_center = [200.0, 50.0]
+
+[side_a]
+agent = "striker"
+soldiers = 10
+weapon_preset = "mixed"
+armor = "leather_cuirass"
+armor_ratio = 0.4
+formation = "line"
+
+[side_b]
+agent = "striker"
+soldiers = 10
+weapon_preset = "mixed"
+armor = "leather_cuirass"
+armor_ratio = 0.4
+formation = "line"
+```
+
+**Arena example:**
+```bash
+simulate_everything_cli v3bench --arena --arena-config examples/v3-arena-10v10-mixed.toml
+```
+
 ## Replay Binary (`simulate_everything_replay`)
 
 Separate binary for generating and serving publishable game replays. No WebSocket handlers, no live game state, no agent subprocess spawning — minimal attack surface.
