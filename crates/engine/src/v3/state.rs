@@ -36,40 +36,10 @@ pub struct Stack {
 }
 
 // ---------------------------------------------------------------------------
-// Roles and structure types
+// Shared enums — canonical definitions in protocol crate
 // ---------------------------------------------------------------------------
 
-/// Role of a Person entity. Determines behavior in the economy and agent layers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Role {
-    Idle,
-    Farmer,
-    Worker,
-    Soldier,
-    Builder,
-}
-
-/// Type of structure entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum StructureType {
-    Farm,
-    Village,
-    City,
-    Depot,
-    Wall,
-    Tower,
-    Workshop,
-}
-
-/// Type of resource entity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ResourceType {
-    Food,
-    Material,
-    Ore,
-    Wood,
-    Stone,
-}
+pub use simulate_everything_protocol::{ResourceType, Role, StructureType};
 
 /// Persistent task assignment for per-tick economy and spectator state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

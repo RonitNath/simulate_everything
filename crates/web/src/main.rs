@@ -951,20 +951,30 @@ async fn api_v2_rr_delete_review(
 // V3 Round-Robin
 // ============================================================
 
-async fn ws_v3_rr(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+#[derive(Deserialize)]
+struct WsFormatQuery {
+    format: Option<String>,
+}
+
+async fn ws_v3_rr(
+    ws: WebSocketUpgrade,
+    Query(query): Query<WsFormatQuery>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
     let rx = state.v3_rr.spectator_subscribe();
     let catchup = state.v3_rr.spectator_catchup().await;
-    ws.on_upgrade(move |socket| handle_v3_spectator(socket, rx, catchup))
+    let use_json = query.format.as_deref() == Some("json");
+    ws.on_upgrade(move |socket| handle_v3_spectator(socket, rx, catchup, use_json))
 }
 
 async fn handle_v3_spectator(
     mut socket: WebSocket,
     mut rx: broadcast::Receiver<v3_protocol::V3ServerToSpectator>,
     catchup: Vec<v3_protocol::V3ServerToSpectator>,
+    use_json: bool,
 ) {
     for msg in catchup {
-        let text = serde_json::to_string(&msg).unwrap();
-        if socket.send(Message::Text(text.into())).await.is_err() {
+        if send_v3_msg(&mut socket, &msg, use_json).await.is_err() {
             return;
         }
     }
@@ -972,8 +982,7 @@ async fn handle_v3_spectator(
     loop {
         match rx.recv().await {
             Ok(msg) => {
-                let text = serde_json::to_string(&msg).unwrap();
-                if socket.send(Message::Text(text.into())).await.is_err() {
+                if send_v3_msg(&mut socket, &msg, use_json).await.is_err() {
                     break;
                 }
             }
@@ -982,6 +991,21 @@ async fn handle_v3_spectator(
             }
             Err(broadcast::error::RecvError::Closed) => break,
         }
+    }
+}
+
+/// Send a V3 message as JSON (Text) or msgpack (Binary).
+async fn send_v3_msg(
+    socket: &mut WebSocket,
+    msg: &v3_protocol::V3ServerToSpectator,
+    use_json: bool,
+) -> Result<(), axum::Error> {
+    if use_json {
+        let text = serde_json::to_string(msg).unwrap();
+        socket.send(Message::Text(text.into())).await
+    } else {
+        let bytes = simulate_everything_protocol::encode(msg).unwrap();
+        socket.send(Message::Binary(bytes.into())).await
     }
 }
 
@@ -1213,23 +1237,23 @@ async fn api_v3_drill_zoo(State(state): State<Arc<AppState>>) -> impl IntoRespon
 
 async fn ws_v3_drill(
     ws: WebSocketUpgrade,
+    Query(query): Query<WsFormatQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let rx = state.v3_drill.spectator_subscribe();
     let catchup = state.v3_drill.spectator_catchup().await;
-    ws.on_upgrade(move |socket| handle_v3_drill_spectator(socket, rx, catchup))
+    let use_json = query.format.as_deref() == Some("json");
+    ws.on_upgrade(move |socket| handle_v3_drill_spectator(socket, rx, catchup, use_json))
 }
 
 async fn handle_v3_drill_spectator(
     mut socket: WebSocket,
     mut rx: broadcast::Receiver<v3_protocol::V3ServerToSpectator>,
     catchup: Vec<v3_protocol::V3ServerToSpectator>,
+    use_json: bool,
 ) {
-    use axum::extract::ws::Message;
-
     for msg in catchup {
-        let text = serde_json::to_string(&msg).unwrap();
-        if socket.send(Message::Text(text.into())).await.is_err() {
+        if send_v3_msg(&mut socket, &msg, use_json).await.is_err() {
             return;
         }
     }
@@ -1237,8 +1261,7 @@ async fn handle_v3_drill_spectator(
     loop {
         match rx.recv().await {
             Ok(msg) => {
-                let text = serde_json::to_string(&msg).unwrap();
-                if socket.send(Message::Text(text.into())).await.is_err() {
+                if send_v3_msg(&mut socket, &msg, use_json).await.is_err() {
                     break;
                 }
             }

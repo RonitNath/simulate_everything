@@ -9,8 +9,10 @@ path = "src/main.rs"
 
 [dependencies]
 simulate-everything-engine = { path = "../engine" }
+simulate-everything-protocol = { path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
+rmp-serde = "1"
 rand.workspace = true
 tokio.workspace = true
 axum.workspace = true
