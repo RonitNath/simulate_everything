@@ -391,6 +391,24 @@ fn find_nearest_settlement_hex(state: &GameState, stack: &Stack, player: u8) -> 
 }
 
 // ---------------------------------------------------------------------------
+// Null operations — does nothing (for testing)
+// ---------------------------------------------------------------------------
+
+/// Operations layer that issues no commands. For testing baseline behavior.
+pub struct NullOperationsLayer;
+
+impl OperationsLayer for NullOperationsLayer {
+    fn execute(
+        &mut self,
+        _state: &GameState,
+        _directives: &[StrategicDirective],
+        _player: u8,
+    ) -> Vec<OperationalCommand> {
+        Vec::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

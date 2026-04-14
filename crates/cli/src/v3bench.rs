@@ -6,12 +6,17 @@ use simulate_everything_engine::v3::{
         validate_operational, validate_tactical,
     },
     damage_table::DamageEstimateTable,
+    equipment::Equipment,
+    formation::FormationType,
+    lifecycle::{contain, spawn_entity},
     mapgen,
-    operations::SharedOperationsLayer,
-    state::{GameState, Role},
-    strategy::{SpreadStrategy, StrikerStrategy, TurtleStrategy},
-    tactical::SharedTacticalLayer,
-    weapon::AttackState,
+    movement::Mobile,
+    operations::{NullOperationsLayer, SharedOperationsLayer},
+    spatial::{GeoMaterial, Heightfield, Vec3},
+    state::{Combatant, EntityBuilder, GameState, Person, Role, Stack},
+    strategy::{NullStrategy, SpreadStrategy, StrikerStrategy, TurtleStrategy},
+    tactical::{NullTacticalLayer, SharedTacticalLayer},
+    weapon::{self, AttackState},
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +27,11 @@ use std::time::Instant;
 // ---------------------------------------------------------------------------
 
 pub fn main(args: &[String]) {
+    if args.iter().any(|a| a == "--arena") {
+        run_arena();
+        return;
+    }
+
     let profile_mode = args.iter().any(|a| a == "--profile");
     let converge_mode = args.iter().any(|a| a == "--converge");
     let ascii_mode = args.iter().any(|a| a == "--ascii");
@@ -166,10 +176,20 @@ pub fn main(args: &[String]) {
 // ---------------------------------------------------------------------------
 
 fn v3_agent_names() -> &'static [&'static str] {
-    &["spread", "striker", "turtle"]
+    &["spread", "striker", "turtle", "null"]
 }
 
 fn make_agent(name: &str, player: u8) -> LayeredAgent {
+    if name == "null" {
+        return LayeredAgent::new(
+            Box::new(NullStrategy),
+            Box::new(NullOperationsLayer),
+            Box::new(NullTacticalLayer),
+            player,
+            50,
+            5,
+        );
+    }
     let damage_table = DamageEstimateTable::from_physics();
     let strategy: Box<dyn StrategyLayer> = match name {
         "spread" => Box::new(SpreadStrategy::new()),
@@ -674,6 +694,180 @@ fn run_bench_game(
 }
 
 // ---------------------------------------------------------------------------
+// Arena: minimal 1v1 duel
+// ---------------------------------------------------------------------------
+
+fn run_arena() {
+    eprintln!("=== V3 Arena: 1v1 Duel ===");
+    eprintln!("P0 = null agent (does nothing), P1 = striker (seeks and attacks)\n");
+
+    // Tiny 5x5 map, flat terrain
+    let hf = Heightfield::new(5, 5, 0.0, GeoMaterial::Soil);
+    let mut state = GameState::new(5, 5, 2, hf);
+
+    // Spawn soldier A (player 0) — null agent, will do nothing
+    let soldier_a = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .pos(Vec3::new(50.0, 50.0, 0.0))
+            .owner(0)
+            .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+            .mobile(Mobile::new(2.0, 10.0))
+            .combatant(Combatant::new())
+            .vitals()
+            .equipment(Equipment::empty()),
+    );
+    let sword_a = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .owner(0)
+            .weapon_props(weapon::iron_sword()),
+    );
+    contain(&mut state, soldier_a, sword_a);
+    state.entities[soldier_a].equipment.as_mut().unwrap().weapon = Some(sword_a);
+
+    // Spawn soldier B (player 1) — real tactical agent, will attack
+    // 20m apart — close enough to reach in a few ticks
+    let soldier_b = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .pos(Vec3::new(70.0, 50.0, 0.0))
+            .owner(1)
+            .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+            .mobile(Mobile::new(2.0, 10.0))
+            .combatant(Combatant::new())
+            .vitals()
+            .equipment(Equipment::empty()),
+    );
+    let sword_b = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .owner(1)
+            .weapon_props(weapon::iron_sword()),
+    );
+    contain(&mut state, soldier_b, sword_b);
+    state.entities[soldier_b].equipment.as_mut().unwrap().weapon = Some(sword_b);
+
+    // Pre-form stacks (one member each) so tactical layer can fire
+    let stack_a_id = state.alloc_stack_id();
+    state.stacks.push(Stack {
+        id: stack_a_id,
+        owner: 0,
+        members: [soldier_a].into_iter().collect(),
+        formation: FormationType::Line,
+        leader: soldier_a,
+    });
+
+    let stack_b_id = state.alloc_stack_id();
+    state.stacks.push(Stack {
+        id: stack_b_id,
+        owner: 1,
+        members: [soldier_b].into_iter().collect(),
+        formation: FormationType::Line,
+        leader: soldier_b,
+    });
+
+    // Give B an initial waypoint toward A so it moves before ops kicks in
+    state.entities[soldier_b].mobile.as_mut().unwrap().waypoints.push(
+        Vec3::new(50.0, 50.0, 0.0),
+    );
+
+    // Create agents
+    let damage_table = DamageEstimateTable::from_physics();
+    let mut agents: Vec<LayeredAgent> = vec![
+        // Player 0: null agent (does nothing)
+        LayeredAgent::new(
+            Box::new(NullStrategy),
+            Box::new(NullOperationsLayer),
+            Box::new(NullTacticalLayer),
+            0, 50, 5,
+        ),
+        // Player 1: striker with real tactical layer
+        LayeredAgent::new(
+            Box::new(StrikerStrategy::new()),
+            Box::new(SharedOperationsLayer::new()),
+            Box::new(SharedTacticalLayer::new(damage_table)),
+            1, 50, 5,
+        ),
+    ];
+
+    // Run tick by tick
+    let max_ticks = 200;
+    for t in 0..max_ticks {
+        let a = &state.entities[soldier_a];
+        let b = &state.entities[soldier_b];
+
+        let a_pos = a.pos.unwrap_or(Vec3::ZERO);
+        let b_pos = b.pos.unwrap_or(Vec3::ZERO);
+        let dist = (b_pos - a_pos).length();
+
+        let a_blood = a.vitals.as_ref().map(|v| v.blood).unwrap_or(-1.0);
+        let b_blood = b.vitals.as_ref().map(|v| v.blood).unwrap_or(-1.0);
+        let a_stamina = a.vitals.as_ref().map(|v| v.stamina).unwrap_or(-1.0);
+        let b_stamina = b.vitals.as_ref().map(|v| v.stamina).unwrap_or(-1.0);
+
+        let a_atk = a.combatant.as_ref().and_then(|c| c.attack.as_ref()).is_some();
+        let b_atk = b.combatant.as_ref().and_then(|c| c.attack.as_ref()).is_some();
+        let a_cd = a.combatant.as_ref().and_then(|c| c.cooldown.as_ref()).is_some();
+        let b_cd = b.combatant.as_ref().and_then(|c| c.cooldown.as_ref()).is_some();
+
+        let a_wounds = a.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
+        let b_wounds = b.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
+
+        let a_wps = a.mobile.as_ref().map(|m| m.waypoints.len()).unwrap_or(0);
+        let b_wps = b.mobile.as_ref().map(|m| m.waypoints.len()).unwrap_or(0);
+
+        // Print every tick for first 10, every 5 until 50, every 10 after
+        let should_print = t < 10 || (t < 50 && t % 5 == 0) || t % 10 == 0;
+        if should_print {
+            eprintln!(
+                "T{:>4} | dist={:>6.1} | A({:>6.1},{:>6.1}) bl={:.2} st={:.2} w={} atk={} cd={} wp={} | B({:>6.1},{:>6.1}) bl={:.2} st={:.2} w={} atk={} cd={} wp={}",
+                t, dist,
+                a_pos.x, a_pos.y, a_blood, a_stamina, a_wounds, a_atk as u8, a_cd as u8, a_wps,
+                b_pos.x, b_pos.y, b_blood, b_stamina, b_wounds, b_atk as u8, b_cd as u8, b_wps,
+            );
+        }
+
+        // Check for death
+        let a_dead = a.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
+        let b_dead = b.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
+        if a_dead || b_dead {
+            if a_dead { eprintln!("\n>>> Soldier A (null) DIED at tick {} <<<", t); }
+            if b_dead { eprintln!("\n>>> Soldier B (striker) DIED at tick {} <<<", t); }
+            break;
+        }
+
+        // Run agents
+        let outputs: Vec<AgentOutput> = agents.iter_mut().map(|a| a.tick(&state)).collect();
+
+        // Log agent commands when they happen
+        let p1 = &outputs[1];
+        if !p1.operational_commands.is_empty() {
+            eprintln!("  [agent] P1 ops: {} commands", p1.operational_commands.len());
+        }
+        if !p1.tactical_commands.is_empty() {
+            eprintln!("  [agent] P1 tactical: {} commands ({} stacks engaged)",
+                p1.tactical_commands.len(), p1.tactical_stacks);
+        }
+
+        for output in &outputs {
+            apply_commands(&mut state, output);
+        }
+
+        let result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+
+        if result.impacts > 0 {
+            eprintln!("  [combat] {} impacts this tick", result.impacts);
+        }
+        if result.deaths > 0 {
+            eprintln!("  [combat] {} deaths this tick", result.deaths);
+        }
+    }
+
+    eprintln!("\n=== Arena complete at tick {} ===", state.tick);
+}
+
+// ---------------------------------------------------------------------------
 // Command application
 // ---------------------------------------------------------------------------
 
@@ -711,8 +905,23 @@ fn apply_commands(state: &mut GameState, output: &AgentOutput) {
                     // Other tasks (Farm, Build, Craft, Garrison, Train, Idle) not yet wired.
                 }
             },
+            OperationalCommand::FormStack { entities, archetype: _ } => {
+                if entities.is_empty() { continue; }
+                let leader = entities[0];
+                let owner = state.entities.get(leader)
+                    .and_then(|e| e.owner)
+                    .unwrap_or(0);
+                let stack_id = state.alloc_stack_id();
+                state.stacks.push(Stack {
+                    id: stack_id,
+                    owner,
+                    members: entities.iter().copied().collect(),
+                    formation: FormationType::Line,
+                    leader,
+                });
+            }
             _ => {
-                // FormStack, DisbandStack, ProduceEquipment, EquipEntity,
+                // DisbandStack, ProduceEquipment, EquipEntity,
                 // EstablishSupplyRoute, FoundSettlement — stub.
             }
         }

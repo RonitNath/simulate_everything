@@ -315,6 +315,19 @@ fn add_threat_priorities(view: &StrategicView, directives: &mut Vec<StrategicDir
 }
 
 // ---------------------------------------------------------------------------
+// Null strategy — does nothing (for testing)
+// ---------------------------------------------------------------------------
+
+/// Strategy layer that emits no directives. For testing baseline behavior.
+pub struct NullStrategy;
+
+impl StrategyLayer for NullStrategy {
+    fn plan(&mut self, _view: &StrategicView) -> Vec<StrategicDirective> {
+        Vec::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

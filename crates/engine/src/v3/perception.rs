@@ -189,9 +189,44 @@ pub fn build_strategic_view(state: &GameState, player: u8) -> StrategicView {
             production_capacity: 0,
             growth_trend: 0.0,
         },
-        threats: Vec::new(), // populated in A2+
+        threats: detect_threats(state, player),
         stack_readiness,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Threat detection
+// ---------------------------------------------------------------------------
+
+/// Basic threat detection: group enemy entities by hex proximity into clusters.
+/// Each enemy entity with a position becomes a single-entity cluster for now.
+/// Future: merge nearby entities into larger clusters.
+fn detect_threats(state: &GameState, player: u8) -> Vec<ThreatCluster> {
+    let mut threats = Vec::new();
+
+    for entity in state.entities.values() {
+        let owner = match entity.owner {
+            Some(o) => o,
+            None => continue,
+        };
+        if owner == player { continue; }
+        if entity.person.is_none() { continue; }
+        let pos = match entity.pos {
+            Some(p) => p,
+            None => continue,
+        };
+
+        threats.push(ThreatCluster {
+            position: pos,
+            direction: entity.mobile.as_ref().map(|m| {
+                if m.vel.length_squared() > 0.01 { m.vel } else { Vec3::ZERO }
+            }),
+            entity_count: 1,
+            posture: ThreatPosture::Static,
+        });
+    }
+
+    threats
 }
 
 // ---------------------------------------------------------------------------

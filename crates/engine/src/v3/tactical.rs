@@ -381,6 +381,24 @@ fn retreat_direction(state: &GameState, stack: &Stack) -> super::spatial::Vec3 {
 }
 
 // ---------------------------------------------------------------------------
+// Null tactical — does nothing (for testing)
+// ---------------------------------------------------------------------------
+
+/// Tactical layer that issues no commands. For testing baseline behavior.
+pub struct NullTacticalLayer;
+
+impl TacticalLayer for NullTacticalLayer {
+    fn decide(
+        &mut self,
+        _state: &GameState,
+        _stack: &Stack,
+        _player: u8,
+    ) -> Vec<TacticalCommand> {
+        Vec::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

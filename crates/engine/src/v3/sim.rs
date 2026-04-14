@@ -185,10 +185,32 @@ fn compute_steering_and_move(state: &mut GameState, dt: f32) {
             };
             let derived_speed = speed_factors.derived_speed();
 
-            // Steering: seek next waypoint with separation
+            // Melee approach: if entity has an active attack, steer toward target
+            let attack_target_key = entity.combatant.as_ref()
+                .and_then(|c| c.attack.as_ref())
+                .map(|a| a.target);
+
+            let has_waypoints = !mobile.waypoints.is_empty();
+            let has_intent = has_waypoints || attack_target_key.is_some();
+
             let mut accel = Vec3::ZERO;
 
-            if let Some(&wp) = mobile.waypoints.first() {
+            if let Some(target_key) = attack_target_key {
+                // Steer toward attack target for melee approach
+                if let Some(target_pos) = state.entities.get(target_key)
+                    .and_then(|e| e.pos)
+                {
+                    accel = steering::arrive(
+                        pos,
+                        mobile.vel,
+                        target_pos,
+                        mobile.steering_force,
+                        derived_speed,
+                        2.0, // tight arrival for melee
+                    );
+                }
+            } else if let Some(&wp) = mobile.waypoints.first() {
+                // Normal waypoint steering
                 accel = steering::arrive(
                     pos,
                     mobile.vel,
@@ -199,17 +221,20 @@ fn compute_steering_and_move(state: &mut GameState, dt: f32) {
                 );
             }
 
-            // Separation from nearby entities
-            let neighbors: SmallVec<[Vec3; 16]> = mobile_positions
-                .iter()
-                .filter(|(k, _)| *k != key)
-                .filter(|(_, p)| (*p - pos).length_squared() < 30.0 * 30.0)
-                .map(|(_, p)| *p)
-                .collect();
+            // Separation only for entities with movement intent (prevent idle drift)
+            if has_intent {
+                let neighbors: SmallVec<[Vec3; 16]> = mobile_positions
+                    .iter()
+                    .filter(|(k, _)| *k != key)
+                    .filter(|(k, _)| Some(*k) != attack_target_key)
+                    .filter(|(_, p)| (*p - pos).length_squared() < 30.0 * 30.0)
+                    .map(|(_, p)| *p)
+                    .collect();
 
-            if !neighbors.is_empty() {
-                let sep = steering::separation(pos, &neighbors, 15.0);
-                accel = accel + sep;
+                if !neighbors.is_empty() {
+                    let sep = steering::separation(pos, &neighbors, 15.0);
+                    accel = accel + sep;
+                }
             }
 
             // Integrate
