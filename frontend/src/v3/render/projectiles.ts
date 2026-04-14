@@ -5,6 +5,7 @@ import { Graphics } from "pixi.js";
 import type { ProjectileState, Vec3 } from "../entityMap";
 import { lerpVec3, interpT } from "../entityMap";
 import type { LodTier } from "./entities";
+import { worldToCanvas } from "./grid";
 
 /** Pre-computed projectile for rendering. */
 export interface RenderProjectile {
@@ -21,8 +22,9 @@ function buildRenderProjectiles(
   for (const p of projectiles.values()) {
     const t = interpT(p.lastTickTime, tickIntervalMs, now);
     const pos = lerpVec3(p.prevPos, p.currPos, t);
+    const [x, y] = worldToCanvas(pos.x, pos.y);
     result.push({
-      pos,
+      pos: { x, y, z: pos.z },
       velocity: { x: p.info.vx, y: p.info.vy, z: p.info.vz },
     });
   }

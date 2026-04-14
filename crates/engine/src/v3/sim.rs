@@ -167,18 +167,13 @@ fn compute_steering_and_move(state: &mut GameState, dt: f32) {
             let leg_wound_weight = entity
                 .wounds
                 .as_ref()
-                .map(|w| {
-                    super::wound::zone_wound_weight(
-                        w,
-                        super::armor::BodyZone::Legs,
-                    )
-                })
+                .map(|w| super::wound::zone_wound_weight(w, super::armor::BodyZone::Legs))
                 .unwrap_or(0.0);
 
             let speed_factors = movement::SpeedFactors {
-                base_capability: 3.0, // default person speed
-                slope_factor: 1.0,    // TODO: compute from heightfield
-                surface_factor: 1.0,  // TODO: compute from material at pos
+                base_capability: 3.0,    // default person speed
+                slope_factor: 1.0,       // TODO: compute from heightfield
+                surface_factor: 1.0,     // TODO: compute from material at pos
                 encumbrance_factor: 1.0, // TODO: compute from carried weight
                 wound_factor: movement::wound_factor(leg_wound_weight),
                 stamina_factor: movement::stamina_factor(stamina),
@@ -186,7 +181,9 @@ fn compute_steering_and_move(state: &mut GameState, dt: f32) {
             let derived_speed = speed_factors.derived_speed();
 
             // Melee approach: if entity has an active attack, steer toward target
-            let attack_target_key = entity.combatant.as_ref()
+            let attack_target_key = entity
+                .combatant
+                .as_ref()
                 .and_then(|c| c.attack.as_ref())
                 .map(|a| a.target);
 
@@ -197,17 +194,26 @@ fn compute_steering_and_move(state: &mut GameState, dt: f32) {
 
             if let Some(target_key) = attack_target_key {
                 // Steer toward attack target for melee approach
-                if let Some(target_pos) = state.entities.get(target_key)
-                    .and_then(|e| e.pos)
-                {
-                    accel = steering::arrive(
-                        pos,
-                        mobile.vel,
-                        target_pos,
-                        mobile.steering_force,
-                        derived_speed,
-                        2.0, // tight arrival for melee
-                    );
+                if let Some(target_pos) = state.entities.get(target_key).and_then(|e| e.pos) {
+                    let target_radius = state
+                        .entities
+                        .get(target_key)
+                        .and_then(|e| e.mobile.as_ref())
+                        .map(|m| m.radius)
+                        .unwrap_or(mobile.radius);
+                    let strike_distance = mobile.radius + target_radius + 2.0;
+                    let center_distance = (target_pos - pos).length();
+
+                    if center_distance > strike_distance {
+                        accel = steering::arrive(
+                            pos,
+                            mobile.vel,
+                            target_pos,
+                            mobile.steering_force,
+                            derived_speed,
+                            strike_distance,
+                        );
+                    }
                 }
             } else if let Some(&wp) = mobile.waypoints.first() {
                 // Normal waypoint steering
@@ -226,21 +232,19 @@ fn compute_steering_and_move(state: &mut GameState, dt: f32) {
                 let neighbors: SmallVec<[Vec3; 16]> = mobile_positions
                     .iter()
                     .filter(|(k, _)| *k != key)
-                    .filter(|(k, _)| Some(*k) != attack_target_key)
                     .filter(|(_, p)| (*p - pos).length_squared() < 30.0 * 30.0)
                     .map(|(_, p)| *p)
                     .collect();
 
                 if !neighbors.is_empty() {
-                    let sep = steering::separation(pos, &neighbors, 15.0);
+                    let sep = steering::separation(pos, &neighbors, mobile.radius * 2.0);
                     accel = accel + sep;
                 }
             }
 
             // Integrate
             let mut mobile_clone = mobile.clone();
-            let new_pos =
-                movement::integrate(pos, &mut mobile_clone, accel, derived_speed, dt);
+            let new_pos = movement::integrate(pos, &mut mobile_clone, accel, derived_speed, dt);
 
             // Consume waypoints
             movement::consume_waypoint(new_pos, &mut mobile_clone, 2.0);
@@ -301,11 +305,7 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
                 Some(e) => e,
                 None => continue,
             };
-            let attack = match entity
-                .combatant
-                .as_mut()
-                .and_then(|c| c.attack.as_mut())
-            {
+            let attack = match entity.combatant.as_mut().and_then(|c| c.attack.as_mut()) {
                 Some(a) => a,
                 None => continue,
             };
@@ -320,11 +320,23 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
                     .get(attacker_key)
                     .and_then(|e| e.pos)
                     .unwrap_or(Vec3::ZERO);
+                let attacker_radius = state
+                    .entities
+                    .get(attacker_key)
+                    .and_then(|e| e.mobile.as_ref())
+                    .map(|m| m.radius)
+                    .unwrap_or(0.0);
                 let target_pos = state
                     .entities
                     .get(target_key)
                     .and_then(|e| e.pos)
                     .unwrap_or(Vec3::ZERO);
+                let target_radius = state
+                    .entities
+                    .get(target_key)
+                    .and_then(|e| e.mobile.as_ref())
+                    .map(|m| m.radius)
+                    .unwrap_or(0.0);
 
                 // Check stagger state
                 let stagger = state
@@ -350,7 +362,9 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
                     &weapon_props,
                     attacker_key,
                     attacker_pos,
+                    attacker_radius,
                     target_pos,
+                    target_radius,
                     stagger.as_ref(),
                     state.tick,
                 ) {
@@ -375,8 +389,7 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
                     .and_then(|e| e.combatant.as_mut())
                 {
                     combatant.attack = None;
-                    combatant.cooldown =
-                        Some(weapon::CooldownState::new(cd));
+                    combatant.cooldown = Some(weapon::CooldownState::new(cd));
                 }
             }
             AttackTick::InProgress | AttackTick::Committed => {
@@ -391,11 +404,7 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
         .iter_mut()
         .filter_map(|(key, entity)| {
             let cd = entity.combatant.as_mut()?.cooldown.as_mut()?;
-            if cd.tick() {
-                Some(key)
-            } else {
-                None
-            }
+            if cd.tick() { Some(key) } else { None }
         })
         .collect();
 
@@ -442,11 +451,7 @@ fn advance_projectiles(state: &mut GameState) -> Vec<PendingImpact> {
                 return None; // skip projectiles themselves
             }
             let pos = entity.pos?;
-            let radius = entity
-                .mobile
-                .as_ref()
-                .map(|m| m.radius)
-                .unwrap_or(10.0); // default collision radius for non-mobile
+            let radius = entity.mobile.as_ref().map(|m| m.radius).unwrap_or(10.0); // default collision radius for non-mobile
             Some((key, pos, radius))
         })
         .collect();
@@ -533,11 +538,7 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
                 None => continue,
             };
 
-            let facing = entity
-                .combatant
-                .as_ref()
-                .map(|c| c.facing)
-                .unwrap_or(0.0);
+            let facing = entity.combatant.as_ref().map(|c| c.facing).unwrap_or(0.0);
 
             let vitals = match &entity.vitals {
                 Some(v) => v.clone(),
@@ -557,8 +558,7 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
                 });
 
             // Per-zone armor lookup
-            let mut armor_zones: [Option<super::armor::ArmorProperties>; 5] =
-                Default::default();
+            let mut armor_zones: [Option<super::armor::ArmorProperties>; 5] = Default::default();
             if let Some(eq) = &entity.equipment {
                 for (i, slot) in eq.armor_slots.iter().enumerate() {
                     if let Some(armor_key) = slot {
@@ -607,22 +607,59 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
             .and_then(|wk| state.entities.get(wk))
             .and_then(|we| we.weapon_props.as_ref());
 
-        let (blocked, block_stamina, penetrated, pen_depth, residual,
-            wound_sev, bleed, stagger_force, stagger, hit_zone) = match &result {
+        let (
+            blocked,
+            block_stamina,
+            penetrated,
+            pen_depth,
+            residual,
+            wound_sev,
+            bleed,
+            stagger_force,
+            stagger,
+            hit_zone,
+        ) = match &result {
             ImpactResult::Blocked { stamina_cost } => {
-                (true, *stamina_cost, false, 0.0, 0.0, None, 0.0, 0.0, false,
-                    super::armor::BodyZone::Torso) // zone unknown for blocks
+                (
+                    true,
+                    *stamina_cost,
+                    false,
+                    0.0,
+                    0.0,
+                    None,
+                    0.0,
+                    0.0,
+                    false,
+                    super::armor::BodyZone::Torso,
+                ) // zone unknown for blocks
             }
-            ImpactResult::Deflected { transmitted_force } => {
-                (false, 0.0, false, 0.0, *transmitted_force, None, 0.0,
-                    *transmitted_force, *transmitted_force > 20.0,
-                    super::armor::BodyZone::Torso)
-            }
-            ImpactResult::Wounded { wound, transmitted_force } => {
-                (false, 0.0, true, 1.0, *transmitted_force,
-                    Some(wound.severity), wound.bleed_rate,
-                    *transmitted_force, *transmitted_force > 20.0, wound.zone)
-            }
+            ImpactResult::Deflected { transmitted_force } => (
+                false,
+                0.0,
+                false,
+                0.0,
+                *transmitted_force,
+                None,
+                0.0,
+                *transmitted_force,
+                *transmitted_force > 20.0,
+                super::armor::BodyZone::Torso,
+            ),
+            ImpactResult::Wounded {
+                wound,
+                transmitted_force,
+            } => (
+                false,
+                0.0,
+                true,
+                1.0,
+                *transmitted_force,
+                Some(wound.severity),
+                wound.bleed_rate,
+                *transmitted_force,
+                *transmitted_force > 20.0,
+                wound.zone,
+            ),
         };
 
         // Find armor at the hit zone.
@@ -640,7 +677,9 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
             attacker: impact.attacker_id,
             defender: target_key,
             damage_type: impact.damage_type,
-            weapon_material: attacker_weapon.map(|w| w.material).unwrap_or(super::armor::MaterialType::Iron),
+            weapon_material: attacker_weapon
+                .map(|w| w.material)
+                .unwrap_or(super::armor::MaterialType::Iron),
             weapon_sharpness: impact.sharpness,
             weapon_hardness: attacker_weapon.map(|w| w.hardness).unwrap_or(5.0),
             weapon_weight: attacker_weapon.map(|w| w.weight).unwrap_or(1.0),
@@ -670,9 +709,7 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
 
         // Apply result to entity
         if let Some(entity) = state.entities.get_mut(target_key) {
-            if let (Some(vitals), Some(wounds)) =
-                (&mut entity.vitals, &mut entity.wounds)
-            {
+            if let (Some(vitals), Some(wounds)) = (&mut entity.vitals, &mut entity.wounds) {
                 damage::apply_impact_result(result, vitals, wounds);
             }
         }
@@ -695,11 +732,7 @@ fn tick_vitals(state: &mut GameState, dt: f32) {
             }
 
             // Stamina recovery (also ticks stagger)
-            let wounds_ref = entity
-                .wounds
-                .as_ref()
-                .map(|w| w.as_slice())
-                .unwrap_or(&[]);
+            let wounds_ref = entity.wounds.as_ref().map(|w| w.as_slice()).unwrap_or(&[]);
             vitals.tick_stamina_recovery(wounds_ref, dt);
 
             // Movement drain
@@ -714,15 +747,13 @@ fn tick_vitals(state: &mut GameState, dt: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::equipment::Equipment;
     use super::super::lifecycle::spawn_entity;
     use super::super::mapgen;
     use super::super::movement::Mobile;
-    use super::super::state::{
-        Combatant, EntityBuilder, Person, Role,
-    };
+    use super::super::state::{Combatant, EntityBuilder, Person, Role};
     use super::super::vitals::Vitals;
+    use super::*;
 
     #[test]
     fn tick_advances_time() {
@@ -852,9 +883,18 @@ mod tests {
         tick(&mut state, 1.0);
 
         // Entity persists as inert corpse
-        assert!(state.entities.contains_key(key), "dead entity should persist");
-        assert!(state.entities[key].mobile.is_none(), "dead entity loses mobile");
-        assert!(state.entities[key].pos.is_some(), "dead entity keeps position");
+        assert!(
+            state.entities.contains_key(key),
+            "dead entity should persist"
+        );
+        assert!(
+            state.entities[key].mobile.is_none(),
+            "dead entity loses mobile"
+        );
+        assert!(
+            state.entities[key].pos.is_some(),
+            "dead entity keeps position"
+        );
     }
 
     #[test]
@@ -1010,9 +1050,10 @@ mod tests {
 
         // Target should have taken damage OR the attack whiffed (distance-dependent)
         // At 1m apart with 1.5m reach, should hit.
-        let blood_after = state.entities.get(target).map(|e| {
-            e.vitals.as_ref().unwrap().blood
-        });
+        let blood_after = state
+            .entities
+            .get(target)
+            .map(|e| e.vitals.as_ref().unwrap().blood);
 
         // Attack should have resolved (combat state cleared)
         let attack_cleared = state

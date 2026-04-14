@@ -6,7 +6,7 @@
 import { Graphics } from "pixi.js";
 import type { EntityState } from "../entityMap";
 import { getDeathProgress } from "../entityMap";
-import { playerColorNum, HEX_SIZE, hexCenter } from "./grid";
+import { playerColorNum, HEX_SIZE, hexCenter, pixelToHex, worldToCanvas } from "./grid";
 
 // Desaturate a color by blending toward gray
 function desaturate(color: number, amount: number): number {
@@ -28,7 +28,7 @@ export function drawCorpsesClose(
   g.clear();
 
   for (const e of corpses) {
-    const pos = e.currPos; // Corpses are at frozen position
+    const [px, py] = worldToCanvas(e.currPos.x, e.currPos.y);
     const owner = e.info.owner ?? 0;
     const baseColor = playerColorNum(owner);
     const color = desaturate(baseColor, 0.7);
@@ -39,20 +39,20 @@ export function drawCorpsesClose(
       const radius = 3 * (1 - progress * 0.3); // Slightly shrink
       const alpha = 0.9 - progress * 0.3;
 
-      g.circle(pos.x, pos.y, radius);
+      g.circle(px, py, radius);
       g.fill({ color, alpha });
       g.stroke({ color: 0x440000, width: 0.5 });
     } else {
       // Corpse: small desaturated mark
-      g.circle(pos.x, pos.y, 2.5);
+      g.circle(px, py, 2.5);
       g.fill({ color, alpha: 0.5 });
       g.stroke({ color: 0x333333, width: 0.3 });
 
       // Equipment indicators at very close zoom
       if (e.info.weapon_type) {
         // Small line near corpse representing dropped weapon
-        const wx = pos.x + 3;
-        const wy = pos.y + 1;
+        const wx = px + 3;
+        const wy = py + 1;
         g.moveTo(wx - 2, wy);
         g.lineTo(wx + 2, wy);
         g.stroke({ color: 0x888888, alpha: 0.5, width: 0.6 });
@@ -71,10 +71,10 @@ export function drawCorpsesMid(
   const buckets = new Map<string, { row: number; col: number; count: number }>();
 
   for (const e of corpses) {
-    const q = e.info.hex_q;
-    const r = e.info.hex_r;
-    const row = r;
-    const col = q + Math.floor((r - (r & 1)) / 2);
+    const [row, col] = pixelToHex(
+      ...worldToCanvas(e.currPos.x, e.currPos.y),
+      HEX_SIZE,
+    );
     const key = `${row},${col}`;
 
     let bucket = buckets.get(key);
@@ -107,10 +107,10 @@ export function drawCorpsesFar(
   const buckets = new Map<string, { row: number; col: number; count: number }>();
 
   for (const e of corpses) {
-    const q = e.info.hex_q;
-    const r = e.info.hex_r;
-    const row = r;
-    const col = q + Math.floor((r - (r & 1)) / 2);
+    const [row, col] = pixelToHex(
+      ...worldToCanvas(e.currPos.x, e.currPos.y),
+      HEX_SIZE,
+    );
     const key = `${row},${col}`;
 
     let bucket = buckets.get(key);

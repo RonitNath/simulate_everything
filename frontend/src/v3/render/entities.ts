@@ -5,7 +5,7 @@
 import { Graphics } from "pixi.js";
 import type { Vec3 } from "../entityMap";
 import type { SpectatorEntityInfo } from "../../v3types";
-import { playerColorNum, HEX_SIZE, hexCenter } from "./grid";
+import { playerColorNum, HEX_SIZE, hexCenter, pixelToHex } from "./grid";
 
 // --- LOD tier ---
 
@@ -146,35 +146,43 @@ export function drawStackBadges(
 ): void {
   g.clear();
 
-  // Bucket by hex
+  // Bucket by stack when possible so the badge follows actual unit positions.
   const buckets = new Map<string, {
-    row: number; col: number;
-    alive: number; dominantOwner: number;
+    x: number;
+    y: number;
+    count: number;
+    dominantOwner: number;
   }>();
 
   for (const e of entities) {
     if (e.state !== "alive") continue;
     if (e.info.entity_kind === "Structure") continue;
 
-    const q = e.info.hex_q;
-    const r = e.info.hex_r;
-    const row = r;
-    const col = q + Math.floor((r - (r & 1)) / 2);
-    const key = `${row},${col}`;
+    const key = e.info.stack_id != null
+      ? `stack:${e.info.stack_id}`
+      : `entity:${e.info.id}`;
 
     let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { row, col, alive: 0, dominantOwner: e.info.owner ?? 0 };
+      bucket = {
+        x: 0,
+        y: 0,
+        count: 0,
+        dominantOwner: e.info.owner ?? 0,
+      };
       buckets.set(key, bucket);
     }
-    bucket.alive++;
+    bucket.x += e.pos.x;
+    bucket.y += e.pos.y;
+    bucket.count++;
     if (e.info.owner != null) bucket.dominantOwner = e.info.owner;
   }
 
   const size = HEX_SIZE;
   for (const bucket of buckets.values()) {
-    if (bucket.alive === 0) continue;
-    const [cx, cy] = hexCenter(bucket.row, bucket.col, size);
+    if (bucket.count === 0) continue;
+    const cx = bucket.x / bucket.count;
+    const cy = bucket.y / bucket.count;
     const color = playerColorNum(bucket.dominantOwner);
 
     const badgeR = size * 0.35;
@@ -182,7 +190,7 @@ export function drawStackBadges(
     g.fill({ color, alpha: 0.85 });
     g.stroke({ color: 0xffffff, width: 0.8 });
 
-    const count = bucket.alive;
+    const count = bucket.count;
     if (count <= 5) {
       const spacing = badgeR * 1.2 / Math.max(count, 1);
       const startX = cx - (count - 1) * spacing / 2;
@@ -212,10 +220,7 @@ export function drawDensityHeatmap(
     if (e.state !== "alive") continue;
     if (e.info.entity_kind === "Structure") continue;
 
-    const q = e.info.hex_q;
-    const r = e.info.hex_r;
-    const row = r;
-    const col = q + Math.floor((r - (r & 1)) / 2);
+    const [row, col] = pixelToHex(e.pos.x, e.pos.y, HEX_SIZE);
     const key = `${row},${col}`;
 
     let entry = counts.get(key);

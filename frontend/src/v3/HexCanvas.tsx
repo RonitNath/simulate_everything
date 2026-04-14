@@ -16,7 +16,7 @@ import { drawProjectiles } from "./render/projectiles";
 import {
   drawTerrain, drawTerritory, drawRoads, drawSettlements,
   type SettlementEntry,
-  pixelToHex, boardPixelSize, HEX_SIZE, playerColorHex,
+  pixelToHex, boardPixelSize, HEX_SIZE, playerColorHex, worldToCanvas,
 } from "./render/grid";
 import { getViewportBounds } from "./render/camera";
 import * as css from "../styles/v3.css";
@@ -66,6 +66,9 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
   let dragStartY = 0;
   let dragStartCamX = 0;
   let dragStartCamY = 0;
+  let lastAppliedTick: number | null = null;
+  let cameraInitialized = false;
+  let userAdjustedCamera = false;
 
   // Entity map — outside SolidJS reactivity
   const entityMap = new EntityMap();
@@ -79,11 +82,56 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     world.position.set(camX, camY);
   }
 
+  function fitCameraToFrame(frame: V3Snapshot | null) {
+    if (!canvasRef) return;
+    const canvasW = canvasRef.clientWidth || 800;
+    const canvasH = canvasRef.clientHeight || 600;
+    const points = (frame?.entities ?? []).map((e) => worldToCanvas(e.x, e.y));
+
+    if (points.length === 0) {
+      const [boardW, boardH] = boardPixelSize(props.width, props.height, HEX_SIZE);
+      camZoom = 1.0;
+      camX = (canvasW - boardW) / 2;
+      camY = (canvasH - boardH) / 2;
+      applyCamera();
+      cameraInitialized = true;
+      return;
+    }
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of points) {
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+
+    const contentW = Math.max(maxX - minX, HEX_SIZE * 8);
+    const contentH = Math.max(maxY - minY, HEX_SIZE * 6);
+    const pad = 80;
+    const zoomX = (canvasW - pad * 2) / contentW;
+    const zoomY = (canvasH - pad * 2) / contentH;
+    camZoom = Math.min(8.0, Math.max(0.75, Math.min(zoomX, zoomY)));
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    camX = canvasW / 2 - centerX * camZoom;
+    camY = canvasH / 2 - centerY * camZoom;
+    applyCamera();
+    cameraInitialized = true;
+  }
+
   // --- Entity map update from frame data ---
 
   function updateEntityMap(frame: V3Snapshot | null) {
     if (!frame) return;
     const now = performance.now();
+    if (lastAppliedTick != null && frame.tick <= lastAppliedTick) {
+      entityMap.clear();
+    }
+    lastAppliedTick = frame.tick;
 
     if (frame.full_state) {
       entityMap.applyFullSnapshot(frame.entities, frame.projectiles, now);
@@ -132,16 +180,18 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const corpses: import("./entityMap").EntityState[] = [];
 
     for (const e of entityMap.entities.values()) {
+      const scaledCurr = worldToCanvas(e.currPos.x, e.currPos.y);
       if (e.state === "corpse" || e.state === "dying") {
-        if (inViewport(e.currPos.x, e.currPos.y)) {
+        if (inViewport(scaledCurr[0], scaledCurr[1])) {
           corpses.push(e);
         }
       } else {
         const pos = getInterpPos(e, t);
-        if (inViewport(pos.x, pos.y)) {
+        const [x, y] = worldToCanvas(pos.x, pos.y);
+        if (inViewport(x, y)) {
           renderEntities.push({
             info: e.info,
-            pos,
+            pos: { x, y, z: pos.z },
             facing: getInterpFacing(e, t),
             state: e.state,
           });
@@ -171,6 +221,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
 
   function handleWheel(e: WheelEvent) {
     e.preventDefault();
+    userAdjustedCamera = true;
     if (!canvasRef) return;
     const rect = canvasRef.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
@@ -186,6 +237,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
   }
 
   function handlePointerDown(e: PointerEvent) {
+    userAdjustedCamera = true;
     isDragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
@@ -225,8 +277,8 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     // Collect entities in this hex from entity map
     const hexEntities: { id: number; role?: string; owner?: number | null }[] = [];
     for (const es of entityMap.entities.values()) {
-      const er = es.info.hex_r;
-      const ec = es.info.hex_q + Math.floor((er - (er & 1)) / 2);
+      const [ex, ey] = worldToCanvas(es.currPos.x, es.currPos.y);
+      const [er, ec] = pixelToHex(ex, ey, HEX_SIZE);
       if (er === row && ec === col && es.state === "alive") {
         hexEntities.push({ id: es.info.id, role: es.info.role, owner: es.info.owner });
       }
@@ -256,8 +308,9 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
 
       for (const es of entityMap.entities.values()) {
         if (es.state !== "alive") continue;
-        const dx = es.currPos.x - worldX;
-        const dy = es.currPos.y - worldY;
+        const [px, py] = worldToCanvas(es.currPos.x, es.currPos.y);
+        const dx = px - worldX;
+        const dy = py - worldY;
         const dist = dx * dx + dy * dy;
         if (dist < bestDist) {
           bestDist = dist;
@@ -310,12 +363,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     world.addChild(projectileGfx);
 
     // Center initial view
-    const [boardW, boardH] = boardPixelSize(props.width, props.height, HEX_SIZE);
-    const canvasW = canvasRef.clientWidth || 800;
-    const canvasH = canvasRef.clientHeight || 600;
-    camX = (canvasW - boardW) / 2;
-    camY = (canvasH - boardH) / 2;
-    applyCamera();
+    fitCameraToFrame(props.frame);
 
     // Draw terrain (static, only redraws on new game)
     drawTerrain(terrainGfx, {
@@ -392,6 +440,9 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const frame = props.frame;
     if (!app) return;
     updateEntityMap(frame);
+    if (frame && !userAdjustedCamera && (!cameraInitialized || frame.tick <= 1)) {
+      fitCameraToFrame(frame);
+    }
     redrawDynamic();
   });
 

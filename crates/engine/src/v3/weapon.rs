@@ -167,9 +167,9 @@ const BASE_SWING_SPEED: f32 = 10.0;
 /// Default cross-section by damage type. Simplified single float per type.
 fn cross_section_for(damage_type: DamageType) -> f32 {
     match damage_type {
-        DamageType::Slash => 0.5,  // blade edge
+        DamageType::Slash => 0.5,   // blade edge
         DamageType::Pierce => 0.05, // point
-        DamageType::Crush => 1.0,  // weapon face
+        DamageType::Crush => 1.0,   // weapon face
     }
 }
 
@@ -219,14 +219,17 @@ pub fn resolve_melee(
     weapon: &WeaponProperties,
     attacker_key: EntityKey,
     attacker_pos: Vec3,
+    attacker_radius: f32,
     target_pos: Vec3,
+    target_radius: f32,
     stagger_penalties: Option<&StaggerResult>,
     tick: u64,
 ) -> Option<Impact> {
     // Range check at resolution time (target may have moved during windup)
     let delta = target_pos - attacker_pos;
     let distance_2d = delta.xy().length();
-    if distance_2d > weapon.reach {
+    let edge_distance_2d = (distance_2d - attacker_radius - target_radius).max(0.0);
+    if edge_distance_2d > weapon.reach {
         return None; // whiff
     }
 
@@ -306,14 +309,14 @@ pub fn wooden_bow() -> WeaponProperties {
         sharpness: 0.0, // projectile carries sharpness, not the bow
         hardness: 2.0,
         weight: 0.8,
-        reach: 0.0,  // no melee capability
+        reach: 0.0, // no melee capability
         hands_required: 2,
         block_arc: 0.0,
         block_efficiency: 0.0,
         projectile_speed: 50.0, // m/s
         projectile_arc: true,
         accuracy_base: 0.7,
-        windup_ticks: 6, // draw time
+        windup_ticks: 6,          // draw time
         commitment_fraction: 0.7, // committed once bow is mostly drawn
         base_recovery: 4.0,
     }
@@ -364,8 +367,14 @@ mod tests {
         assert!(sword.base_recovery > 0.0);
 
         let bow = wooden_bow();
-        assert!(bow.windup_ticks > sword.windup_ticks, "bow draw should be slower");
-        assert!(bow.commitment_fraction > sword.commitment_fraction, "bow commits later");
+        assert!(
+            bow.windup_ticks > sword.windup_ticks,
+            "bow draw should be slower"
+        );
+        assert!(
+            bow.commitment_fraction > sword.commitment_fraction,
+            "bow commits later"
+        );
     }
 
     // --- W2 tests: attack tick progression ---
@@ -410,7 +419,7 @@ mod tests {
         let attacker_pos = Vec3::new(0.0, 0.0, 0.0);
         let target_pos = Vec3::new(1.0, 0.0, 0.0); // within reach (1.5m)
 
-        let impact = resolve_melee(&sword, attacker, attacker_pos, target_pos, None, 100);
+        let impact = resolve_melee(&sword, attacker, attacker_pos, 0.0, target_pos, 0.0, None, 100);
         assert!(impact.is_some(), "should resolve within reach");
         let impact = impact.unwrap();
         assert_eq!(impact.damage_type, DamageType::Slash);
@@ -425,7 +434,7 @@ mod tests {
         let attacker_pos = Vec3::new(0.0, 0.0, 0.0);
         let target_pos = Vec3::new(5.0, 0.0, 0.0); // far beyond reach
 
-        let impact = resolve_melee(&sword, attacker, attacker_pos, target_pos, None, 100);
+        let impact = resolve_melee(&sword, attacker, attacker_pos, 0.0, target_pos, 0.0, None, 100);
         assert!(impact.is_none(), "should whiff when out of reach");
     }
 
@@ -437,7 +446,7 @@ mod tests {
         // Just beyond reach
         let target_pos = Vec3::new(sword.reach + 0.01, 0.0, 0.0);
 
-        let impact = resolve_melee(&sword, attacker, attacker_pos, target_pos, None, 100);
+        let impact = resolve_melee(&sword, attacker, attacker_pos, 0.0, target_pos, 0.0, None, 100);
         assert!(impact.is_none(), "should whiff just beyond reach");
     }
 
@@ -478,16 +487,33 @@ mod tests {
         let attacker_pos = Vec3::new(0.0, 0.0, 0.0);
         let target_pos = Vec3::new(1.0, 0.0, 0.0);
 
-        let normal = resolve_melee(&sword, attacker, attacker_pos, target_pos, None, 100)
-            .unwrap();
+        let normal = resolve_melee(
+            &sword,
+            attacker,
+            attacker_pos,
+            0.0,
+            target_pos,
+            0.0,
+            None,
+            100,
+        )
+        .unwrap();
 
         let stagger = StaggerResult::Degraded {
             accuracy_penalty: STAGGER_ACCURACY_PENALTY,
             force_penalty: STAGGER_FORCE_PENALTY,
         };
-        let degraded =
-            resolve_melee(&sword, attacker, attacker_pos, target_pos, Some(&stagger), 100)
-                .unwrap();
+        let degraded = resolve_melee(
+            &sword,
+            attacker,
+            attacker_pos,
+            0.0,
+            target_pos,
+            0.0,
+            Some(&stagger),
+            100,
+        )
+        .unwrap();
 
         assert!(
             degraded.kinetic_energy < normal.kinetic_energy,
@@ -559,8 +585,17 @@ mod tests {
         let attacker_pos = Vec3::new(0.0, 0.0, 5.0); // elevated
         let target_pos = Vec3::new(1.0, 0.0, 0.0);
 
-        let impact = resolve_melee(&sword, attacker, attacker_pos, target_pos, None, 100)
-            .unwrap();
+        let impact = resolve_melee(
+            &sword,
+            attacker,
+            attacker_pos,
+            0.0,
+            target_pos,
+            0.0,
+            None,
+            100,
+        )
+        .unwrap();
         assert!(
             impact.height_diff > 0.0,
             "attacker higher should give positive height_diff"

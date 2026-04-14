@@ -3,6 +3,7 @@ use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use simulate_everything_engine::v2::state::EntityKey;
+use simulate_everything_engine::v2::hex::offset_to_axial;
 use simulate_everything_engine::v3::{
     agent::{
         AgentOutput, EntityTask, EquipmentType, LayeredAgent, OperationalCommand, StrategyLayer,
@@ -14,6 +15,7 @@ use simulate_everything_engine::v3::{
     damage_table::DamageEstimateTable,
     equipment::{self, Equipment},
     formation::FormationType,
+    hex::hex_to_world,
     lifecycle::{contain, spawn_entity, uncontain},
     mapgen,
     movement::Mobile,
@@ -572,13 +574,14 @@ enum ArenaExpectation {
 
 impl ArenaConfigFile {
     fn for_mode(mode: &str) -> Self {
+        let [side_a_center, side_b_center] = arena_default_centers();
         let side_a_agent = if mode == "mutual" { "striker" } else { "null" };
         Self {
             mode: Some(mode.to_string()),
             max_ticks: Some(200),
             cluster_radius_m: Some(0.0),
-            side_a_center: Some([50.0, 50.0]),
-            side_b_center: Some([70.0, 50.0]),
+            side_a_center: Some(side_a_center),
+            side_b_center: Some(side_b_center),
             side_a: Some(ArenaSideConfigFile {
                 agent: Some(side_a_agent.to_string()),
                 soldiers: Some(1),
@@ -653,6 +656,13 @@ impl ArenaConfigFile {
             side_b,
         }
     }
+}
+
+fn arena_default_centers() -> [[f32; 2]; 2] {
+    let row = 10;
+    let side_a = hex_to_world(offset_to_axial(row, 8));
+    let side_b = hex_to_world(offset_to_axial(row, 12));
+    [[side_a.x, side_a.y], [side_b.x, side_b.y]]
 }
 
 fn resolve_arena_side(

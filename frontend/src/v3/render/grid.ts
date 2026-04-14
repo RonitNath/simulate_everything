@@ -6,6 +6,8 @@ import type { BiomeName } from "../../v2types";
 
 export const SQRT3 = Math.sqrt(3);
 export const HEX_SIZE = 20;
+export const ENGINE_HEX_RADIUS = 86.60254;
+export const WORLD_TO_CANVAS_SCALE = HEX_SIZE / ENGINE_HEX_RADIUS;
 
 const BIOME_BASE: Record<BiomeName, [number, number, number]> = {
   desert: [180, 160, 90],
@@ -68,6 +70,10 @@ export function hexCenter(row: number, col: number, size: number): [number, numb
   const x = SQRT3 * size * (col + 0.5 * (row & 1));
   const y = 1.5 * size * row;
   return [x, y];
+}
+
+export function worldToCanvas(x: number, y: number): [number, number] {
+  return [x * WORLD_TO_CANVAS_SCALE, y * WORLD_TO_CANVAS_SCALE];
 }
 
 export function drawHexPath(g: Graphics, cx: number, cy: number, radius: number): void {
