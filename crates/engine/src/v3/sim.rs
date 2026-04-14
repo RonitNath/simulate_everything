@@ -16,7 +16,7 @@ use super::needs::{NeedDecayRates, apply_decay};
 use super::projectile::{self, ProjectileTick};
 use super::resolution::{enemy_nearby, resolution_demand_at};
 use super::spatial::{Vec2, Vec3, terrain_height_at, terrain_material_at, terrain_slope_at};
-use super::state::{DecisionRecord, GameState, Role, StructureType};
+use super::state::{DecisionRecord, GameState, Role};
 use super::steering;
 use super::utility::{Goal, UtilityScorer};
 use super::weapon::{self, AttackTick};
@@ -406,10 +406,15 @@ fn advance_move_action(
     let Some(pos) = entity.pos else {
         return true;
     };
-    if let Some(mobile) = entity.mobile.as_mut() {
-        mobile.waypoints = vec![target];
+    let Some(mobile) = entity.mobile.as_mut() else {
+        return true;
+    };
+    mobile.waypoints = vec![target];
+    let arrived = (target.x - pos.x).powi(2) + (target.y - pos.y).powi(2) <= 16.0;
+    if arrived {
+        mobile.waypoints.clear();
     }
-    (target.x - pos.x).powi(2) + (target.y - pos.y).powi(2) <= 16.0
+    arrived
 }
 
 fn advance_timed_action(
@@ -1269,6 +1274,7 @@ fn tick_vitals(state: &mut GameState, dt: f32) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::action_queue::{Action, CurrentAction};
     use super::super::agent::{
         OperationalCommand, OperationsLayer, StrategicDirective, StrategyLayer, TacticalCommand,
         TacticalLayer,
@@ -1279,11 +1285,36 @@ mod tests {
     use super::super::mapgen;
     use super::super::movement::Mobile;
     use super::super::perception::StrategicView;
-    use super::super::state::{Combatant, EntityBuilder, Person, Role, Stack, StackId};
+    use super::super::spatial::{GeoMaterial, Heightfield};
+    use super::super::state::{
+        BehaviorState, Combatant, EntityBuilder, GameState, Person, Role, Stack, StackId,
+    };
     use super::super::vitals::Vitals;
     use super::super::wound::WoundList;
     use super::*;
     use smallvec::smallvec;
+
+    fn test_state() -> GameState {
+        let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
+        GameState::new(20, 20, 2, hf)
+    }
+
+    fn spawn_behavior_person(
+        state: &mut GameState,
+        pos: Vec3,
+        mobile: Option<Mobile>,
+    ) -> EntityKey {
+        let mut builder = EntityBuilder::new().pos(pos).owner(0).person(Person {
+            role: Role::Worker,
+            combat_skill: 0.2,
+        });
+        if let Some(mobile) = mobile {
+            builder = builder.mobile(mobile);
+        }
+        let entity_key = spawn_entity(state, builder);
+        state.entities[entity_key].behavior = Some(Box::new(BehaviorState::default()));
+        entity_key
+    }
 
     struct NoopStrategy;
     impl StrategyLayer for NoopStrategy {
@@ -1507,6 +1538,195 @@ mod tests {
         }
         // Just verifying no panics or infinite loops
         assert_eq!(state.tick, 100);
+    }
+
+    #[test]
+    fn test_moveto_entity_arrives() {
+        let mut state = test_state();
+        let entity_key = spawn_behavior_person(
+            &mut state,
+            Vec3::new(100.0, 0.0, 0.0),
+            Some(Mobile::new(2.0, 10.0)),
+        );
+        let target = Vec3::new(200.0, 0.0, 0.0);
+
+        let behavior = state.entities[entity_key]
+            .behavior
+            .as_mut()
+            .expect("entity should have behavior");
+        behavior.next_decision_tick = 10_000;
+        behavior.action_queue.current = Some(CurrentAction {
+            action: Action::MoveTo { target },
+            progress: 0.0,
+        });
+
+        for _ in 0..2000 {
+            tick(&mut state, 0.05);
+            if state.entities[entity_key]
+                .behavior
+                .as_ref()
+                .and_then(|behavior| behavior.action_queue.current.as_ref())
+                .is_none()
+            {
+                break;
+            }
+        }
+
+        let entity = &state.entities[entity_key];
+        let final_pos = entity.pos.expect("entity should still have a position");
+        assert!(
+            (final_pos - target).length() <= 5.0,
+            "entity should arrive near target: final_pos={final_pos:?} target={target:?}"
+        );
+        assert!(
+            entity
+                .mobile
+                .as_ref()
+                .expect("entity should stay mobile")
+                .waypoints
+                .is_empty(),
+            "move completion should clear waypoints"
+        );
+        assert!(
+            entity
+                .behavior
+                .as_ref()
+                .expect("entity should keep behavior")
+                .action_queue
+                .current
+                .is_none(),
+            "move action should complete"
+        );
+    }
+
+    #[test]
+    fn test_moveto_then_next_action() {
+        let mut state = test_state();
+        let entity_key = spawn_behavior_person(
+            &mut state,
+            Vec3::new(100.0, 0.0, 0.0),
+            Some(Mobile::new(2.0, 10.0)),
+        );
+        let target = Vec3::new(200.0, 0.0, 0.0);
+
+        let behavior = state.entities[entity_key]
+            .behavior
+            .as_mut()
+            .expect("entity should have behavior");
+        behavior.next_decision_tick = 10_000;
+        behavior.action_queue.current = Some(CurrentAction {
+            action: Action::MoveTo { target },
+            progress: 0.0,
+        });
+        behavior.action_queue.queued.push_back(Action::Rest { duration: 2.0 });
+
+        for _ in 0..2000 {
+            tick(&mut state, 0.05);
+            let current = state.entities[entity_key]
+                .behavior
+                .as_ref()
+                .and_then(|behavior| behavior.action_queue.current.as_ref());
+            if matches!(
+                current.map(|current| &current.action),
+                Some(Action::Rest { .. })
+            ) {
+                break;
+            }
+        }
+
+        let current = state.entities[entity_key]
+            .behavior
+            .as_ref()
+            .and_then(|behavior| behavior.action_queue.current.as_ref())
+            .expect("rest action should be promoted after move completion");
+        assert!(
+            matches!(current.action, Action::Rest { duration: 2.0 }),
+            "expected Rest to be current after MoveTo completes, got {:?}",
+            current.action
+        );
+
+        for _ in 0..10 {
+            tick(&mut state, 0.05);
+        }
+
+        let current = state.entities[entity_key]
+            .behavior
+            .as_ref()
+            .and_then(|behavior| behavior.action_queue.current.as_ref())
+            .expect("rest action should still be active");
+        assert!(
+            matches!(current.action, Action::Rest { duration: 2.0 }),
+            "expected Rest to remain current while progressing"
+        );
+        assert!(
+            current.progress > 0.0,
+            "rest action should accumulate progress after promotion"
+        );
+    }
+
+    #[test]
+    fn test_moveto_non_mobile_skips() {
+        let mut state = test_state();
+        let start = Vec3::new(100.0, 0.0, 0.0);
+        let entity_key = spawn_behavior_person(&mut state, start, None);
+        let target = Vec3::new(200.0, 0.0, 0.0);
+
+        let behavior = state.entities[entity_key]
+            .behavior
+            .as_mut()
+            .expect("entity should have behavior");
+        behavior.next_decision_tick = 10_000;
+        behavior.action_queue.current = Some(CurrentAction {
+            action: Action::MoveTo { target },
+            progress: 0.0,
+        });
+
+        tick_entity_behavior(&mut state, entity_key, 0.05, false);
+
+        let entity = &state.entities[entity_key];
+        assert_eq!(entity.pos, Some(start), "non-mobile entity should not move");
+        assert!(
+            entity
+                .behavior
+                .as_ref()
+                .expect("entity should keep behavior")
+                .action_queue
+                .current
+                .is_none(),
+            "non-mobile MoveTo should complete immediately"
+        );
+    }
+
+    #[test]
+    fn test_moveto_batch_teleports() {
+        let mut state = test_state();
+        let entity_key = spawn_behavior_person(
+            &mut state,
+            Vec3::new(100.0, 0.0, 0.0),
+            Some(Mobile::new(2.0, 10.0)),
+        );
+        let target = Vec3::new(200.0, 5.0, 0.0);
+
+        state.entities[entity_key]
+            .mobile
+            .as_mut()
+            .expect("entity should be mobile")
+            .waypoints = vec![Vec3::new(150.0, 0.0, 0.0)];
+
+        let complete = advance_move_action(&mut state, entity_key, target, true);
+
+        assert!(complete, "batch-mode move should complete immediately");
+        let entity = &state.entities[entity_key];
+        assert_eq!(entity.pos, Some(target), "batch-mode move should teleport");
+        assert!(
+            entity
+                .mobile
+                .as_ref()
+                .expect("entity should stay mobile")
+                .waypoints
+                .is_empty(),
+            "batch-mode move should clear waypoints"
+        );
     }
 
     #[test]
