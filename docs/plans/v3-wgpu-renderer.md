@@ -55,66 +55,127 @@ culling, and rendering. CPU is nearly idle between ticks.
 
 ## Terrain layer
 
-### Mutable hex terrain
+### Two distinct surfaces: heightmap + hex overlay
 
-Terrain is NOT static. The mesh must support per-tile mutations at runtime:
-- **Near term**: dig ditches (lower tile height), build earthen walls
-  (raise tile height, change material), place structures
-- **Far term**: bomb craters (destroy tiles, create rubble, lower height
-  in blast radius), fire damage (change material/color), flooding
-  (water level per tile)
+The hex grid is a spatial index for the simulation (~100m per hex). The
+terrain itself is a **continuous heightmap** at much higher resolution
+(~1-2m per sample). These are separate rendering concerns:
 
-### Data model
+1. **Heightmap mesh**: Dense triangle grid deformed by elevation data.
+   A 1km × 1km area at 1m resolution = 1M height samples. This is the
+   physical ground — ditches, walls, craters, hills all live here.
+2. **Hex overlay**: Territory colors, borders, fog-of-war composited on
+   top of the heightmap surface. Visual aid, not terrain geometry.
 
-Per-tile state stored in a GPU storage buffer:
+### Heightmap data model
+
+Height and material stored as GPU textures (not per-hex buffers):
 
 ```rust
-#[repr(C)]
-struct TilGpuData {
-    height: f32,          // terrain elevation (mutable)
-    material: u32,        // biome/surface type index (mutable)
-    color_override: u32,  // territory owner tint (packed RGBA)
-    flags: u32,           // bitfield: has_road, has_river, has_structure, damaged, etc.
+// R32Float texture: height in meters at each sample point
+heightmap_texture: wgpu::Texture,  // e.g., 1024×1024 for a 1km² map at 1m res
+
+// R8Uint texture: material/surface type index at each sample point
+material_texture: wgpu::Texture,   // same resolution as heightmap
+```
+
+A 1024×1024 heightmap = 4MB (R32Float). Material map = 1MB (R8Uint).
+Total: 5MB GPU memory for terrain. Trivial.
+
+### Heightmap mesh strategy
+
+**Dense triangle grid with vertex shader displacement.** The mesh is a
+flat grid of triangles at heightmap resolution. The vertex shader samples
+the height texture to displace each vertex vertically, and samples the
+material texture for color/shading.
+
+```wgsl
+@vertex
+fn vs_terrain(@builtin(vertex_index) vid: u32) -> VertexOutput {
+    let grid_pos = index_to_grid(vid, grid_width);
+    let uv = grid_pos / vec2f(grid_width, grid_height);
+    let height = textureSampleLevel(heightmap, sampler, uv, 0.0).r;
+    let material = textureLoad(material_map, vec2i(grid_pos), 0).r;
+
+    var out: VertexOutput;
+    out.position = camera.view_proj * vec4f(grid_pos.x, height, grid_pos.y, 1.0);
+    out.material = material;
+    out.uv = uv;
+    return out;
 }
 ```
 
-100k tiles × 16 bytes = 1.6MB GPU buffer. Fits comfortably in any GPU.
+### Terrain mutation flow
 
-### Terrain mesh strategy
-
-**Instanced hex tiles, NOT a single merged mesh.** Rationale:
-- Per-tile height/material mutations require updating individual tiles
-- A merged mesh would need partial re-upload or full rebuild on mutation
-- Instanced rendering: one hex polygon template, 100k instances with
-  per-instance height/material/color from the storage buffer
-- GPU vertex shader reads per-instance data and offsets the hex template
-- Mutation = update 16 bytes in the storage buffer for that tile
-
-### Terrain update flow
+Mutations write to a **region of the heightmap texture**, not per-hex:
 
 ```
-Server tick: "tile (34, 17) height changed from 5.0 to 3.2, material = rubble"
+Server tick: "ditch dug from (450.0, 120.0) to (470.0, 120.0), depth 1.5m, width 2m"
     |
     v
-WASM: write 16 bytes at offset (34*width + 17) * 16 in terrain buffer
+WASM: compute affected texels (20m × 2m = ~40 texels at 1m res)
+      write_texture() to update height values in that rectangle
     |
     v
-GPU: next frame reads updated height/material, renders correctly
+GPU: next frame vertex shader reads updated heights, mesh deforms
 ```
 
-No mesh rebuild. No re-upload of the entire terrain. Single tile update
-cost: 16 bytes written to a mapped buffer region.
+| Mutation | Scale | Texels updated | Bytes written |
+|----------|-------|----------------|---------------|
+| Dig ditch (20m × 2m) | Small | ~40 | 160 bytes |
+| Earthen wall (20m × 1m × 2m high) | Small | ~20 | 80 bytes |
+| Building foundation (10m × 10m) | Medium | ~100 | 400 bytes |
+| Bomb crater (15m radius) | Medium | ~700 | 2.8KB |
+| Hillside collapse (50m × 30m) | Large | ~1,500 | 6KB |
+
+All mutations use `queue.write_texture()` on a sub-region. No mesh
+rebuild. No full texture re-upload. The vertex shader reads the updated
+texture next frame.
 
 ### Terrain LOD
 
-At strategic zoom (100k tiles visible), full hex outlines are expensive.
-LOD tiers for terrain:
+At strategic zoom, the full-resolution grid is too dense. LOD via
+**clipmap or geometry clipmap**:
 
-| Tier | Condition | Rendering |
-|------|-----------|-----------|
-| Detail | <500 tiles visible | Full hex outlines, height shading, road/river lines |
-| Standard | 500-10k tiles visible | Filled hex polygons, no outlines, color-coded by height+material |
-| Coarse | >10k tiles visible | Merge adjacent same-material hexes into larger colored regions (compute shader) |
+| Distance from camera | Grid resolution | Triangles |
+|---------------------|-----------------|-----------|
+| Near (0-200m) | 1m (full res) | ~160k |
+| Mid (200-1km) | 4m (quarter res) | ~40k |
+| Far (1-5km) | 16m | ~10k |
+| Horizon (>5km) | 64m | ~2.5k |
+| **Total** | | **~212k triangles** |
+
+Geometry clipmaps are a solved GPU technique (Losasso & Hoppe, 2004).
+Each ring is a pre-built grid mesh at its resolution; the vertex shader
+samples the same heightmap texture at different mip levels.
+
+### Hex overlay
+
+The hex grid is a separate render pass drawn ON TOP of the terrain:
+
+- At close zoom: hex borders as line segments projected onto the
+  terrain surface (sample heightmap at border vertices)
+- At mid zoom: filled hex polygons with alpha for territory color,
+  draped onto terrain
+- At strategic zoom: solid colored regions (merge hexes by owner)
+
+The hex overlay reads the same heightmap texture to follow terrain
+contours. It's a visual layer, not geometry — if a ditch crosses a
+hex boundary, the hex overlay follows the ditch's height.
+
+### Hex overlay data model
+
+Per-hex metadata (separate from terrain heightmap):
+
+```rust
+#[repr(C)]
+struct HexOverlayData {
+    owner: u32,           // territory owner (player color)
+    flags: u32,           // bitfield: has_road, has_river, fog_state, etc.
+}
+```
+
+100k hexes × 8 bytes = 800KB GPU buffer. Updated when territory changes.
 
 ## Entity layer
 
@@ -279,6 +340,36 @@ function calls.
 
 ## Module structure
 
+### Shared protocol crate: `crates/protocol/`
+
+Shared types between server and viewer. Compiles for both native (server)
+and wasm32 (viewer) targets. MessagePack serialization.
+
+```
+crates/protocol/
+├── Cargo.toml
+└── src/
+    ├── lib.rs              -- re-exports
+    ├── tick.rs             -- TickMessage, TerrainDelta, EntitySnapshot
+    ├── entity.rs           -- SpectatorEntityInfo, BodyZone, WoundSeverity
+    ├── terrain.rs          -- HeightmapPatch, MaterialPatch
+    └── init.rs             -- InitMessage (map dimensions, full heightmap, full entity list)
+```
+
+```toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1"
+glam = { version = "0.30", features = ["serde"] }
+```
+
+MessagePack over the wire, not JSON. Rationale:
+- 2-4x faster deserialization in Rust vs serde_json
+- 30-50% smaller payloads (no field name strings)
+- The viewer is Rust WASM — no JS debugging advantage from JSON
+- Debugging: browser WS inspector shows binary frames, but the WASM
+  module can expose a debug endpoint that decodes to human-readable text
+
 ### Rust WASM crate: `crates/viewer/`
 
 ```
@@ -287,7 +378,8 @@ crates/viewer/
 ├── src/
 │   ├── lib.rs              -- wasm_bindgen entry, event loop, tick ingestion
 │   ├── gpu.rs              -- wgpu device/surface setup, pipeline creation
-│   ├── terrain.rs          -- hex terrain mesh, instance buffer, tile updates
+│   ├── heightmap.rs        -- continuous terrain mesh, clipmap LOD, texture updates
+│   ├── hex_overlay.rs      -- hex grid borders, territory colors, draped on terrain
 │   ├── entities.rs         -- entity instance buffer, LOD, interpolation dispatch
 │   ├── body_model.rs       -- body-point buffer, capsule instancing
 │   ├── camera.rs           -- orbit camera, projection, input → camera state
@@ -296,7 +388,8 @@ crates/viewer/
 │   ├── text.rs             -- SDF glyph atlas, text rendering
 │   ├── lod.rs              -- LOD compute shader dispatch, tier assignment
 │   └── shaders/
-│       ├── terrain.wgsl    -- hex tile vertex/fragment shader
+│       ├── terrain.wgsl    -- heightmap displacement vertex/fragment
+│       ├── hex_overlay.wgsl -- hex border/fill vertex/fragment (terrain-draped)
 │       ├── entity.wgsl     -- entity instance vertex/fragment shader
 │       ├── body.wgsl       -- capsule vertex/fragment shader
 │       ├── interpolate.wgsl -- entity + body-point interpolation compute
@@ -311,38 +404,62 @@ crates/viewer/
 
 ```toml
 [dependencies]
+simulate-everything-protocol = { path = "../protocol" }
 wgpu = { version = "24", features = ["webgpu"] }
 winit = "0.31"
 glam = "0.30"
 web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", ...] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"  # or rmp-serde for msgpack
+rmp-serde = "1"
 ```
 
-### Build
+### Build: Trunk
+
+Trunk is the WASM build tool. It wraps `cargo build --target wasm32`,
+`wasm-bindgen`, `wasm-opt`, and asset bundling into a single command.
+It serves a dev server with auto-rebuild on file change (not hot-reload —
+page refreshes, state lost, but rebuild is automatic).
+
+Why Trunk over manual build:
+- One command (`trunk serve`) vs a 4-step shell pipeline
+- Handles wasm-bindgen glue generation, wasm-opt compression, asset
+  copying, HTML template injection automatically
+- Dev server with auto-rebuild and live-reload (page refresh)
+- Production build (`trunk build --release`) produces optimized output
+- Eject path is trivial: Trunk's steps are standard cargo + wasm-bindgen
+  + wasm-opt. If Trunk becomes a problem, replace with a Makefile.
 
 ```bash
-# Dev (with trunk)
-cd crates/viewer && trunk serve
+# Dev
+cd crates/viewer && trunk serve --open
 
 # Production
-cargo build --target wasm32-unknown-unknown --release -p simulate-everything-viewer
-wasm-bindgen --out-dir frontend/dist/wasm --target web target/wasm32-unknown-unknown/release/simulate_everything_viewer.wasm
-wasm-opt -Oz -o frontend/dist/wasm/viewer_bg.wasm frontend/dist/wasm/viewer_bg.wasm
+cd crates/viewer && trunk build --release
+# Output: crates/viewer/dist/ (WASM + JS glue + HTML + assets)
 ```
 
 Bundle size target: <3MB gzipped (wgpu + Naga + viewer code).
 
 ## Migration path from PixiJS
 
+### Phase 0: Protocol crate + MessagePack
+- Extract `crates/protocol/` with shared types (tick, entity, terrain, init)
+- MessagePack serialization (rmp-serde)
+- Server sends msgpack over WS; existing JSON protocol kept as fallback
+  during migration (viewer negotiates format on connect)
+- **Gate**: server and a test client exchange msgpack tick data correctly
+
 ### Phase 1: wgpu scaffold + terrain
-- Set up crates/viewer with wgpu + winit WASM target
-- Render hex terrain as instanced tiles with height/material coloring
+- Set up crates/viewer with wgpu + winit WASM target, Trunk build
+- Heightmap mesh with clipmap LOD (dense near camera, coarse far)
+- Vertex shader displacement from height texture
+- Material texture for surface coloring
+- Hex overlay as separate render pass (territory colors, borders)
 - Orbit camera with mouse controls
 - SolidJS UI overlay with inspector panel
-- **Gate**: terrain renders correctly, camera orbits, tiles update on mutation
+- **Gate**: terrain renders correctly with continuous heightmap, camera
+  orbits, heightmap sub-region update works (ditch/wall mutation)
 
 ### Phase 2: Entity rendering
 - Entity instance buffer with LOD tiers
@@ -375,51 +492,59 @@ Bundle size target: <3MB gzipped (wgpu + Naga + viewer code).
 
 ## Terrain mutability detail
 
+All mutations write to sub-regions of the heightmap and/or material
+textures. The vertex shader reads the updated textures next frame.
+No mesh rebuild ever.
+
 ### Near-term mutations
 
-| Action | Terrain effect | GPU update |
-|--------|---------------|------------|
-| Dig ditch | Lower tile height by 1-2m, material → dirt | Write height + material for affected tiles |
-| Build earthen wall | Raise tile height by 1-3m, material → packed_earth | Write height + material for affected tiles |
-| Place structure | Set structure flag, spawn structure entity | Write flags for tile |
-| Road construction | Set has_road flag | Write flags for tile |
+| Action | Heightmap effect | Material effect | Scale |
+|--------|-----------------|-----------------|-------|
+| Dig ditch | Lower height samples along path | → dirt | 20-50m path, 1-2m wide |
+| Earthen wall | Raise height samples along path | → packed_earth | 20-50m path, 1m wide |
+| Building foundation | Flatten height samples in footprint | → stone/wood | 10-20m square |
+| Road | Smooth height gradient along path | → gravel/cobble | Arbitrary length, 3-5m wide |
 
 ### Far-term mutations
 
-| Action | Terrain effect | GPU update |
-|--------|---------------|------------|
-| Bomb crater | Lower height in blast radius (falloff), material → rubble, destroy structures | Write height + material for blast area tiles |
-| Fire | Material → charred for affected tiles, structures burn | Write material for fire area |
-| Flooding | Per-tile water level (separate buffer or extend TileGpuData) | Write water level |
-| Erosion | Gradual height changes from water/wind | Write height over time |
+| Action | Heightmap effect | Material effect | Scale |
+|--------|-----------------|-----------------|-------|
+| Bomb crater | Radial height falloff (parabolic) from impact point | → rubble in crater, debris ring around | 10-30m radius |
+| Fire | No height change | → charred | Spread area |
+| Flooding | No height change (water is separate surface) | No change | Watershed |
+| Erosion | Gradual height reduction along water flow paths | → exposed rock/clay | Slow, large area |
+| Mining | Lower height in extraction area | → excavated/ore | 10-50m area |
 
-All mutations are the same GPU operation: write 16 bytes per affected tile
-to the terrain storage buffer. No mesh rebuild. The vertex shader reads
-updated values next frame.
+### Water surface (future)
 
-For large-area mutations (bomb crater affecting 50 tiles), batch-write
-50 × 16 = 800 bytes. Instant.
+Water is a separate render pass with its own surface level per cell,
+transparency, and flow visualization. Not part of the heightmap. The
+water surface clips against the heightmap — water fills depressions,
+flows downhill. Deferred until water mechanics land in the engine.
 
 ## Performance budget
 
 | Component | Target | Measurement |
 |-----------|--------|-------------|
-| Terrain render (100k tiles) | <1ms GPU | Instanced draw, one hex template |
+| Terrain heightmap mesh (~212k tris via clipmap) | <1.5ms GPU | 4-5 draw calls at different LOD rings |
+| Hex overlay (100k hexes) | <0.5ms GPU | Instanced hex outlines/fills |
 | Entity interpolation compute (10k) | <0.1ms GPU | 40 workgroups × 256 |
 | Entity render (10k across LOD tiers) | <0.5ms GPU | 3 instanced draws |
 | Body-model render (200 entities) | <0.3ms GPU | 3,200 capsule instances |
 | LOD compute (10k entities) | <0.1ms GPU | 40 workgroups |
 | Overlay render | <0.2ms GPU | Screen-space quads |
-| **Total GPU frame time** | **<2.2ms** | **Target: 60fps = 16.6ms budget** |
+| **Total GPU frame time** | **<3.2ms** | **Target: 60fps = 16.6ms budget** |
 | CPU per-tick work | <2ms | Deserialize + buffer upload |
 | CPU per-frame work | <0.5ms | Submit compute + render passes |
+| Terrain mutation (worst case: 1500 texels) | <0.1ms | queue.write_texture sub-region |
 
-Massive headroom. The GPU frame time budget is 7x below the 60fps ceiling.
+5x headroom below the 60fps ceiling.
 
 ## Verification criteria
 
-- [ ] Hex terrain renders 100k tiles at 60fps with orbit camera
-- [ ] Per-tile height/material mutation updates in <1 frame
+- [ ] Continuous heightmap terrain renders with clipmap LOD at 60fps
+- [ ] Heightmap sub-region mutation (ditch/wall/crater) updates in <1 frame
+- [ ] Hex overlay drapes correctly onto terrain surface
 - [ ] 10k entities render across LOD tiers at 60fps
 - [ ] Interpolation compute shader produces smooth 60fps movement from 20 tick/sec input
 - [ ] Body-model capsules render for 200 entities at close zoom
@@ -430,20 +555,31 @@ Massive headroom. The GPU frame time budget is 7x below the 60fps ceiling.
 - [ ] Bundle size <3MB gzipped
 - [ ] Startup time <2 seconds on broadband
 
+## Resolved decisions
+
+1. **MessagePack** for WebSocket tick data. Both endpoints are Rust
+   (server native, viewer WASM). 2-4x faster deserialization, 30-50%
+   smaller payloads. Debugging via WASM-side decode-to-text endpoint.
+
+2. **Shared `crates/protocol/` crate** for tick/entity/terrain types.
+   Compiles for both native and wasm32. Single source of truth for
+   wire format.
+
+3. **Trunk** for WASM build pipeline. One-command dev server with
+   auto-rebuild. Eject path is trivial (standard cargo + wasm-bindgen
+   + wasm-opt). See Build section for details.
+
 ## Open questions
 
-1. **Message format**: JSON or MessagePack for WebSocket tick data? MessagePack
-   is faster to deserialize in Rust but less debuggable. Could start JSON,
-   switch to msgpack when serialization shows up in profiles.
+1. **Heightmap resolution vs map scale**: At 1m per sample, a 10km × 10km
+   map = 100M samples = 400MB. Need to decide: fixed resolution? Adaptive?
+   Streaming chunks? Probably chunked loading with a viewport-centered
+   window, similar to how game engines handle open-world terrain.
 
-2. **Shared types between server and viewer**: The server crate and viewer
-   crate both need tick/entity types. Extract a `crates/protocol/` crate
-   with shared types, compiled for both native and wasm32 targets.
+2. **Water rendering**: Separate transparent surface with per-cell water
+   level, flow visualization. Deferred until water mechanics land in
+   the engine. Needs its own render pass after terrain, before entities.
 
-3. **Trunk vs manual build**: Trunk simplifies the WASM build pipeline but
-   adds a dependency. Manual cargo + wasm-bindgen + wasm-opt is more
-   control. Start with trunk, eject if needed.
-
-4. **Water rendering**: For future flooding/rivers, water needs its own
-   render pass with transparency. Deferred to when water mechanics land
-   in the engine.
+3. **Normal map generation**: For terrain lighting, normals should be
+   computed from the heightmap (compute shader or at mutation time).
+   Affects visual quality significantly. Include in Phase 1 or defer?
