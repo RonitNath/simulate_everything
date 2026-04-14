@@ -405,9 +405,24 @@ fn apply_drill_command(inner: &mut DrillInner, cmd: &DrillCommand) {
 
     if let Some(target_id) = cmd.attack {
         let target_key = resolve_entity_key(inner, target_id);
-        if let (Some(e), Some(tk)) = (inner.state.entities.get_mut(key), target_key) {
-            if let Some(c) = &mut e.combatant {
-                c.target = Some(tk);
+        if let Some(tk) = target_key {
+            // Find entity's weapon key from equipment.
+            let weapon_key = inner
+                .state
+                .entities
+                .get(key)
+                .and_then(|e| e.equipment.as_ref())
+                .and_then(|eq| eq.weapon);
+            if let Some(wk) = weapon_key {
+                if let Some(e) = inner.state.entities.get_mut(key) {
+                    if let Some(c) = &mut e.combatant {
+                        c.target = Some(tk);
+                        // Directly initiate attack — bypasses agent/tactical layer.
+                        c.attack = Some(
+                            simulate_everything_engine::v3::weapon::AttackState::new(tk, wk),
+                        );
+                    }
+                }
             }
         }
     }
