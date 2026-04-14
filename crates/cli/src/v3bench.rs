@@ -9,6 +9,8 @@ use simulate_everything_engine::v3::{
         TacticalCommand, validate_operational, validate_tactical,
     },
     armor::{self, ArmorConstruction, ArmorProperties, BodyZone, DamageType, MaterialType},
+    combat_log::CombatObservation,
+    damage::{self, BlockCapability, DefenderState, Impact, ImpactResult},
     damage_table::DamageEstimateTable,
     equipment::{self, Equipment},
     formation::FormationType,
@@ -16,6 +18,7 @@ use simulate_everything_engine::v3::{
     mapgen,
     movement::Mobile,
     operations::{NullOperationsLayer, SharedOperationsLayer},
+    projectile,
     spatial::{GeoMaterial, Heightfield, Vec3},
     state::{
         Combatant, EntityBuilder, GameState, Person, ResourceType, Role, Stack, Structure,
@@ -23,11 +26,14 @@ use simulate_everything_engine::v3::{
     },
     strategy::{NullStrategy, SpreadStrategy, StrikerStrategy, TurtleStrategy},
     tactical::{NullTacticalLayer, SharedTacticalLayer},
-    vitals::Vitals,
+    vitals::{MovementMode, Vitals},
     weapon::{self, AttackState, WeaponProperties},
+    wound::{Severity, Wound},
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -39,6 +45,11 @@ use simulate_everything_web::v3_protocol;
 // ---------------------------------------------------------------------------
 
 pub fn main(args: &[String]) {
+    if args.iter().any(|a| a == "--mechanics") {
+        run_mechanics_suite(args);
+        return;
+    }
+
     if args.iter().any(|a| a == "--arena") {
         let arena_mode = flag_value(args, "--arena-mode").unwrap_or("null-vs-striker");
         let arena_config = flag_value(args, "--arena-config")
@@ -460,7 +471,7 @@ struct ArenaSideState {
     members: Vec<EntityKey>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 struct ArenaSideSummary {
     alive: usize,
     total: usize,
@@ -468,6 +479,95 @@ struct ArenaSideSummary {
     avg_blood: f32,
     attacking: usize,
     cooling_down: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MechanicsSuiteResult {
+    suite: &'static str,
+    strict: bool,
+    passed: usize,
+    failed: usize,
+    scenarios: Vec<MechanicsScenarioResult>,
+    implementation_gaps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MechanicsScenarioResult {
+    id: String,
+    level: &'static str,
+    description: String,
+    intended_effect: String,
+    observed_effect: String,
+    meets_intended: bool,
+    metrics: BTreeMap<String, f64>,
+    artifact_paths: Vec<String>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ArenaArtifact {
+    id: String,
+    description: String,
+    winner: Option<u8>,
+    final_tick: u64,
+    side_a: ArenaSideSummary,
+    side_b: ArenaSideSummary,
+    timeline: Vec<ArenaTimelineFrame>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ArenaTimelineFrame {
+    tick: u64,
+    avg_distance: f32,
+    side_a: ArenaSideSummary,
+    side_b: ArenaSideSummary,
+    soldiers: Vec<ArenaUnitFrame>,
+    combat_log: Vec<CombatObservation>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ArenaUnitFrame {
+    id: u32,
+    owner: u8,
+    x: f32,
+    y: f32,
+    z: f32,
+    blood: f32,
+    stamina: f32,
+    alive: bool,
+    wounds: usize,
+    combat_skill: f32,
+}
+
+#[derive(Debug, Clone)]
+struct ArenaMechanicVariant {
+    id: String,
+    description: String,
+    scenario: ArenaScenario,
+    post_setup: ArenaPostSetup,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ArenaPostSetup {
+    side_a_z_offset: f32,
+    side_b_z_offset: f32,
+    side_a_skill: Option<f32>,
+    side_b_skill: Option<f32>,
+    side_a_blood: Option<f32>,
+    side_b_blood: Option<f32>,
+    side_a_stamina: Option<f32>,
+    side_b_stamina: Option<f32>,
+    side_a_movement_mode: Option<MovementMode>,
+    side_b_movement_mode: Option<MovementMode>,
+    side_a_start_wounds: Vec<Wound>,
+    side_b_start_wounds: Vec<Wound>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ArenaExpectation {
+    AdvantagedWins,
+    AdvantagedLoses,
+    SpecGap,
 }
 
 impl ArenaConfigFile {
@@ -1119,10 +1219,7 @@ fn run_arena(config: &ArenaConfigFile, replay_path: Option<&str>) {
     // Replay writer
     let mut replay_file = replay_path.map(|path| {
         let mut f = std::fs::File::create(path).expect("Failed to create replay file");
-        let agent_names = vec![
-            scenario.side_a.agent.clone(),
-            scenario.side_b.agent.clone(),
-        ];
+        let agent_names = vec![scenario.side_a.agent.clone(), scenario.side_b.agent.clone()];
         let agent_versions = vec!["v3-arena".to_string(); 2];
         let init = v3_protocol::build_init(&state, &agent_names, &agent_versions, 0);
         let init_msg = v3_protocol::V3ServerToSpectator::Init {
@@ -1424,6 +1521,813 @@ fn average_inter_side_distance(
         }
     }
     total / count as f32
+}
+
+// ---------------------------------------------------------------------------
+// Mechanics suite
+// ---------------------------------------------------------------------------
+
+fn run_mechanics_suite(args: &[String]) {
+    let strict = args.iter().any(|a| a == "--strict");
+    let artifacts_dir = flag_value(args, "--artifacts-dir").map(PathBuf::from);
+    let filter = flag_value(args, "--mechanics-filter");
+
+    let mut scenarios = Vec::new();
+
+    if mechanics_enabled(filter, "micro.high_ground_block_cost") {
+        scenarios.push(mechanics_high_ground_block_cost());
+    }
+    if mechanics_enabled(filter, "micro.high_ground_head_bias") {
+        scenarios.push(mechanics_high_ground_head_bias());
+    }
+    if mechanics_enabled(filter, "micro.wound_reduces_stamina_recovery") {
+        scenarios.push(mechanics_wound_reduces_stamina_recovery());
+    }
+    if mechanics_enabled(filter, "micro.leg_wounds_reduce_speed") {
+        scenarios.push(mechanics_leg_wounds_reduce_speed());
+    }
+    if mechanics_enabled(filter, "micro.projectile_skill_leads_target") {
+        scenarios.push(mechanics_projectile_skill_leads_target());
+    }
+    if mechanics_enabled(filter, "micro.low_stamina_increases_cooldown") {
+        scenarios.push(mechanics_low_stamina_increases_cooldown());
+    }
+    if mechanics_enabled(filter, "arena.high_ground") {
+        scenarios.push(mechanics_arena_high_ground(artifacts_dir.as_deref()));
+    }
+    if mechanics_enabled(filter, "arena.armor") {
+        scenarios.push(mechanics_arena_armor(artifacts_dir.as_deref()));
+    }
+    if mechanics_enabled(filter, "arena.injured") {
+        scenarios.push(mechanics_arena_injured(artifacts_dir.as_deref()));
+    }
+    if mechanics_enabled(filter, "arena.training_melee") {
+        scenarios.push(mechanics_arena_training_melee(artifacts_dir.as_deref()));
+    }
+
+    let failed = scenarios.iter().filter(|s| !s.meets_intended).count();
+    let passed = scenarios.len().saturating_sub(failed);
+    let suite = MechanicsSuiteResult {
+        suite: "v3_mechanics",
+        strict,
+        passed,
+        failed,
+        scenarios,
+        implementation_gaps: vec![
+            "Melee combat does not currently consume `combat_skill`; the training variable is present on `Person` but does not change sword-vs-sword arena outcomes.".to_string(),
+            "Arena ranged combat is not yet wired end-to-end. Bows exist and projectile math exists, but arena attacks still resolve through the melee path only.".to_string(),
+            "Live movement benchmarks cannot yet validate slope, surface, or encumbrance because `sim::compute_steering_and_move` hardcodes those factors to `1.0`.".to_string(),
+        ],
+    };
+
+    println!("{}", serde_json::to_string_pretty(&suite).unwrap());
+    if strict && failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+fn mechanics_enabled(filter: Option<&str>, id: &str) -> bool {
+    match filter {
+        Some(filter) => id.contains(filter),
+        None => true,
+    }
+}
+
+fn mechanics_high_ground_block_cost() -> MechanicsScenarioResult {
+    let (attacker, defender) = mechanics_entity_keys();
+    let vitals = Vitals::new();
+    let defender_state = DefenderState {
+        entity_id: defender,
+        facing: 0.0,
+        vitals: &vitals,
+        block: Some(BlockCapability {
+            arc: std::f32::consts::PI,
+            efficiency: 0.3,
+        }),
+        armor_at_zone: [None, None, None, None, None],
+    };
+
+    let flat = Impact {
+        kinetic_energy: 1.0,
+        sharpness: 0.8,
+        cross_section: 0.5,
+        damage_type: DamageType::Slash,
+        attack_direction: std::f32::consts::PI,
+        attacker_id: attacker,
+        height_diff: 0.0,
+        tick: 1,
+    };
+    let high = Impact {
+        height_diff: 2.0,
+        ..flat.clone()
+    };
+
+    let flat_cost = match damage::resolve_impact(&flat, &defender_state) {
+        ImpactResult::Blocked { stamina_cost } => stamina_cost,
+        other => panic!("expected blocked result for flat impact, got {:?}", other),
+    };
+    let high_cost = match damage::resolve_impact(&high, &defender_state) {
+        ImpactResult::Blocked { stamina_cost } => stamina_cost,
+        other => panic!("expected blocked result for high impact, got {:?}", other),
+    };
+
+    let mut metrics = BTreeMap::new();
+    metrics.insert("flat_block_cost".to_string(), flat_cost as f64);
+    metrics.insert("high_ground_block_cost".to_string(), high_cost as f64);
+    metrics.insert(
+        "cost_ratio".to_string(),
+        (high_cost / flat_cost.max(f32::EPSILON)) as f64,
+    );
+
+    MechanicsScenarioResult {
+        id: "micro.high_ground_block_cost".to_string(),
+        level: "micro",
+        description: "Direct damage-pipeline check for downhill block pressure.".to_string(),
+        intended_effect: "Defending against a higher attacker should cost more stamina to block."
+            .to_string(),
+        observed_effect: format!(
+            "Block cost rises from {:.3} on flat ground to {:.3} with +2.0m height advantage.",
+            flat_cost, high_cost
+        ),
+        meets_intended: high_cost > flat_cost,
+        metrics,
+        artifact_paths: Vec::new(),
+        notes: vec![
+            "This is wired today through `damage::resolve_impact` height-modified block cost."
+                .to_string(),
+        ],
+    }
+}
+
+fn mechanics_high_ground_head_bias() -> MechanicsScenarioResult {
+    let (attacker, defender) = mechanics_entity_keys();
+    let vitals = Vitals::new();
+    let defender_state = DefenderState {
+        entity_id: defender,
+        facing: 0.0,
+        vitals: &vitals,
+        block: None,
+        armor_at_zone: [None, None, None, None, None],
+    };
+
+    let mut high_head_hits = 0u32;
+    let mut low_head_hits = 0u32;
+    let samples = 256u32;
+
+    for tick in 0..samples {
+        let uphill = Impact {
+            kinetic_energy: 12.0,
+            sharpness: 0.8,
+            cross_section: 0.5,
+            damage_type: DamageType::Slash,
+            attack_direction: 0.0,
+            attacker_id: attacker,
+            height_diff: 2.0,
+            tick: tick as u64,
+        };
+        let downhill = Impact {
+            height_diff: -2.0,
+            ..uphill.clone()
+        };
+
+        if let ImpactResult::Wounded { wound, .. } =
+            damage::resolve_impact(&uphill, &defender_state)
+        {
+            if wound.zone == BodyZone::Head {
+                high_head_hits += 1;
+            }
+        }
+        if let ImpactResult::Wounded { wound, .. } =
+            damage::resolve_impact(&downhill, &defender_state)
+        {
+            if wound.zone == BodyZone::Head {
+                low_head_hits += 1;
+            }
+        }
+    }
+
+    let high_rate = high_head_hits as f64 / samples as f64;
+    let low_rate = low_head_hits as f64 / samples as f64;
+    let mut metrics = BTreeMap::new();
+    metrics.insert("high_ground_head_rate".to_string(), high_rate);
+    metrics.insert("low_ground_head_rate".to_string(), low_rate);
+    metrics.insert("rate_delta".to_string(), high_rate - low_rate);
+
+    MechanicsScenarioResult {
+        id: "micro.high_ground_head_bias".to_string(),
+        level: "micro",
+        description:
+            "Repeated deterministic impacts to measure height-biased hit-location distribution."
+                .to_string(),
+        intended_effect: "Higher attackers should bias hit location upward.".to_string(),
+        observed_effect: format!(
+            "Head-hit rate is {:.1}% with +2.0m advantage vs {:.1}% with -2.0m.",
+            high_rate * 100.0,
+            low_rate * 100.0
+        ),
+        meets_intended: high_rate > low_rate,
+        metrics,
+        artifact_paths: Vec::new(),
+        notes: vec![
+            "This uses the same hash-deterministic roll path as live damage resolution."
+                .to_string(),
+        ],
+    }
+}
+
+fn mechanics_wound_reduces_stamina_recovery() -> MechanicsScenarioResult {
+    let attacker = mechanics_entity_keys().0;
+    let wound = Wound {
+        zone: BodyZone::Torso,
+        severity: Severity::Laceration,
+        bleed_rate: 0.005,
+        damage_type: DamageType::Slash,
+        attacker_id: attacker,
+        created_at: 0,
+    };
+    let mut fresh = Vitals::new();
+    let mut wounded = Vitals::new();
+    fresh.stamina = 0.0;
+    wounded.stamina = 0.0;
+
+    fresh.tick_stamina_recovery(&[], 1.0);
+    wounded.tick_stamina_recovery(&[wound], 1.0);
+
+    let mut metrics = BTreeMap::new();
+    metrics.insert("fresh_recovery".to_string(), fresh.stamina as f64);
+    metrics.insert("wounded_recovery".to_string(), wounded.stamina as f64);
+
+    MechanicsScenarioResult {
+        id: "micro.wound_reduces_stamina_recovery".to_string(),
+        level: "micro",
+        description: "Vitals recovery check for wounded vs unwounded soldier.".to_string(),
+        intended_effect: "A wounded entity should recover stamina more slowly.".to_string(),
+        observed_effect: format!(
+            "Unwounded recovery is {:.3} stamina/tick vs {:.3} with a torso laceration.",
+            fresh.stamina, wounded.stamina
+        ),
+        meets_intended: wounded.stamina < fresh.stamina,
+        metrics,
+        artifact_paths: Vec::new(),
+        notes: vec![
+            "Torso wounds carry the heaviest stamina-recovery penalty in current V3.".to_string(),
+        ],
+    }
+}
+
+fn mechanics_leg_wounds_reduce_speed() -> MechanicsScenarioResult {
+    let healthy = simulate_everything_engine::v3::movement::SpeedFactors {
+        base_capability: 3.0,
+        slope_factor: 1.0,
+        surface_factor: 1.0,
+        encumbrance_factor: 1.0,
+        wound_factor: simulate_everything_engine::v3::movement::wound_factor(0.0),
+        stamina_factor: simulate_everything_engine::v3::movement::stamina_factor(1.0),
+    }
+    .derived_speed();
+    let wounded = simulate_everything_engine::v3::movement::SpeedFactors {
+        base_capability: 3.0,
+        slope_factor: 1.0,
+        surface_factor: 1.0,
+        encumbrance_factor: 1.0,
+        wound_factor: simulate_everything_engine::v3::movement::wound_factor(0.6),
+        stamina_factor: simulate_everything_engine::v3::movement::stamina_factor(1.0),
+    }
+    .derived_speed();
+
+    let mut metrics = BTreeMap::new();
+    metrics.insert("healthy_speed".to_string(), healthy as f64);
+    metrics.insert("leg_wounded_speed".to_string(), wounded as f64);
+    metrics.insert(
+        "speed_ratio".to_string(),
+        (wounded / healthy.max(f32::EPSILON)) as f64,
+    );
+
+    MechanicsScenarioResult {
+        id: "micro.leg_wounds_reduce_speed".to_string(),
+        level: "micro",
+        description: "Movement speed derivation under leg-wound penalty.".to_string(),
+        intended_effect: "Leg wounds should reduce derived movement speed.".to_string(),
+        observed_effect: format!(
+            "Derived speed drops from {:.2} to {:.2} with leg wound weight 0.6.",
+            healthy, wounded
+        ),
+        meets_intended: wounded < healthy,
+        metrics,
+        artifact_paths: Vec::new(),
+        notes: vec!["This is active in live movement because `sim::compute_steering_and_move` already feeds leg wound weight into `wound_factor`.".to_string()],
+    }
+}
+
+fn mechanics_projectile_skill_leads_target() -> MechanicsScenarioResult {
+    let target_pos = Vec3::new(30.0, 0.0, 1.0);
+    let target_vel = Vec3::new(1.0, 0.5, 0.0);
+    let predicted = target_pos + target_vel * (30.0 / 50.0);
+    let no_skill = projectile::compute_aim_pos(target_pos, target_vel, 30.0, 50.0, 0.0);
+    let high_skill = projectile::compute_aim_pos(target_pos, target_vel, 30.0, 50.0, 1.0);
+    let no_skill_err = (predicted - no_skill).length() as f64;
+    let high_skill_err = (predicted - high_skill).length() as f64;
+
+    let mut metrics = BTreeMap::new();
+    metrics.insert("no_skill_error".to_string(), no_skill_err);
+    metrics.insert("high_skill_error".to_string(), high_skill_err);
+
+    MechanicsScenarioResult {
+        id: "micro.projectile_skill_leads_target".to_string(),
+        level: "micro",
+        description: "Projectile aiming interpolation check.".to_string(),
+        intended_effect: "Higher combat skill should lead moving targets more accurately.".to_string(),
+        observed_effect: format!(
+            "Predicted-target error falls from {:.3} at skill 0.0 to {:.3} at skill 1.0.",
+            no_skill_err, high_skill_err
+        ),
+        meets_intended: high_skill_err < no_skill_err,
+        metrics,
+        artifact_paths: Vec::new(),
+        notes: vec!["This is implemented in projectile aim math, but not yet exercised by live arena combat because ranged attack resolution is incomplete.".to_string()],
+    }
+}
+
+fn mechanics_low_stamina_increases_cooldown() -> MechanicsScenarioResult {
+    let sword = weapon::iron_sword();
+    let full = weapon::compute_cooldown(&sword, 1.0) as f64;
+    let exhausted = weapon::compute_cooldown(&sword, 0.2) as f64;
+    let mut metrics = BTreeMap::new();
+    metrics.insert("full_stamina_cooldown".to_string(), full);
+    metrics.insert("low_stamina_cooldown".to_string(), exhausted);
+
+    MechanicsScenarioResult {
+        id: "micro.low_stamina_increases_cooldown".to_string(),
+        level: "micro",
+        description: "Weapon recovery timing under stamina loss.".to_string(),
+        intended_effect: "Lower stamina should lengthen recovery after an attack.".to_string(),
+        observed_effect: format!(
+            "Sword cooldown rises from {:.0} ticks at full stamina to {:.0} ticks at 0.2 stamina.",
+            full, exhausted
+        ),
+        meets_intended: exhausted > full,
+        metrics,
+        artifact_paths: Vec::new(),
+        notes: vec!["This effect is live today because melee cooldown reads current stamina after each attack.".to_string()],
+    }
+}
+
+fn mechanics_arena_high_ground(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+    let base = mechanics_base_arena("arena.high_ground", 1);
+    paired_arena_result(
+        "arena.high_ground",
+        "Mirrored arena duel with only starting elevation swapped.",
+        "The side on higher ground should perform better in mirrored melee matchups.",
+        ArenaMechanicVariant {
+            id: "high_ground_a".to_string(),
+            description: "Side A starts 4m above Side B.".to_string(),
+            scenario: base.clone(),
+            post_setup: ArenaPostSetup {
+                side_a_z_offset: 4.0,
+                ..Default::default()
+            },
+        },
+        ArenaMechanicVariant {
+            id: "high_ground_b".to_string(),
+            description: "Side B starts 4m above Side A.".to_string(),
+            scenario: base,
+            post_setup: ArenaPostSetup {
+                side_b_z_offset: 4.0,
+                ..Default::default()
+            },
+        },
+        artifacts_dir,
+        ArenaExpectation::AdvantagedWins,
+        vec!["Current V3 uses `pos.z` as the live melee height-difference source, so this benchmark is already meaningful even though terrain slope is not yet fed into movement speed.".to_string()],
+    )
+}
+
+fn mechanics_arena_armor(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+    let mut armored_a = mechanics_base_arena("arena.armor", 1);
+    armored_a.side_a.armor_preset = ArenaArmorPreset::BronzeBreastplate;
+    armored_a.side_a.armor_ratio = 1.0;
+
+    let mut armored_b = mechanics_base_arena("arena.armor", 1);
+    armored_b.side_b.armor_preset = ArenaArmorPreset::BronzeBreastplate;
+    armored_b.side_b.armor_ratio = 1.0;
+
+    paired_arena_result(
+        "arena.armor",
+        "Mirrored arena duel with one side fully armored.",
+        "Armored soldiers should survive better than otherwise identical unarmored soldiers.",
+        ArenaMechanicVariant {
+            id: "armor_a".to_string(),
+            description: "Side A has bronze breastplates.".to_string(),
+            scenario: armored_a,
+            post_setup: ArenaPostSetup::default(),
+        },
+        ArenaMechanicVariant {
+            id: "armor_b".to_string(),
+            description: "Side B has bronze breastplates.".to_string(),
+            scenario: armored_b,
+            post_setup: ArenaPostSetup::default(),
+        },
+        artifacts_dir,
+        ArenaExpectation::AdvantagedWins,
+        vec!["This validates end-to-end armor effects through the live damage pipeline, not just the theoretical damage table.".to_string()],
+    )
+}
+
+fn mechanics_arena_injured(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+    let attacker = mechanics_entity_keys().0;
+    let injury = Wound {
+        zone: BodyZone::Legs,
+        severity: Severity::Laceration,
+        bleed_rate: 0.003,
+        damage_type: DamageType::Slash,
+        attacker_id: attacker,
+        created_at: 0,
+    };
+
+    paired_arena_result(
+        "arena.injured",
+        "Mirrored arena duel with one side pre-injured.",
+        "The injured side should lose ground against a fresh side.",
+        ArenaMechanicVariant {
+            id: "injured_a".to_string(),
+            description: "Side A starts wounded and bloodied.".to_string(),
+            scenario: mechanics_base_arena("arena.injured", 1),
+            post_setup: ArenaPostSetup {
+                side_a_blood: Some(0.55),
+                side_a_stamina: Some(0.35),
+                side_a_start_wounds: vec![injury.clone()],
+                ..Default::default()
+            },
+        },
+        ArenaMechanicVariant {
+            id: "injured_b".to_string(),
+            description: "Side B starts wounded and bloodied.".to_string(),
+            scenario: mechanics_base_arena("arena.injured", 1),
+            post_setup: ArenaPostSetup {
+                side_b_blood: Some(0.55),
+                side_b_stamina: Some(0.35),
+                side_b_start_wounds: vec![injury],
+                ..Default::default()
+            },
+        },
+        artifacts_dir,
+        ArenaExpectation::AdvantagedLoses,
+        vec!["This exercises live bleed, stamina recovery, and leg-wound movement penalties together.".to_string()],
+    )
+}
+
+fn mechanics_arena_training_melee(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+    paired_arena_result(
+        "arena.training_melee",
+        "Mirrored melee arena duel with only combat_skill swapped.",
+        "Better-trained melee soldiers should outperform worse-trained ones.",
+        ArenaMechanicVariant {
+            id: "training_a".to_string(),
+            description: "Side A combat_skill 0.9, Side B combat_skill 0.1.".to_string(),
+            scenario: mechanics_base_arena("arena.training_melee", 1),
+            post_setup: ArenaPostSetup {
+                side_a_skill: Some(0.9),
+                side_b_skill: Some(0.1),
+                ..Default::default()
+            },
+        },
+        ArenaMechanicVariant {
+            id: "training_b".to_string(),
+            description: "Side B combat_skill 0.9, Side A combat_skill 0.1.".to_string(),
+            scenario: mechanics_base_arena("arena.training_melee", 1),
+            post_setup: ArenaPostSetup {
+                side_a_skill: Some(0.1),
+                side_b_skill: Some(0.9),
+                ..Default::default()
+            },
+        },
+        artifacts_dir,
+        ArenaExpectation::SpecGap,
+        vec![
+            "This currently exposes a spec-to-implementation gap: `combat_skill` exists on entities, but sword-vs-sword combat does not yet consume it.".to_string(),
+            "Keep this benchmark in the suite anyway so parameter work on training has a ready validation target once melee starts using skill.".to_string(),
+        ],
+    )
+}
+
+fn paired_arena_result(
+    id: &str,
+    description: &str,
+    intended_effect: &str,
+    variant_a: ArenaMechanicVariant,
+    variant_b: ArenaMechanicVariant,
+    artifacts_dir: Option<&Path>,
+    expectation: ArenaExpectation,
+    notes: Vec<String>,
+) -> MechanicsScenarioResult {
+    let capture = artifacts_dir.is_some();
+    let artifact_a = simulate_arena_variant(&variant_a, capture);
+    let artifact_b = simulate_arena_variant(&variant_b, capture);
+    let score_a = arena_strength(artifact_a.side_a) - arena_strength(artifact_a.side_b);
+    let score_b = arena_strength(artifact_b.side_b) - arena_strength(artifact_b.side_a);
+    let avg_score = (score_a + score_b) / 2.0;
+    let meets = match expectation {
+        ArenaExpectation::AdvantagedWins => score_a > 0.0 && score_b > 0.0,
+        ArenaExpectation::AdvantagedLoses => score_a < 0.0 && score_b < 0.0,
+        ArenaExpectation::SpecGap => false,
+    };
+
+    let mut artifact_paths = Vec::new();
+    if let Some(dir) = artifacts_dir {
+        if let Ok(path) = write_arena_artifact(dir, id, &variant_a.id, &artifact_a) {
+            artifact_paths.push(path.display().to_string());
+        }
+        if let Ok(path) = write_arena_artifact(dir, id, &variant_b.id, &artifact_b) {
+            artifact_paths.push(path.display().to_string());
+        }
+    }
+
+    let mut metrics = BTreeMap::new();
+    metrics.insert("variant_a_advantaged_score".to_string(), score_a);
+    metrics.insert("variant_b_advantaged_score".to_string(), score_b);
+    metrics.insert("avg_advantaged_score".to_string(), avg_score);
+    metrics.insert(
+        "variant_a_winner".to_string(),
+        artifact_a.winner.map(|w| w as f64).unwrap_or(-1.0),
+    );
+    metrics.insert(
+        "variant_b_winner".to_string(),
+        artifact_b.winner.map(|w| w as f64).unwrap_or(-1.0),
+    );
+
+    MechanicsScenarioResult {
+        id: id.to_string(),
+        level: "arena",
+        description: description.to_string(),
+        intended_effect: intended_effect.to_string(),
+        observed_effect: format!(
+            "Mirrored advantaged-side scores are {:.2} and {:.2}; winners are {:?} and {:?}.",
+            score_a, score_b, artifact_a.winner, artifact_b.winner
+        ),
+        meets_intended: meets,
+        metrics,
+        artifact_paths,
+        notes,
+    }
+}
+
+fn simulate_arena_variant(variant: &ArenaMechanicVariant, capture_timeline: bool) -> ArenaArtifact {
+    let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
+    let mut state = GameState::new(20, 20, 2, hf);
+    let mut economy = EconomyState {
+        food: vec![0.0; state.num_players as usize],
+        material: vec![0.0; state.num_players as usize],
+    };
+    let mut rng = StdRng::seed_from_u64(0xA63E_0F11);
+
+    let side_a = spawn_arena_side(
+        &mut state,
+        &variant.scenario.side_a,
+        variant.scenario.cluster_radius_m,
+        &mut rng,
+    );
+    let side_b = spawn_arena_side(
+        &mut state,
+        &variant.scenario.side_b,
+        variant.scenario.cluster_radius_m,
+        &mut rng,
+    );
+
+    apply_arena_post_setup(
+        &mut state,
+        &side_a.members,
+        &side_b.members,
+        &variant.post_setup,
+    );
+
+    let mut agents = vec![
+        make_agent(&variant.scenario.side_a.agent, 0),
+        make_agent(&variant.scenario.side_b.agent, 1),
+    ];
+    let mut timeline = Vec::new();
+
+    if capture_timeline {
+        timeline.push(record_arena_frame(
+            &mut state,
+            &side_a.members,
+            &side_b.members,
+        ));
+    }
+
+    for _ in 0..variant.scenario.max_ticks {
+        let summary_a = summarize_arena_side(&state, &side_a.members);
+        let summary_b = summarize_arena_side(&state, &side_b.members);
+        if summary_a.alive == 0 || summary_b.alive == 0 {
+            break;
+        }
+
+        let outputs: Vec<AgentOutput> = agents.iter_mut().map(|a| a.tick(&state)).collect();
+        for output in &outputs {
+            apply_commands(&mut state, &mut economy, output);
+        }
+
+        let _ = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+        if capture_timeline {
+            timeline.push(record_arena_frame(
+                &mut state,
+                &side_a.members,
+                &side_b.members,
+            ));
+        } else {
+            let _ = state.combat_log.drain();
+        }
+    }
+
+    let side_a_summary = summarize_arena_side(&state, &side_a.members);
+    let side_b_summary = summarize_arena_side(&state, &side_b.members);
+    ArenaArtifact {
+        id: variant.id.clone(),
+        description: variant.description.clone(),
+        winner: arena_winner(side_a_summary, side_b_summary),
+        final_tick: state.tick,
+        side_a: side_a_summary,
+        side_b: side_b_summary,
+        timeline,
+    }
+}
+
+fn apply_arena_post_setup(
+    state: &mut GameState,
+    side_a_members: &[EntityKey],
+    side_b_members: &[EntityKey],
+    post_setup: &ArenaPostSetup,
+) {
+    apply_side_post_setup(
+        state,
+        side_a_members,
+        post_setup.side_a_z_offset,
+        post_setup.side_a_skill,
+        post_setup.side_a_blood,
+        post_setup.side_a_stamina,
+        post_setup.side_a_movement_mode,
+        &post_setup.side_a_start_wounds,
+    );
+    apply_side_post_setup(
+        state,
+        side_b_members,
+        post_setup.side_b_z_offset,
+        post_setup.side_b_skill,
+        post_setup.side_b_blood,
+        post_setup.side_b_stamina,
+        post_setup.side_b_movement_mode,
+        &post_setup.side_b_start_wounds,
+    );
+}
+
+fn apply_side_post_setup(
+    state: &mut GameState,
+    members: &[EntityKey],
+    z_offset: f32,
+    skill: Option<f32>,
+    blood: Option<f32>,
+    stamina: Option<f32>,
+    movement_mode: Option<MovementMode>,
+    start_wounds: &[Wound],
+) {
+    for &member in members {
+        let Some(entity) = state.entities.get_mut(member) else {
+            continue;
+        };
+        if let Some(pos) = entity.pos.as_mut() {
+            pos.z += z_offset;
+        }
+        if let Some(skill) = skill {
+            if let Some(person) = entity.person.as_mut() {
+                person.combat_skill = skill;
+            }
+        }
+        if let Some(vitals) = entity.vitals.as_mut() {
+            if let Some(blood) = blood {
+                vitals.blood = blood;
+            }
+            if let Some(stamina) = stamina {
+                vitals.stamina = stamina;
+            }
+            if let Some(mode) = movement_mode {
+                vitals.movement_mode = mode;
+            }
+        }
+        if !start_wounds.is_empty() {
+            let wounds = entity.wounds.get_or_insert_with(Default::default);
+            wounds.extend(start_wounds.iter().cloned());
+        }
+    }
+}
+
+fn record_arena_frame(
+    state: &mut GameState,
+    side_a_members: &[EntityKey],
+    side_b_members: &[EntityKey],
+) -> ArenaTimelineFrame {
+    ArenaTimelineFrame {
+        tick: state.tick,
+        avg_distance: average_inter_side_distance(state, side_a_members, side_b_members),
+        side_a: summarize_arena_side(state, side_a_members),
+        side_b: summarize_arena_side(state, side_b_members),
+        soldiers: collect_arena_units(state, side_a_members, side_b_members),
+        combat_log: state.combat_log.drain(),
+    }
+}
+
+fn collect_arena_units(
+    state: &GameState,
+    side_a_members: &[EntityKey],
+    side_b_members: &[EntityKey],
+) -> Vec<ArenaUnitFrame> {
+    side_a_members
+        .iter()
+        .chain(side_b_members.iter())
+        .filter_map(|&key| {
+            let entity = state.entities.get(key)?;
+            let pos = entity.pos?;
+            Some(ArenaUnitFrame {
+                id: entity.id,
+                owner: entity.owner.unwrap_or(255),
+                x: pos.x,
+                y: pos.y,
+                z: pos.z,
+                blood: entity.vitals.as_ref().map(|v| v.blood).unwrap_or(0.0),
+                stamina: entity.vitals.as_ref().map(|v| v.stamina).unwrap_or(0.0),
+                alive: entity
+                    .vitals
+                    .as_ref()
+                    .map(|v| !v.is_dead())
+                    .unwrap_or(false),
+                wounds: entity.wounds.as_ref().map(|w| w.len()).unwrap_or(0),
+                combat_skill: entity
+                    .person
+                    .as_ref()
+                    .map(|p| p.combat_skill)
+                    .unwrap_or(0.0),
+            })
+        })
+        .collect()
+}
+
+fn mechanics_base_arena(id: &str, soldiers: usize) -> ArenaScenario {
+    ArenaScenario {
+        title: format!("=== V3 Mechanics Arena: {} ===", id),
+        max_ticks: 160,
+        cluster_radius_m: 0.0,
+        side_a: ArenaSideScenario {
+            owner: 0,
+            agent: "striker".to_string(),
+            soldiers,
+            weapon_preset: ArenaWeaponPreset::Swords,
+            armor_preset: ArenaArmorPreset::None,
+            armor_ratio: 0.0,
+            formation: FormationType::Line,
+            center: Vec3::new(50.0, 50.0, 0.0),
+        },
+        side_b: ArenaSideScenario {
+            owner: 1,
+            agent: "striker".to_string(),
+            soldiers,
+            weapon_preset: ArenaWeaponPreset::Swords,
+            armor_preset: ArenaArmorPreset::None,
+            armor_ratio: 0.0,
+            formation: FormationType::Line,
+            center: Vec3::new(64.0, 50.0, 0.0),
+        },
+    }
+}
+
+fn mechanics_entity_keys() -> (EntityKey, EntityKey) {
+    let mut state = GameState::new(2, 2, 2, Heightfield::new(2, 2, 0.0, GeoMaterial::Soil));
+    let attacker = spawn_entity(&mut state, EntityBuilder::new().owner(0));
+    let defender = spawn_entity(&mut state, EntityBuilder::new().owner(1));
+    (attacker, defender)
+}
+
+fn arena_strength(summary: ArenaSideSummary) -> f64 {
+    summary.alive as f64 * 100.0 + summary.avg_blood as f64 * 10.0 - summary.wounds as f64
+}
+
+fn arena_winner(side_a: ArenaSideSummary, side_b: ArenaSideSummary) -> Option<u8> {
+    match (side_a.alive, side_b.alive) {
+        (0, 0) => None,
+        (0, _) => Some(1),
+        (_, 0) => Some(0),
+        _ => None,
+    }
+}
+
+fn write_arena_artifact(
+    root: &Path,
+    scenario_id: &str,
+    variant_id: &str,
+    artifact: &ArenaArtifact,
+) -> std::io::Result<PathBuf> {
+    let dir = root.join(scenario_id);
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.json", variant_id));
+    fs::write(&path, serde_json::to_vec_pretty(artifact).unwrap())?;
+    Ok(path)
 }
 
 // ---------------------------------------------------------------------------
