@@ -245,6 +245,199 @@ pub fn cleanup_engagements(state: &mut GameState) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Entity-level facing-based combat (A3)
+// ---------------------------------------------------------------------------
+
+use super::state::EntityKey;
+use super::{
+    DAMAGE_PER_TICK, FRONT_MODIFIER, REAR_MODIFIER, SHIELD_ARC_HALF, SIDE_MODIFIER,
+};
+use std::f32::consts::PI;
+
+/// Normalize an angle difference to [0, PI].
+fn angle_diff(a: f32, b: f32) -> f32 {
+    let mut d = (a - b).abs() % (2.0 * PI);
+    if d > PI {
+        d = 2.0 * PI - d;
+    }
+    d
+}
+
+/// Compute the facing modifier for an attack.
+/// attack_angle is the direction from attacker to defender (atan2).
+/// When defender faces toward attacker, diff ≈ PI (frontal/shield).
+/// When defender faces away, diff ≈ 0 (rear).
+fn facing_modifier(attack_angle: f32, defender_facing: f32) -> f32 {
+    let diff = angle_diff(attack_angle, defender_facing);
+    if diff >= PI - SHIELD_ARC_HALF {
+        FRONT_MODIFIER // defender's shield faces the attack
+    } else if diff >= PI / 2.0 {
+        SIDE_MODIFIER
+    } else {
+        REAR_MODIFIER // defender faces away from attacker
+    }
+}
+
+/// Snapshot of a combatant entity for damage computation.
+struct CombatantSnapshot {
+    key: EntityKey,
+    pos: super::hex::Axial,
+    owner: u8,
+    facing: f32,
+    combat_skill: f32,
+}
+
+/// Per-tick entity combat resolution. No engagement lock — every combatant
+/// attacks hostile entities on the same or adjacent hexes each tick. Facing
+/// auto-updates toward nearest enemy (simple heuristic until B4 tactical layer).
+pub fn entity_resolve_combat(state: &mut GameState) {
+    // Snapshot all combatant entities (person + combatant + pos + owner).
+    let snapshots: Vec<CombatantSnapshot> = state
+        .entities
+        .iter()
+        .filter_map(|(key, e)| {
+            let person = e.person.as_ref()?;
+            let combatant = e.combatant.as_ref()?;
+            let pos = state.entity_hex(e)?;
+            let owner = e.owner?;
+            Some(CombatantSnapshot {
+                key,
+                pos,
+                owner,
+                facing: combatant.facing,
+                combat_skill: person.combat_skill,
+            })
+        })
+        .collect();
+
+    if snapshots.is_empty() {
+        return;
+    }
+
+    // Auto-face: each combatant faces nearest enemy.
+    for snap in &snapshots {
+        let nearest_enemy = snapshots
+            .iter()
+            .filter(|other| other.owner != snap.owner)
+            .filter(|other| hex::distance(snap.pos, other.pos) <= 1)
+            .min_by_key(|other| {
+                let (ax, ay) = hex::axial_to_pixel(snap.pos);
+                let (bx, by) = hex::axial_to_pixel(other.pos);
+                let dx = bx - ax;
+                let dy = by - ay;
+                // Use squared distance for comparison (avoid sqrt).
+                ((dx * dx + dy * dy) * 1000.0) as i64
+            });
+        if let Some(enemy) = nearest_enemy {
+            let new_facing = if snap.pos == enemy.pos {
+                // Same hex: keep current facing (or could randomize — keep simple)
+                snap.facing
+            } else {
+                let (ax, ay) = hex::axial_to_pixel(snap.pos);
+                let (bx, by) = hex::axial_to_pixel(enemy.pos);
+                (by - ay).atan2(bx - ax)
+            };
+            if let Some(entity) = state.entities.get_mut(snap.key) {
+                if let Some(combatant) = entity.combatant.as_mut() {
+                    combatant.facing = new_facing;
+                }
+            }
+        }
+    }
+
+    // Re-snapshot facing after auto-face update.
+    let updated_snapshots: Vec<CombatantSnapshot> = state
+        .entities
+        .iter()
+        .filter_map(|(key, e)| {
+            let person = e.person.as_ref()?;
+            let combatant = e.combatant.as_ref()?;
+            let pos = state.entity_hex(e)?;
+            let owner = e.owner?;
+            Some(CombatantSnapshot {
+                key,
+                pos,
+                owner,
+                facing: combatant.facing,
+                combat_skill: person.combat_skill,
+            })
+        })
+        .collect();
+
+    // Compute damage for each defender from all attackers.
+    let mut damage_map: HashMap<EntityKey, f32> = HashMap::new();
+
+    for attacker in &updated_snapshots {
+        if attacker.combat_skill <= 0.0 {
+            continue;
+        }
+        for defender in &updated_snapshots {
+            if defender.owner == attacker.owner {
+                continue; // no friendly fire
+            }
+            let dist = hex::distance(attacker.pos, defender.pos);
+            if dist > 1 {
+                continue; // out of range
+            }
+
+            let attack_angle = if attacker.pos == defender.pos {
+                // Same hex: attack in attacker's facing direction
+                attacker.facing
+            } else {
+                let (ax, ay) = hex::axial_to_pixel(attacker.pos);
+                let (dx, dy) = hex::axial_to_pixel(defender.pos);
+                (dy - ay).atan2(dx - ax)
+            };
+
+            let modifier = facing_modifier(attack_angle, defender.facing);
+            let dmg = attacker.combat_skill * DAMAGE_PER_TICK * modifier;
+            *damage_map.entry(defender.key).or_insert(0.0) += dmg;
+        }
+    }
+
+    // Apply damage to Person.health.
+    for (key, dmg) in &damage_map {
+        if let Some(entity) = state.entities.get_mut(*key) {
+            if let Some(person) = entity.person.as_mut() {
+                person.health = (person.health - dmg).max(0.0);
+            }
+        }
+    }
+}
+
+/// Remove dead entities (Person.health <= 0) and clean up containment links.
+pub fn entity_cleanup_dead(state: &mut GameState) {
+    let dead_keys: Vec<EntityKey> = state
+        .entities
+        .iter()
+        .filter(|(_, e)| e.person.as_ref().is_some_and(|p| p.health <= 0.0))
+        .map(|(key, _)| key)
+        .collect();
+
+    if dead_keys.is_empty() {
+        return;
+    }
+
+    // Remove dead keys from container.contains lists.
+    for &dead_key in &dead_keys {
+        let container_key = state
+            .entities
+            .get(dead_key)
+            .and_then(|e| e.contained_in);
+        if let Some(ck) = container_key {
+            if let Some(container) = state.entities.get_mut(ck) {
+                container.contains.retain(|&k| k != dead_key);
+            }
+        }
+    }
+
+    // Remove dead entities.
+    for &dead_key in &dead_keys {
+        state.entities.remove(dead_key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,5 +840,311 @@ mod tests {
                 )
             })
         }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Entity facing-based combat tests (A3)
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a GameState with entity combatants but no legacy units.
+    fn entity_combat_state() -> GameState {
+        let width = 10;
+        let height = 10;
+        let grid = vec![
+            Cell {
+                terrain_value: 1.0,
+                material_value: 1.0,
+                food_stockpile: 0.0,
+                material_stockpile: 0.0,
+                has_depot: false,
+                road_level: 0,
+                height: 0.5,
+                moisture: 0.5,
+                biome: Biome::Grassland,
+                is_river: false,
+                water_access: 0.0,
+                region_id: 0,
+                stockpile_owner: None,
+            };
+            width * height
+        ];
+        let total_cells = width * height;
+        let mut state = GameState {
+            width,
+            height,
+            grid,
+            units: SlotMap::with_key(),
+            players: vec![
+                Player { id: 0, food: 0.0, material: 0.0, alive: true },
+                Player { id: 1, food: 0.0, material: 0.0, alive: true },
+            ],
+            population: SlotMap::with_key(),
+            convoys: SlotMap::with_key(),
+            settlements: SlotMap::with_key(),
+            regions: Vec::new(),
+            tick: 0,
+            next_unit_id: 0,
+            next_pop_id: 0,
+            next_convoy_id: 0,
+            next_settlement_id: 0,
+            entities: SlotMap::with_key(),
+            next_entity_id: 0,
+            scouted: vec![vec![true; total_cells]; 2],
+            spatial: SpatialIndex::new(width, height),
+            dirty_hexes: BitVec::repeat(false, total_cells),
+            hex_revisions: vec![0; total_cells],
+            next_hex_revision: 0,
+            territory_cache: vec![None; total_cells],
+            #[cfg(debug_assertions)]
+            tick_accumulator: Some(TickAccumulator::default()),
+            game_log: None,
+        };
+        state.rebuild_spatial();
+        state
+    }
+
+    /// Spawn a combatant entity at pos with given owner, facing, and combat_skill.
+    fn spawn_combatant(
+        state: &mut GameState,
+        pos: Axial,
+        owner: u8,
+        facing: f32,
+        combat_skill: f32,
+    ) -> EntityKey {
+        state.spawn_entity(Entity {
+            id: 0,
+            pos: Some(pos),
+            owner: Some(owner),
+            contained_in: None,
+            contains: vec![],
+            person: Some(Person {
+                health: 1.0,
+                combat_skill,
+                role: Role::Soldier,
+            }),
+            mobile: Some(Mobile {
+                speed: 1.0,
+                move_cooldown: 0,
+                destination: None,
+                route: vec![],
+            }),
+            vision: Some(Vision { radius: 5 }),
+            combatant: Some(Combatant {
+                engaged_with: vec![],
+                facing,
+            }),
+            resource: None,
+            structure: None,
+        })
+    }
+
+    #[test]
+    fn entity_head_on_symmetric_damage() {
+        let mut state = entity_combat_state();
+        let a_pos = Axial::new(2, 2);
+        let b_pos = Axial::new(3, 2); // E neighbor
+        // Face each other
+        let a_to_b = {
+            let (ax, ay) = hex::axial_to_pixel(a_pos);
+            let (bx, by) = hex::axial_to_pixel(b_pos);
+            (by - ay).atan2(bx - ax)
+        };
+        let b_to_a = {
+            let (ax, ay) = hex::axial_to_pixel(a_pos);
+            let (bx, by) = hex::axial_to_pixel(b_pos);
+            (ay - by).atan2(ax - bx)
+        };
+        let ka = spawn_combatant(&mut state, a_pos, 0, a_to_b, 1.0);
+        let kb = spawn_combatant(&mut state, b_pos, 1, b_to_a, 1.0);
+        state.rebuild_spatial();
+
+        entity_resolve_combat(&mut state);
+
+        let a_health = state.entities[ka].person.as_ref().unwrap().health;
+        let b_health = state.entities[kb].person.as_ref().unwrap().health;
+        // Both face each other -> front attack -> FRONT_MODIFIER
+        let expected_dmg = 1.0 * crate::v2::DAMAGE_PER_TICK * crate::v2::FRONT_MODIFIER;
+        assert!(
+            (a_health - (1.0 - expected_dmg)).abs() < 0.001,
+            "a_health = {a_health}, expected {}",
+            1.0 - expected_dmg
+        );
+        // Symmetric
+        assert!(
+            (a_health - b_health).abs() < 0.001,
+            "damage should be symmetric: a={a_health}, b={b_health}"
+        );
+    }
+
+    #[test]
+    fn entity_rear_attack_1_5x() {
+        // Attack angle = direction from attacker to defender = east (0).
+        // Defender also faces east (0) = faces AWAY from attacker.
+        // diff = |0 - 0| = 0 → REAR (1.5x).
+        let attack_angle = 0.0;
+        let defender_facing_away = 0.0;
+        let modifier = facing_modifier(attack_angle, defender_facing_away);
+        assert!(
+            (modifier - crate::v2::REAR_MODIFIER).abs() < 0.001,
+            "rear modifier = {modifier}, expected {}",
+            crate::v2::REAR_MODIFIER
+        );
+    }
+
+    #[test]
+    fn entity_shield_arc_0_3x() {
+        // Attack direction = east (0). Defender faces west (PI) = faces TOWARD attacker.
+        // diff = |0 - PI| = PI → within shield arc (PI >= PI - PI/6) → FRONT (0.3x).
+        let attack_angle = 0.0;
+        let defender_facing_toward = std::f32::consts::PI;
+        let modifier = facing_modifier(attack_angle, defender_facing_toward);
+        assert!(
+            (modifier - crate::v2::FRONT_MODIFIER).abs() < 0.001,
+            "front modifier = {modifier}, expected {}",
+            crate::v2::FRONT_MODIFIER
+        );
+    }
+
+    #[test]
+    fn entity_side_attack_0_7x() {
+        // Attack direction = east (0). Defender faces south (PI/2).
+        // diff = |0 - PI/2| = PI/2 → SIDE (>= PI/2 but < PI - PI/6) → 0.7x.
+        let attack_angle = 0.0;
+        let defender_facing_south = std::f32::consts::FRAC_PI_2;
+        let modifier = facing_modifier(attack_angle, defender_facing_south);
+        assert!(
+            (modifier - crate::v2::SIDE_MODIFIER).abs() < 0.001,
+            "side modifier = {modifier}, expected {}",
+            crate::v2::SIDE_MODIFIER
+        );
+    }
+
+    #[test]
+    fn entity_flanking_more_total_damage() {
+        let mut state = entity_combat_state();
+        // Defender at (3,2), two attackers from opposite sides
+        let def_pos = Axial::new(3, 2);
+        let atk1_pos = Axial::new(2, 2); // W
+        let atk2_pos = Axial::new(4, 2); // E
+
+        // Defender faces west (toward atk1). atk2 attacks from behind.
+        let facing_west = std::f32::consts::PI;
+        let facing_east = 0.0;
+        let _ka1 = spawn_combatant(&mut state, atk1_pos, 0, facing_east, 1.0);
+        let _ka2 = spawn_combatant(&mut state, atk2_pos, 0, facing_west, 1.0);
+        let kd = spawn_combatant(&mut state, def_pos, 1, facing_west, 1.0);
+        state.rebuild_spatial();
+
+        entity_resolve_combat(&mut state);
+
+        let def_health = state.entities[kd].person.as_ref().unwrap().health;
+        // After auto-face, defender faces nearest enemy (could be either).
+        // One attacker hits front (0.3x), other hits rear (1.5x).
+        // Total damage >= 1.0 * 0.02 * (0.3 + 1.5) = 0.036
+        // This is more than 2x frontal: 2 * 0.02 * 0.3 = 0.012
+        let two_frontal = 2.0 * crate::v2::DAMAGE_PER_TICK * crate::v2::FRONT_MODIFIER;
+        let actual_damage = 1.0 - def_health;
+        assert!(
+            actual_damage > two_frontal,
+            "flanking damage {actual_damage} should exceed 2x frontal {two_frontal}"
+        );
+    }
+
+    #[test]
+    fn entity_death_removes_entity() {
+        let mut state = entity_combat_state();
+        let pos = Axial::new(3, 3);
+        let key = spawn_combatant(&mut state, pos, 0, 0.0, 1.0);
+        // Set health to 0
+        state.entities[key].person.as_mut().unwrap().health = 0.0;
+
+        entity_cleanup_dead(&mut state);
+
+        assert!(
+            state.entities.get(key).is_none(),
+            "dead entity should be removed"
+        );
+    }
+
+    #[test]
+    fn entity_death_cleans_containment() {
+        let mut state = entity_combat_state();
+        let struct_pos = Axial::new(3, 3);
+        let struct_key = state.spawn_entity(Entity {
+            id: 0,
+            pos: Some(struct_pos),
+            owner: Some(0),
+            contained_in: None,
+            contains: vec![],
+            person: None,
+            mobile: None,
+            vision: None,
+            combatant: None,
+            resource: None,
+            structure: Some(Structure {
+                structure_type: StructureType::Village,
+                build_progress: 1.0,
+                health: 1.0,
+                capacity: 100,
+            }),
+        });
+        let person_key = spawn_combatant(&mut state, struct_pos, 0, 0.0, 1.0);
+        // Set up containment
+        state.entities[person_key].contained_in = Some(struct_key);
+        state.entities[person_key].pos = None;
+        state.entities[struct_key].contains.push(person_key);
+        // Kill the person
+        state.entities[person_key].person.as_mut().unwrap().health = 0.0;
+
+        entity_cleanup_dead(&mut state);
+
+        assert!(state.entities.get(person_key).is_none());
+        let structure = &state.entities[struct_key];
+        assert!(
+            structure.contains.is_empty(),
+            "dead entity should be removed from container.contains"
+        );
+    }
+
+    #[test]
+    fn entity_no_friendly_fire() {
+        let mut state = entity_combat_state();
+        let a_pos = Axial::new(2, 2);
+        let b_pos = Axial::new(3, 2);
+        // Same owner
+        let ka = spawn_combatant(&mut state, a_pos, 0, 0.0, 1.0);
+        let kb = spawn_combatant(&mut state, b_pos, 0, std::f32::consts::PI, 1.0);
+        state.rebuild_spatial();
+
+        entity_resolve_combat(&mut state);
+
+        let a_health = state.entities[ka].person.as_ref().unwrap().health;
+        let b_health = state.entities[kb].person.as_ref().unwrap().health;
+        assert!(
+            (a_health - 1.0).abs() < 0.001,
+            "no friendly fire: a_health = {a_health}"
+        );
+        assert!(
+            (b_health - 1.0).abs() < 0.001,
+            "no friendly fire: b_health = {b_health}"
+        );
+    }
+
+    #[test]
+    fn entity_same_hex_combat() {
+        let mut state = entity_combat_state();
+        let pos = Axial::new(3, 3);
+        // Both on same hex, different owners
+        let ka = spawn_combatant(&mut state, pos, 0, 0.0, 1.0);
+        let kb = spawn_combatant(&mut state, pos, 1, std::f32::consts::PI, 1.0);
+        state.rebuild_spatial();
+
+        entity_resolve_combat(&mut state);
+
+        let a_health = state.entities[ka].person.as_ref().unwrap().health;
+        let b_health = state.entities[kb].person.as_ref().unwrap().health;
+        // Both should take damage (same hex uses attacker facing as attack angle)
+        assert!(a_health < 1.0, "a should take damage: {a_health}");
+        assert!(b_health < 1.0, "b should take damage: {b_health}");
     }
 }

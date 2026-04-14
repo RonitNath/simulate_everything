@@ -88,3 +88,13 @@ pub const PERSON_FOOD_RATE: f32 = 0.005;
 pub const BUILD_RATE: f32 = 0.02;
 /// Health lost per person entity per tick when starving.
 pub const STARVATION_HEALTH_DAMAGE: f32 = 0.01;
+/// Base damage multiplier per attacker entity per tick.
+pub const DAMAGE_PER_TICK: f32 = 0.02;
+/// Half-width of frontal shield arc in radians (~30 degrees).
+pub const SHIELD_ARC_HALF: f32 = std::f32::consts::FRAC_PI_6;
+/// Damage modifier when attack hits within shield arc (front).
+pub const FRONT_MODIFIER: f32 = 0.3;
+/// Damage modifier when attack hits from the side.
+pub const SIDE_MODIFIER: f32 = 0.7;
+/// Damage modifier when attack hits from the rear.
+pub const REAR_MODIFIER: f32 = 1.5;
