@@ -12,6 +12,7 @@ pub mod state;
 pub mod subprocess_agent;
 pub mod swarm_agent;
 pub mod v2;
+pub mod v3;
 
 pub use action::Action;
 pub use agent::Agent;
