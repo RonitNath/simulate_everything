@@ -131,8 +131,8 @@ const V3DrillApp: Component = () => {
       </div>
       <Show when={initData() != null && frame() != null}>
         <V3HexCanvas
-          width={800}
-          height={500}
+          width={initData()!.width}
+          height={initData()!.height}
           biomes={biomes()}
           heights={heights()}
           rivers={rivers()}
