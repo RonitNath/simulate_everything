@@ -3,9 +3,12 @@ use slotmap::SlotMap;
 use smallvec::SmallVec;
 
 use super::armor::{ArmorProperties, MaterialType};
+use super::coarse_index::CoarseIndex;
 use super::combat_log::CombatLog;
 use super::equipment::Equipment;
+use super::fine_index::FineIndex;
 use super::formation::FormationType;
+use super::hex_mapping::HexMapping;
 use super::index::SpatialIndex;
 use super::movement::Mobile;
 use super::projectile::Projectile;
@@ -335,6 +338,9 @@ impl EntityBuilder {
 pub struct GameState {
     pub entities: SlotMap<EntityKey, Entity>,
     pub spatial_index: SpatialIndex,
+    pub fine_index: FineIndex,
+    pub coarse_index: CoarseIndex,
+    pub hex_mapping: HexMapping,
     pub heightfield: Heightfield,
     pub stacks: Vec<Stack>,
     pub map_width: usize,
@@ -359,6 +365,9 @@ impl GameState {
         Self {
             entities: SlotMap::with_key(),
             spatial_index: SpatialIndex::new(map_width, map_height),
+            fine_index: FineIndex::new(),
+            coarse_index: CoarseIndex::new(),
+            hex_mapping: HexMapping::new(),
             heightfield,
             stacks: Vec::new(),
             map_width,

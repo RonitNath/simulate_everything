@@ -26,9 +26,19 @@ pub fn spawn_entity(state: &mut GameState, builder: EntityBuilder) -> EntityKey 
 
     let key = state.entities.insert(entity);
 
-    // Update spatial index
+    // Update spatial indices
     if let Some(hex) = state.entities[key].hex {
         state.spatial_index.insert(hex, key);
+    }
+    if let Some(pos) = state.entities[key].pos {
+        state.fine_index.insert(pos, key);
+        let e = &state.entities[key];
+        let is_soldier = e
+            .person
+            .as_ref()
+            .map(|p| p.role == super::state::Role::Soldier)
+            .unwrap_or(false);
+        state.coarse_index.insert(pos, key, e.owner, is_soldier);
     }
 
     key
@@ -44,9 +54,20 @@ pub fn spawn_entity(state: &mut GameState, builder: EntityBuilder) -> EntityKey 
 /// The contained entity loses its position and hex membership (it's "inside"
 /// the container now). It's removed from the spatial index.
 pub fn contain(state: &mut GameState, container: EntityKey, contained: EntityKey) {
-    // Remove contained entity from spatial index
-    if let Some(hex) = state.entities.get(contained).and_then(|e| e.hex) {
-        state.spatial_index.remove(hex, contained);
+    // Remove contained entity from spatial indices
+    if let Some(e) = state.entities.get(contained) {
+        if let Some(hex) = e.hex {
+            state.spatial_index.remove(hex, contained);
+        }
+        if let Some(pos) = e.pos {
+            let is_soldier = e
+                .person
+                .as_ref()
+                .map(|p| p.role == super::state::Role::Soldier)
+                .unwrap_or(false);
+            state.fine_index.remove(pos, contained);
+            state.coarse_index.remove(pos, contained, e.owner, is_soldier);
+        }
     }
 
     // Set containment on child
@@ -98,6 +119,20 @@ fn eject_contained(state: &mut GameState, dying_key: EntityKey) {
     };
 
     for child_key in children {
+        // Snapshot owner/role before mutating
+        let (owner, is_soldier) = state
+            .entities
+            .get(child_key)
+            .map(|e| {
+                let is_s = e
+                    .person
+                    .as_ref()
+                    .map(|p| p.role == super::state::Role::Soldier)
+                    .unwrap_or(false);
+                (e.owner, is_s)
+            })
+            .unwrap_or((None, false));
+
         if let Some(child) = state.entities.get_mut(child_key) {
             child.contained_in = None;
             child.pos = pos;
@@ -105,6 +140,10 @@ fn eject_contained(state: &mut GameState, dying_key: EntityKey) {
         }
         if let Some(hex) = hex {
             state.spatial_index.insert(hex, child_key);
+        }
+        if let Some(pos) = pos {
+            state.fine_index.insert(pos, child_key);
+            state.coarse_index.insert(pos, child_key, owner, is_soldier);
         }
     }
 
@@ -158,9 +197,20 @@ pub fn remove_entity(state: &mut GameState, key: EntityKey) {
     // Remove from container if contained
     uncontain(state, key);
 
-    // Remove from spatial index
-    if let Some(hex) = state.entities.get(key).and_then(|e| e.hex) {
-        state.spatial_index.remove(hex, key);
+    // Remove from spatial indices
+    if let Some(e) = state.entities.get(key) {
+        if let Some(hex) = e.hex {
+            state.spatial_index.remove(hex, key);
+        }
+        if let Some(pos) = e.pos {
+            let is_soldier = e
+                .person
+                .as_ref()
+                .map(|p| p.role == super::state::Role::Soldier)
+                .unwrap_or(false);
+            state.fine_index.remove(pos, key);
+            state.coarse_index.remove(pos, key, e.owner, is_soldier);
+        }
     }
 
     // Remove from SlotMap
