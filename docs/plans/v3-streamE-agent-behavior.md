@@ -448,6 +448,244 @@ Triggers promotion to higher tick rate when threshold exceeded. Applies to:
 - Relationship cache: most-interacted entities maintained in top-8
 - Social memory: recent events accessible, oldest evicted
 
+### E7: Behavior validation infrastructure
+
+**Goal:** Tick-level forensic debugging, headless screenshot pipeline, arena
+behavior scenarios, and long-horizon invariant-checking bench harness. Two
+modes: statistical (1000 runs, check invariants) and forensic (1 run, capture
+everything, step through frame-by-frame).
+
+**Files created:**
+- `crates/cli/src/v3_behavior_bench.rs` — Behavior scenario runner with
+  invariant checking. Scenarios defined as TOML configs specifying setup
+  (entity count, settlement layout, threat injection timing), duration, and
+  invariant thresholds. Two modes: `--stat` (batch runs, pass/fail rates)
+  and `--forensic` (single run, full state capture).
+- `crates/engine/src/v3/behavior_snapshot.rs` — Rich per-tick entity state
+  capture: position, needs, current goal, action queue contents, HTN
+  decomposition path, utility scores for top-3 goals, social state summary.
+  Serializable to JSON for analysis tools.
+- `crates/cli/src/headless_renderer.rs` — Headless 2D top-down renderer.
+  Outputs PNG per tick or filmstrip. Renders: terrain heightmap as grayscale,
+  terrain ops as overlays (ditches=blue, walls=brown, roads=gray, furrows=green),
+  entities as colored dots with goal annotations, movement vectors as arrows,
+  action targets as dotted lines. No GPU required — CPU rasterization via
+  `tiny-skia` or similar.
+
+**Files modified:**
+- `crates/cli/src/main.rs` — Add `v3behavior` subcommand
+- `crates/cli/src/v3bench.rs` — Extract shared arena setup logic into reusable
+  helpers that `v3_behavior_bench.rs` also uses
+- `crates/engine/src/v3/sim.rs` — Add optional `BehaviorSnapshot` capture hook
+  in tick loop (zero-cost when disabled via compile flag or runtime toggle)
+
+**Scenario types:**
+
+*Individual behavior (arena-style):*
+```toml
+[scenario]
+id = "solo_farmer_harvest"
+description = "One farmer, one field, one home. Verify harvest → eat cycle."
+duration_ticks = 500
+mode = "forensic"
+
+[setup]
+entities = [
+  { role = "person", pos = [100, 100], needs = { hunger = 0.6 } },
+]
+structures = [
+  { type = "field", pos = [150, 100], properties = { tags = "HARVESTABLE" } },
+  { type = "shelter", pos = [100, 100] },
+]
+
+[invariants]
+entity_0_hunger_below = { threshold = 0.3, by_tick = 200 }
+entity_0_visited = { pos = [150, 100], by_tick = 100 }
+food_produced = { min = 1, by_tick = 300 }
+```
+
+*1v1 combat behavior:*
+```toml
+[scenario]
+id = "1v1_sword_engagement"
+description = "Two soldiers, verify approach → engage → resolve."
+duration_ticks = 300
+mode = "forensic"
+
+[setup]
+entities = [
+  { role = "soldier", pos = [50, 100], owner = 0, weapon = "sword", needs = { duty = 0.9 } },
+  { role = "soldier", pos = [200, 100], owner = 1, weapon = "sword", needs = { duty = 0.9 } },
+]
+
+[invariants]
+engagement_started = { by_tick = 100 }
+one_entity_dead_or_fled = { by_tick = 250 }
+```
+
+*Small group coordination:*
+```toml
+[scenario]
+id = "patrol_responds_to_threat"
+description = "5 patrol entities, 2 hostiles appear at tick 100."
+duration_ticks = 500
+
+[setup]
+entities = [
+  { role = "soldier", pos = [100, 100], owner = 0, count = 5 },
+]
+threat_injection = { tick = 100, entities = [
+  { role = "soldier", pos = [300, 100], owner = 1, count = 2 },
+]}
+
+[invariants]
+response_time = { max_ticks = 50 }
+committed_defenders = { min = 3, by_tick = 150 }
+hostiles_engaged = { by_tick = 200 }
+```
+
+*Long-horizon settlement stability:*
+```toml
+[scenario]
+id = "settlement_stability_200"
+description = "200 entities, established settlement. Survive 5000 ticks."
+duration_ticks = 5000
+mode = "stat"
+runs = 100
+
+[setup]
+preset = "established_settlement"
+entity_count = 200
+
+[invariants]
+food_stockpile_positive = { all_ticks = true }
+tool_coverage = { min = 0.8, sample_interval = 100 }
+idle_fraction = { max = 0.15, sample_interval = 100 }
+population_alive = { min = 180, at_end = true }
+```
+
+*Terrain exploitation:*
+```toml
+[scenario]
+id = "terrain_road_emergence"
+description = "50 entities, two clusters 500m apart. Roads should emerge."
+duration_ticks = 10000
+
+[setup]
+clusters = [
+  { pos = [200, 200], entities = 30, type = "settlement" },
+  { pos = [700, 200], entities = 20, type = "farm_cluster" },
+]
+
+[invariants]
+road_ops_between_clusters = { min = 5, by_tick = 5000 }
+travel_time_decreased = { comparison = "tick_1000_vs_tick_8000", min_ratio = 0.7 }
+```
+
+**Forensic output format:**
+
+For `--forensic` mode, produces a directory per scenario:
+```
+v3behavior_output/solo_farmer_harvest/
+  summary.json          — scenario metadata, invariant results, pass/fail
+  ticks/
+    0000.json           — full BehaviorSnapshot at tick 0
+    0001.json           — ...
+  frames/
+    0000.png            — headless-rendered frame at tick 0
+    0001.png            — ...
+  filmstrip.png         — composite image, 1 row per 50 ticks
+  entity_timelines.json — per-entity: [(tick, goal, action, pos, needs)]
+  terrain_ops.json      — terrain op log at end of scenario
+  invariants.json       — per-invariant: [(tick, value, threshold, pass)]
+```
+
+The `entity_timelines.json` is the primary analysis artifact — you can grep
+it, plot it, or feed it to a visualization tool. Each entry is a full
+decision record: what the entity needed, what it chose, what it did, where
+it was.
+
+**Headless renderer requirements:**
+- 2D top-down orthographic projection
+- Terrain: heightmap as grayscale intensity
+- Terrain ops: colored overlays (ditch=blue, wall=brown, road=gray, furrow=green)
+- Entities: colored circles (by owner), size proportional to entity importance
+- Annotations: goal name above entity, action target as dotted line
+- Movement: velocity vector as arrow from entity center
+- Scale bar and tick number in corner
+- Resolution: 1024×1024 default, configurable
+- Output: PNG per frame, or single filmstrip (N frames tiled)
+
+**Tests:**
+- Solo farmer scenario: entity harvests, eats, hunger decreases
+- 1v1 combat scenario: entities approach, engage, one wins
+- Patrol response: defenders reposition within time bound
+- Settlement stability: 100 runs, >95% pass all invariants
+- Terrain exploitation: roads appear between frequently-traveled points
+- Headless renderer: output PNG matches entity positions from snapshot
+- Forensic output: all files present, JSON parseable, invariants evaluated
+- Batch resolution parity: forensic snapshot at tick N matches batch-resolved state
+
+## Agent-terrain interplay
+
+Stream E domain definitions (E5) and Stream D terrain ops must integrate
+bidirectionally. This is not a separate wave — it's woven into E5 domain
+definitions and E6 perception.
+
+### Terrain → Agent decisions
+
+- **Road ops reduce travel duration** in HTN `MoveTo` decomposition. Planner
+  checks path for road ops: `expected_duration = distance / (speed × road_bonus)`.
+  Entities naturally prefer paths with roads.
+- **Furrow ops improve farming yield**. `ApplyTool { action: Harvest }` on
+  plowed land produces more food. Entities preferentially farm plowed areas.
+- **Ditch/wall ops change movement costs**. Patrol routes adapt. Enemy
+  approach paths change. Defensive value of positions changes.
+- **Crater ops create hazards**. Safety-sensitive entities avoid damaged areas.
+  Over time, abandoned war zones become no-man's-land by emergent avoidance.
+
+### Agent decisions → Terrain
+
+- **Farming domain**: Eat goal → HTN checks if target area has furrow ops →
+  if not, first subtask is `ModifyTerrain { op: Furrow }`.
+- **Construction domain**: Strategy injects `BuildWall` → entities decompose
+  to `ModifyTerrain { op: Ditch }` (foundation) → `ApplyTool { Shape }`
+  (materials) → `Place` (structure).
+- **Road domain**: Operations observes frequent travel on path A→B → injects
+  `BuildRoad { waypoints }` → entities decompose to `ModifyTerrain { op: Road }`.
+- **Defensive domain**: Sustained resolution demand → entities with high
+  safety+duty select Fortify → `ModifyTerrain { op: Ditch }` across approaches.
+
+### Perception updates needed
+
+`StrategicView` needs terrain awareness (added in E6 or follow-up):
+- **Terrain infrastructure assessment** — road coverage, fortification density,
+  farming improvement density per region
+- **Terrain opportunity assessment** — chokepoints for fortification, fertile
+  areas for farming, trade corridor potential
+- **Terrain damage assessment** — war-damaged areas, depleted farmland, broken
+  infrastructure needing recovery investment
+
+HTN affordance queries need terrain checks (added in E5):
+- "Is this area plowed?" → check terrain ops for Furrow at location
+- "Is there a road from A to B?" → check terrain ops for Road along path
+- "Is this border fortified?" → check terrain ops for Ditch/Wall at location
+
+## Starting conditions
+
+Mapgen must produce settlements that look like they've been running for weeks.
+This is a mapgen enhancement after E5 lands, not a separate wave:
+
+- Entities with established need states and spatial habits
+- Tools with partial wear (durability < max)
+- Fields with furrow terrain ops already applied
+- Paths between settlement and fields with road terrain ops
+- Social relationships pre-seeded from personality compatibility
+- Stockpiles partially filled (not empty, not overflowing)
+
+The benchmark `established_settlement` preset (E7) encodes this: a snapshot
+of what the autonomous system produces after stabilization.
+
 ## Verification criteria (full stream)
 
 - [ ] Entities autonomously select goals from needs without operations layer commands
@@ -466,3 +704,12 @@ Triggers promotion to higher tick rate when threshold exceeded. Applies to:
 - [ ] Performance: 100k entities, strategic tier, batch-resolve 1 game-hour < 50ms
 - [ ] Performance: 1k entities, close tier, tick-by-tick execution < 2ms
 - [ ] No regression in existing combat, movement, economy behavior
+- [ ] Headless renderer produces readable PNGs with entity positions + annotations
+- [ ] Forensic mode captures full decision context per entity per tick
+- [ ] Solo behavior scenarios pass (harvest, eat, craft, patrol, combat)
+- [ ] Group coordination scenarios pass (threat response, formation, patrol coverage)
+- [ ] Settlement stability: >95% of 100 runs pass all invariants at 5000 ticks
+- [ ] Terrain exploitation: roads emerge between frequently-traveled points
+- [ ] Batch-resolve parity: forensic snapshot matches batch-resolved state (within epsilon)
+- [ ] Terrain ops integration: farming creates furrows, construction creates ditches/walls
+- [ ] Terrain perception: StrategicView reflects infrastructure/damage state
