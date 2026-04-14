@@ -934,6 +934,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "rmp"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
+dependencies = [
+ "rmp",
+ "serde",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1092,9 +1111,18 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "simulate-everything-protocol",
  "slotmap",
  "smallvec",
  "tracing",
+]
+
+[[package]]
+name = "simulate-everything-protocol"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
 ]
 
 [[package]]
@@ -1118,9 +1146,11 @@ dependencies = [
  "askama",
  "axum",
  "rand 0.8.5",
+ "rmp-serde",
  "serde",
  "serde_json",
  "simulate-everything-engine",
+ "simulate-everything-protocol",
  "tokio",
  "tower-http",
  "tracing",

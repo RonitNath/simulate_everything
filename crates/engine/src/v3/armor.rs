@@ -1,34 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// Body zones
+// Shared enums — canonical definitions in protocol crate
 // ---------------------------------------------------------------------------
 
-/// Body zones for hit location and armor coverage.
-/// D domain extends this with zone lookup logic; W domain uses it for coverage.
-pub const ZONE_COUNT: usize = 5;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BodyZone {
-    Head,
-    Torso,
-    LeftArm,
-    RightArm,
-    Legs,
-}
-
-impl BodyZone {
-    pub const ALL: [BodyZone; ZONE_COUNT] = [
-        BodyZone::Head,
-        BodyZone::Torso,
-        BodyZone::LeftArm,
-        BodyZone::RightArm,
-        BodyZone::Legs,
-    ];
-}
+pub use simulate_everything_protocol::{BodyZone, DamageType, ZONE_COUNT};
 
 // ---------------------------------------------------------------------------
-// Material and construction enums
+// Material and construction enums (engine-only)
 // ---------------------------------------------------------------------------
 
 /// Physical substance of a weapon or armor piece. Determines base hardness,
@@ -57,17 +36,6 @@ pub enum ArmorConstruction {
     Padded,
     /// Multiple materials bonded. Hybrid properties.
     Layered,
-}
-
-/// Damage delivery mechanism. Determines how force interacts with armor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum DamageType {
-    /// Edge cuts. Effective vs unarmored/leather. Lacerations, high bleed.
-    Slash,
-    /// Point focus. Gets through chain, exploits plate gaps. Punctures.
-    Pierce,
-    /// Blunt force. Ignores surface hardness. Concussions, stagger.
-    Crush,
 }
 
 // ---------------------------------------------------------------------------

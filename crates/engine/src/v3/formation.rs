@@ -1,6 +1,10 @@
-use serde::{Deserialize, Serialize};
-
 use super::spatial::Vec2;
+
+// ---------------------------------------------------------------------------
+// Shared enum — canonical definition in protocol crate
+// ---------------------------------------------------------------------------
+
+pub use simulate_everything_protocol::FormationType;
 
 // ---------------------------------------------------------------------------
 // Tunable constants
@@ -12,25 +16,6 @@ const DEFAULT_SPACING: f32 = 20.0;
 /// Wedge angle between the two legs of the V-shape (radians).
 /// ~60 degrees total, 30 degrees per side.
 const WEDGE_HALF_ANGLE: f32 = 0.524; // ~30 degrees
-
-// ---------------------------------------------------------------------------
-// Formation types
-// ---------------------------------------------------------------------------
-
-/// Formation type for a group of entities moving together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum FormationType {
-    /// Single-file or narrow column. Marching, road travel.
-    Column,
-    /// Wide front, shallow depth. Battle line, maximizing frontage.
-    Line,
-    /// V-shape, leader at point. Assault, breaking through.
-    Wedge,
-    /// Hollow rectangle, all-around facing. Defensive formation.
-    Square,
-    /// Loose spacing, irregular. Ranged units, skirmishers.
-    Skirmish,
-}
 
 // ---------------------------------------------------------------------------
 // Slot computation — pure function, no mutable state
