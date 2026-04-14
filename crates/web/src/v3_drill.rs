@@ -299,7 +299,6 @@ fn create_drill_state() -> GameState {
     // Spawn soldier A at hex (1,1), facing east.
     let hex_a = Axial::new(1, 1);
     let pos_a = hex_to_world(hex_a);
-    tracing::info!("drill: soldier A hex={:?} pos={:?}", hex_a, pos_a);
     let soldier_a = spawn_entity(
         &mut state,
         EntityBuilder::new()
@@ -322,11 +321,7 @@ fn create_drill_state() -> GameState {
             .owner(0)
             .weapon_props(weapon::iron_sword()),
     );
-    contain(&mut state, sword_a, soldier_a);
-    // Debug: verify position was set.
-    if let Some(e) = state.entities.get(soldier_a) {
-        tracing::info!("drill: soldier A after spawn: pos={:?} hex={:?}", e.pos, e.hex);
-    }
+    contain(&mut state, soldier_a, sword_a);
     if let Some(e) = state.entities.get_mut(soldier_a) {
         if let Some(eq) = &mut e.equipment {
             eq.weapon = Some(sword_a);
@@ -361,7 +356,7 @@ fn create_drill_state() -> GameState {
             .owner(1)
             .weapon_props(weapon::iron_sword()),
     );
-    contain(&mut state, sword_b, soldier_b);
+    contain(&mut state, soldier_b, sword_b);
     if let Some(e) = state.entities.get_mut(soldier_b) {
         if let Some(eq) = &mut e.equipment {
             eq.weapon = Some(sword_b);
