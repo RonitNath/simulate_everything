@@ -28,7 +28,10 @@ struct ClipmapRing {
     vertex_count: u32,
 }
 
-/// Heightmap terrain renderer with clipmap LOD.
+/// Chunk size for dirty tracking (texels per side).
+pub const CHUNK_SIZE: u32 = 64;
+
+/// Heightmap terrain renderer with clipmap LOD and chunk dirty tracking.
 pub struct HeightmapRenderer {
     pipeline: RenderPipeline,
     camera_bind_group_layout: BindGroupLayout,
@@ -38,10 +41,18 @@ pub struct HeightmapRenderer {
     camera_bind_group: BindGroup,
     terrain_uniform_buf: Buffer,
     heightmap_texture: Texture,
+    heightmap_view: TextureView,
     material_texture: Texture,
+    sampler: Sampler,
     rings: Vec<ClipmapRing>,
     map_width: u32,
     map_height: u32,
+    // Chunk dirty tracking
+    chunks_x: u32,
+    chunks_y: u32,
+    dirty_chunks: Vec<bool>,
+    /// CPU-side copy of heightmap for chunk re-uploads.
+    height_data: Vec<f32>,
 }
 
 impl HeightmapRenderer {
@@ -305,6 +316,11 @@ impl HeightmapRenderer {
         let heightmap_view = heightmap_texture.create_view(&TextureViewDescriptor::default());
         let material_view = material_texture.create_view(&TextureViewDescriptor::default());
 
+        // Chunk dirty tracking
+        let chunks_x = (map_width + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        let chunks_y = (map_height + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        let dirty_chunks = vec![false; (chunks_x * chunks_y) as usize];
+
         let terrain_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("terrain bg"),
             layout: &terrain_bind_group_layout,
@@ -337,42 +353,101 @@ impl HeightmapRenderer {
             camera_bind_group,
             terrain_uniform_buf,
             heightmap_texture,
+            heightmap_view,
             material_texture,
+            sampler,
             rings,
             map_width,
             map_height,
+            chunks_x,
+            chunks_y,
+            dirty_chunks,
+            height_data: height_data.to_vec(),
         }
     }
 
-    /// Update a sub-region of the heightmap texture (for terrain mutations).
-    pub fn update_heightmap_region(
-        &self,
-        queue: &Queue,
+    /// Apply a heightmap mutation to a rectangular region.
+    /// Updates the CPU-side copy and marks overlapping chunks dirty.
+    pub fn mutate_heightmap(
+        &mut self,
         x: u32,
         y: u32,
         width: u32,
         height: u32,
         data: &[f32],
     ) {
-        queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &self.heightmap_texture,
-                mip_level: 0,
-                origin: Origin3d { x, y, z: 0 },
-                aspect: TextureAspect::All,
-            },
-            bytemuck::cast_slice(data),
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+        // Update CPU-side copy
+        for dy in 0..height {
+            for dx in 0..width {
+                let tx = x + dx;
+                let ty = y + dy;
+                if tx < self.map_width && ty < self.map_height {
+                    let idx = (ty * self.map_width + tx) as usize;
+                    let src_idx = (dy * width + dx) as usize;
+                    if let (Some(dst), Some(src)) = (self.height_data.get_mut(idx), data.get(src_idx)) {
+                        *dst = *src;
+                    }
+                }
+            }
+        }
+
+        // Mark overlapping chunks dirty
+        let chunk_x0 = x / CHUNK_SIZE;
+        let chunk_y0 = y / CHUNK_SIZE;
+        let chunk_x1 = ((x + width).min(self.map_width) - 1) / CHUNK_SIZE;
+        let chunk_y1 = ((y + height).min(self.map_height) - 1) / CHUNK_SIZE;
+
+        for cy in chunk_y0..=chunk_y1 {
+            for cx in chunk_x0..=chunk_x1 {
+                let ci = (cy * self.chunks_x + cx) as usize;
+                if let Some(d) = self.dirty_chunks.get_mut(ci) {
+                    *d = true;
+                }
+            }
+        }
+    }
+
+    /// Upload all dirty chunks to the GPU, then clear dirty flags.
+    pub fn flush_dirty_chunks(&mut self, queue: &Queue) {
+        for ci in 0..(self.chunks_x * self.chunks_y) as usize {
+            if !self.dirty_chunks[ci] {
+                continue;
+            }
+
+            let cx = (ci as u32) % self.chunks_x;
+            let cy = (ci as u32) / self.chunks_x;
+
+            let x0 = cx * CHUNK_SIZE;
+            let y0 = cy * CHUNK_SIZE;
+            let w = CHUNK_SIZE.min(self.map_width - x0);
+            let h = CHUNK_SIZE.min(self.map_height - y0);
+
+            // Extract chunk data from CPU copy
+            let mut chunk_data = Vec::with_capacity((w * h) as usize);
+            for row in y0..(y0 + h) {
+                let start = (row * self.map_width + x0) as usize;
+                let end = start + w as usize;
+                chunk_data.extend_from_slice(&self.height_data[start..end]);
+            }
+
+            queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: &self.heightmap_texture,
+                    mip_level: 0,
+                    origin: Origin3d { x: x0, y: y0, z: 0 },
+                    aspect: TextureAspect::All,
+                },
+                bytemuck::cast_slice(&chunk_data),
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+                Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+
+            self.dirty_chunks[ci] = false;
+        }
     }
 
     /// Render terrain with clipmap rings centered on camera target.
@@ -451,7 +526,8 @@ impl HeightmapRenderer {
         }
     }
 
-    /// Get bind group layouts for reuse by other renderers sharing the camera.
+    // --- Accessors for shared GPU resources ---
+
     pub fn camera_bind_group_layout(&self) -> &BindGroupLayout {
         &self.camera_bind_group_layout
     }
@@ -462,5 +538,21 @@ impl HeightmapRenderer {
 
     pub fn camera_uniform_buf(&self) -> &Buffer {
         &self.camera_uniform_buf
+    }
+
+    pub fn heightmap_view(&self) -> &TextureView {
+        &self.heightmap_view
+    }
+
+    pub fn sampler(&self) -> &Sampler {
+        &self.sampler
+    }
+
+    pub fn map_width(&self) -> u32 {
+        self.map_width
+    }
+
+    pub fn map_height(&self) -> u32 {
+        self.map_height
     }
 }
