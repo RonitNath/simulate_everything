@@ -428,6 +428,19 @@ impl GameState {
             .find_map(|(key, convoy)| (convoy.public_id == public_id).then_some(key))
     }
 
+    /// Resolve an entity's effective hex position: own pos, or container's pos if contained.
+    pub fn entity_hex(&self, entity: &Entity) -> Option<Axial> {
+        if let Some(pos) = entity.pos {
+            return Some(pos);
+        }
+        if let Some(container_key) = entity.contained_in {
+            if let Some(container) = self.entities.get(container_key) {
+                return container.pos;
+            }
+        }
+        None
+    }
+
     pub fn has_unit_at(&self, ax: Axial) -> bool {
         self.spatial.has_unit_at(ax)
     }
