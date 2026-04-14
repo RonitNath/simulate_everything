@@ -609,6 +609,22 @@ async fn v2_rr_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     )
 }
 
+#[derive(Template)]
+#[template(path = "v3rr.html")]
+struct V3RrTemplate {
+    build_ver: String,
+}
+
+async fn v3_rr_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Html(
+        V3RrTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
 async fn ws_v2_rr(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let rx = state.v2_rr.spectator_subscribe();
     let catchup = state.v2_rr.spectator_catchup().await;
@@ -1170,6 +1186,7 @@ async fn main() {
         )
         .route("/api/v2/rr/status", get(api_v2_rr_status))
         // V3 RR routes
+        .route("/v3/rr", get(v3_rr_page))
         .route("/ws/v3/rr", get(ws_v3_rr))
         .route("/api/v3/rr/config", axum::routing::post(api_v3_rr_config))
         .route("/api/v3/rr/pause", axum::routing::post(api_v3_rr_pause))
