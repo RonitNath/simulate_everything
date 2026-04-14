@@ -28,7 +28,8 @@ use std::time::Instant;
 
 pub fn main(args: &[String]) {
     if args.iter().any(|a| a == "--arena") {
-        run_arena();
+        let arena_mode = flag_value(args, "--arena-mode").unwrap_or("null-vs-striker");
+        run_arena(arena_mode);
         return;
     }
 
@@ -697,9 +698,15 @@ fn run_bench_game(
 // Arena: minimal 1v1 duel
 // ---------------------------------------------------------------------------
 
-fn run_arena() {
-    eprintln!("=== V3 Arena: 1v1 Duel ===");
-    eprintln!("P0 = null agent (does nothing), P1 = striker (seeks and attacks)\n");
+fn run_arena(mode: &str) {
+    let mutual = mode == "mutual";
+    if mutual {
+        eprintln!("=== V3 Arena: Mutual Combat ===");
+        eprintln!("P0 = striker, P1 = striker (both fight back)\n");
+    } else {
+        eprintln!("=== V3 Arena: 1v1 Duel ===");
+        eprintln!("P0 = null agent (does nothing), P1 = striker (seeks and attacks)\n");
+    }
 
     // Tiny 5x5 map, flat terrain
     let hf = Heightfield::new(5, 5, 0.0, GeoMaterial::Soil);
@@ -772,24 +779,51 @@ fn run_arena() {
         Vec3::new(50.0, 50.0, 0.0),
     );
 
+    // In mutual mode, A also walks toward B
+    if mutual {
+        state.entities[soldier_a].mobile.as_mut().unwrap().waypoints.push(
+            Vec3::new(70.0, 50.0, 0.0),
+        );
+    }
+
     // Create agents
     let damage_table = DamageEstimateTable::from_physics();
-    let mut agents: Vec<LayeredAgent> = vec![
-        // Player 0: null agent (does nothing)
-        LayeredAgent::new(
-            Box::new(NullStrategy),
-            Box::new(NullOperationsLayer),
-            Box::new(NullTacticalLayer),
-            0, 50, 5,
-        ),
-        // Player 1: striker with real tactical layer
-        LayeredAgent::new(
-            Box::new(StrikerStrategy::new()),
-            Box::new(SharedOperationsLayer::new()),
-            Box::new(SharedTacticalLayer::new(damage_table)),
-            1, 50, 5,
-        ),
-    ];
+    let mut agents: Vec<LayeredAgent> = if mutual {
+        let damage_table_2 = DamageEstimateTable::from_physics();
+        vec![
+            // Player 0: striker with real tactical layer
+            LayeredAgent::new(
+                Box::new(StrikerStrategy::new()),
+                Box::new(SharedOperationsLayer::new()),
+                Box::new(SharedTacticalLayer::new(damage_table)),
+                0, 50, 5,
+            ),
+            // Player 1: striker with real tactical layer
+            LayeredAgent::new(
+                Box::new(StrikerStrategy::new()),
+                Box::new(SharedOperationsLayer::new()),
+                Box::new(SharedTacticalLayer::new(damage_table_2)),
+                1, 50, 5,
+            ),
+        ]
+    } else {
+        vec![
+            // Player 0: null agent (does nothing)
+            LayeredAgent::new(
+                Box::new(NullStrategy),
+                Box::new(NullOperationsLayer),
+                Box::new(NullTacticalLayer),
+                0, 50, 5,
+            ),
+            // Player 1: striker with real tactical layer
+            LayeredAgent::new(
+                Box::new(StrikerStrategy::new()),
+                Box::new(SharedOperationsLayer::new()),
+                Box::new(SharedTacticalLayer::new(damage_table)),
+                1, 50, 5,
+            ),
+        ]
+    };
 
     // Run tick by tick
     let max_ticks = 200;
@@ -832,8 +866,10 @@ fn run_arena() {
         let a_dead = a.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
         let b_dead = b.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
         if a_dead || b_dead {
-            if a_dead { eprintln!("\n>>> Soldier A (null) DIED at tick {} <<<", t); }
-            if b_dead { eprintln!("\n>>> Soldier B (striker) DIED at tick {} <<<", t); }
+            let a_label = if mutual { "striker-A" } else { "null" };
+            let b_label = if mutual { "striker-B" } else { "striker" };
+            if a_dead { eprintln!("\n>>> Soldier A ({}) DIED at tick {} <<<", a_label, t); }
+            if b_dead { eprintln!("\n>>> Soldier B ({}) DIED at tick {} <<<", b_label, t); }
             break;
         }
 
@@ -841,13 +877,14 @@ fn run_arena() {
         let outputs: Vec<AgentOutput> = agents.iter_mut().map(|a| a.tick(&state)).collect();
 
         // Log agent commands when they happen
-        let p1 = &outputs[1];
-        if !p1.operational_commands.is_empty() {
-            eprintln!("  [agent] P1 ops: {} commands", p1.operational_commands.len());
-        }
-        if !p1.tactical_commands.is_empty() {
-            eprintln!("  [agent] P1 tactical: {} commands ({} stacks engaged)",
-                p1.tactical_commands.len(), p1.tactical_stacks);
+        for (pi, po) in outputs.iter().enumerate() {
+            if !po.operational_commands.is_empty() {
+                eprintln!("  [agent] P{} ops: {} commands", pi, po.operational_commands.len());
+            }
+            if !po.tactical_commands.is_empty() {
+                eprintln!("  [agent] P{} tactical: {} commands ({} stacks engaged)",
+                    pi, po.tactical_commands.len(), po.tactical_stacks);
+            }
         }
 
         for output in &outputs {
@@ -864,7 +901,37 @@ fn run_arena() {
         }
     }
 
+    // Outcome summary
+    let a = &state.entities[soldier_a];
+    let b = &state.entities[soldier_b];
+    let a_wounds = a.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
+    let b_wounds = b.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
+    let a_blood = a.vitals.as_ref().map(|v| v.blood).unwrap_or(0.0);
+    let b_blood = b.vitals.as_ref().map(|v| v.blood).unwrap_or(0.0);
+    let a_dead = a.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
+    let b_dead = b.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
+
     eprintln!("\n=== Arena complete at tick {} ===", state.tick);
+    eprintln!("  Soldier A: {} wounds, blood={:.2}, {}", a_wounds, a_blood,
+        if a_dead { "DEAD" } else { "alive" });
+    eprintln!("  Soldier B: {} wounds, blood={:.2}, {}", b_wounds, b_blood,
+        if b_dead { "DEAD" } else { "alive" });
+
+    if a_dead && b_dead {
+        eprintln!("  Result: MUTUAL KILL");
+    } else if a_dead {
+        eprintln!("  Winner: Soldier B (blood={:.2}, {} wounds taken)", b_blood, b_wounds);
+    } else if b_dead {
+        eprintln!("  Winner: Soldier A (blood={:.2}, {} wounds taken)", a_blood, a_wounds);
+    } else {
+        eprintln!("  Result: TIME OUT — no winner after {} ticks", max_ticks);
+    }
+
+    if mutual && (a_wounds > 0 && b_wounds > 0) {
+        eprintln!("  Combat was COMPETITIVE — both soldiers dealt damage");
+    } else if mutual {
+        eprintln!("  Combat was ONE-SIDED — only one soldier dealt damage");
+    }
 }
 
 // ---------------------------------------------------------------------------
