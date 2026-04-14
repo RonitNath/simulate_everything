@@ -5,6 +5,7 @@ mod v2_protocol;
 mod v2_roundrobin;
 mod v2_rr_review;
 mod v3_protocol;
+mod v3_review;
 mod v3_roundrobin;
 
 use askama::Template;
@@ -945,6 +946,104 @@ async fn api_v3_rr_status(State(state): State<Arc<AppState>>) -> impl IntoRespon
     Json(status)
 }
 
+#[derive(Deserialize)]
+struct V3RrFlagRequest {
+    game_number: u64,
+    tick: u64,
+    #[serde(default)]
+    annotation: String,
+}
+
+async fn api_v3_rr_flag(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V3RrFlagRequest>,
+) -> impl IntoResponse {
+    match state
+        .v3_rr
+        .flag_tick(body.game_number, body.tick, body.annotation)
+        .await
+    {
+        Ok(result) => {
+            state.v3_rr.broadcast_rr_status().await;
+            (StatusCode::OK, Json(serde_json::to_value(result).unwrap())).into_response()
+        }
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct V3CaptureRequest {
+    game_number: u64,
+}
+
+async fn api_v3_rr_capture_start(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V3CaptureRequest>,
+) -> impl IntoResponse {
+    match state.v3_rr.start_capture(body.game_number).await {
+        Ok(result) => {
+            state.v3_rr.broadcast_rr_status().await;
+            (StatusCode::OK, Json(serde_json::to_value(result).unwrap())).into_response()
+        }
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v3_rr_capture_stop(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V3CaptureRequest>,
+) -> impl IntoResponse {
+    match state.v3_rr.stop_capture(body.game_number).await {
+        Ok(result) => {
+            state.v3_rr.broadcast_rr_status().await;
+            (StatusCode::OK, Json(serde_json::to_value(result).unwrap())).into_response()
+        }
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v3_rr_reviews(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.v3_rr.list_reviews().await {
+        Ok(reviews) => (StatusCode::OK, Json(serde_json::json!(reviews))).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_v3_rr_delete_review(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.v3_rr.delete_review(&id).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "review bundle not found" })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -1000,7 +1099,11 @@ async fn main() {
         v2_rr_loop.run_loop().await;
     });
 
-    let v3_rr = Arc::new(V3RoundRobin::new(tick_ms));
+    let v3_review_dir = std::env::var("SIMEV_V3_RR_REVIEW_DIR").unwrap_or_else(|_| {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        format!("{}/../../var/v3_reviews", manifest)
+    });
+    let v3_rr = Arc::new(V3RoundRobin::new(tick_ms, v3_review_dir.into()));
     let v3_rr_loop = v3_rr.clone();
     tokio::spawn(async move {
         v3_rr_loop.run_loop().await;
@@ -1073,6 +1176,20 @@ async fn main() {
         .route("/api/v3/rr/resume", axum::routing::post(api_v3_rr_resume))
         .route("/api/v3/rr/reset", axum::routing::post(api_v3_rr_reset))
         .route("/api/v3/rr/status", get(api_v3_rr_status))
+        .route("/api/v3/rr/flags", axum::routing::post(api_v3_rr_flag))
+        .route(
+            "/api/v3/rr/capture/start",
+            axum::routing::post(api_v3_rr_capture_start),
+        )
+        .route(
+            "/api/v3/rr/capture/stop",
+            axum::routing::post(api_v3_rr_capture_stop),
+        )
+        .route("/api/v3/rr/reviews", get(api_v3_rr_reviews))
+        .route(
+            "/api/v3/rr/reviews/{id}",
+            axum::routing::delete(api_v3_rr_delete_review),
+        )
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, Notify, broadcast};
@@ -7,6 +8,7 @@ use simulate_everything_engine::v3::{
     agent::{
         LayeredAgent, validate_operational, validate_tactical,
     },
+    combat_log::CombatLog,
     damage_table::DamageEstimateTable,
     mapgen,
     operations::SharedOperationsLayer,
@@ -19,6 +21,7 @@ use simulate_everything_engine::v3::{
 use crate::v3_protocol::{
     self, TimeMode, V3RrStatus, V3ServerToSpectator,
 };
+use crate::v3_review::{self, FlagResponse, V3ReviewRecorder, V3ReviewSummary};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -57,6 +60,8 @@ pub struct V3RoundRobin {
     autoplay: AtomicBool,
     spectator_tx: broadcast::Sender<V3ServerToSpectator>,
     snapshot: Arc<Mutex<V3RrSnapshot>>,
+    review: Arc<Mutex<V3ReviewRecorder>>,
+    review_dir: PathBuf,
     paused: AtomicBool,
     resume_notify: Notify,
     reset_flag: AtomicBool,
@@ -65,7 +70,7 @@ pub struct V3RoundRobin {
 }
 
 impl V3RoundRobin {
-    pub fn new(tick_ms: u64) -> Self {
+    pub fn new(tick_ms: u64, review_dir: PathBuf) -> Self {
         let (spectator_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             tick_ms: AtomicU64::new(tick_ms),
@@ -73,6 +78,8 @@ impl V3RoundRobin {
             autoplay: AtomicBool::new(true),
             spectator_tx,
             snapshot: Arc::new(Mutex::new(V3RrSnapshot::default())),
+            review: Arc::new(Mutex::new(V3ReviewRecorder::new(review_dir.clone()))),
+            review_dir,
             paused: AtomicBool::new(false),
             resume_notify: Notify::new(),
             reset_flag: AtomicBool::new(false),
@@ -197,6 +204,14 @@ impl V3RoundRobin {
 
     async fn build_rr_status(&self) -> V3RrStatus {
         let mode = *self.mode.lock().await;
+        let review = self.review.lock().await;
+        let (cap_start, cap_end) = review.capturable_range();
+        let active = if review.has_active_capture() {
+            Some("recording".to_string())
+        } else {
+            None
+        };
+        drop(review);
         V3RrStatus {
             game_number: self.game_number.load(Ordering::Relaxed),
             current_tick: self.current_tick.load(Ordering::Relaxed),
@@ -205,10 +220,40 @@ impl V3RoundRobin {
             paused: self.is_paused(),
             tick_ms: self.get_tick_ms(),
             autoplay: self.get_autoplay(),
-            capturable_start_tick: None,
-            capturable_end_tick: None,
-            active_capture: None,
+            capturable_start_tick: cap_start,
+            capturable_end_tick: cap_end,
+            active_capture: active,
         }
+    }
+
+    // -- Review API --
+
+    pub async fn flag_tick(
+        &self,
+        game_number: u64,
+        tick: u64,
+        annotation: String,
+    ) -> Result<FlagResponse, String> {
+        self.review
+            .lock()
+            .await
+            .flag_tick(game_number, tick, annotation)
+    }
+
+    pub async fn start_capture(&self, game_number: u64) -> Result<FlagResponse, String> {
+        self.review.lock().await.start_capture(game_number)
+    }
+
+    pub async fn stop_capture(&self, game_number: u64) -> Result<FlagResponse, String> {
+        self.review.lock().await.stop_capture(game_number).await
+    }
+
+    pub async fn list_reviews(&self) -> std::io::Result<Vec<V3ReviewSummary>> {
+        v3_review::list_reviews(&self.review_dir).await
+    }
+
+    pub async fn delete_review(&self, id: &str) -> std::io::Result<bool> {
+        v3_review::delete_review(&self.review_dir, id).await
     }
 
     // -- Internal helpers --
@@ -253,6 +298,12 @@ impl V3RoundRobin {
                 agent_names.join(", "),
                 seed
             );
+
+            // Start review recording for this game.
+            {
+                let mut review = self.review.lock().await;
+                review.start_game(game_number, seed, &agent_names, &agent_versions);
+            }
 
             // Broadcast init.
             let init = v3_protocol::build_init(
@@ -341,6 +392,15 @@ impl V3RoundRobin {
                     }
                 }
 
+                // Record tick for review system.
+                // Combat observations will be populated when CombatLog is
+                // integrated into the sim tick.
+                {
+                    let mut review = self.review.lock().await;
+                    review.record_tick(&state, dt, Vec::new());
+                    review.collect_ready_flags().await;
+                }
+
                 // Broadcast full snapshot each tick (V3.0 — no delta encoding yet).
                 let snapshot = v3_protocol::build_snapshot(&state, dt);
                 self.broadcast(V3ServerToSpectator::Snapshot {
@@ -394,6 +454,12 @@ impl V3RoundRobin {
                 self.broadcast_rr_status().await;
             } else {
                 info!("V3 RR game #{} aborted (reset)", game_number);
+            }
+
+            // Finalize any pending reviews.
+            {
+                let mut review = self.review.lock().await;
+                review.finalize_all().await;
             }
 
             seed += 1;
