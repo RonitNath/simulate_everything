@@ -103,6 +103,16 @@ pub enum TimeMode {
     Cinematic,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntityNeedsInfo {
+    pub hunger: f32,
+    pub safety: f32,
+    pub duty: f32,
+    pub rest: f32,
+    pub social: f32,
+    pub shelter: f32,
+}
+
 impl TimeMode {
     pub fn dt(&self) -> f32 {
         match self {
@@ -154,7 +164,15 @@ pub struct SpectatorEntityInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_task: Option<String>,
+    pub needs: Option<EntityNeedsInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_goal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_action: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub action_queue_preview: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attack_phase: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -227,7 +245,15 @@ pub struct EntityUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_id: Option<Option<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_task: Option<Option<String>>,
+    pub needs: Option<Option<EntityNeedsInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_goal: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_action: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_queue_preview: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_reason: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attack_phase: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
