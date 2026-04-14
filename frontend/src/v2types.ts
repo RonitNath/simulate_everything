@@ -42,6 +42,23 @@ export interface V2ConvoySnapshot {
   returning?: boolean;
 }
 
+export interface SpectatorEntity {
+  id: number;
+  owner: number | null;
+  q: number;
+  r: number;
+  health?: number;
+  role?: string;
+  combat_skill?: number;
+  engaged: boolean;
+  facing?: number;
+  resource_type?: string;
+  resource_amount?: number;
+  structure_type?: string;
+  build_progress?: number;
+  contains_count: number;
+}
+
 export interface V2ScoreSnapshot {
   player_id: number;
   population: number;
@@ -79,6 +96,7 @@ export interface V2SpectatorPlayer {
 
 export interface V2Frame {
   tick: number;
+  entities: SpectatorEntity[];
   units: V2UnitSnapshot[];
   player_food?: number[];
   player_material?: number[];
@@ -170,6 +188,7 @@ export interface BoardStaticData {
 
 export interface BoardFrameData {
   tick: number;
+  entities: SpectatorEntity[];
   units: V2UnitSnapshot[];
   territory: Array<number | null>;
   roads: number[];
@@ -210,6 +229,7 @@ export function normalizeWsFrame(f: V2Frame): BoardFrameData {
   const roads = f.roads ?? f.road_levels ?? [];
   return {
     tick: f.tick,
+    entities: f.entities ?? [],
     units: f.units,
     territory,
     roads,
@@ -223,6 +243,7 @@ export function normalizeWsFrame(f: V2Frame): BoardFrameData {
 export function normalizeReplayFrame(f: V2ReplayFrame): BoardFrameData {
   return {
     tick: f.tick,
+    entities: [], // replay frames predate unified entities
     units: f.units,
     territory: f.cells.map((c) => c.stockpile_owner),
     roads: f.cells.map((c) => c.road_level),

@@ -307,9 +307,27 @@ All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crate
 | `type` | Fields | Description |
 |--------|--------|-------------|
 | `v2_init` | `width`, `height`, `terrain: Vec<f32>`, `material_map: Vec<f32>`, `height_map: Vec<f32>`, `region_ids: Vec<u16>`, `player_count`, `agent_names` | Sent once per game. Carries the static terrain layers needed to render the board and seed reconnect catchup. |
-| `v2_snapshot` | `tick`, `full_state`, `units`, `engagements`, `convoys`, `hex_changes`, `settlements`, `players` | Sent every tick. `full_state=false` frames carry only dynamic hex deltas plus full entity lists; reconnect catchup uses a `full_state=true` snapshot representing the current board. |
+| `v2_snapshot` | `tick`, `full_state`, `entities`, `units`, `engagements`, `convoys`, `hex_changes`, `settlements`, `players` | Sent every tick. `entities` is a unified `SpectatorEntity[]` covering units, convoys, and settlements (new in D1). Legacy `units`/`convoys`/`settlements` fields are still present for backward compatibility. `full_state=false` frames carry only dynamic hex deltas plus full entity lists; reconnect catchup uses a `full_state=true` snapshot representing the current board. |
 | `v2_game_end` | `winner: Option<u8>`, `tick: u64`, `timed_out: bool` | Sent when the game ends. `winner` is the elimination winner or the score winner at timeout; `timed_out` distinguishes those cases. |
 | `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
+
+`v2_snapshot.entities` is a flat array of `SpectatorEntity` objects that unify units, convoys, and settlements:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `u32` | Public entity ID |
+| `owner` | `Option<u8>` | Owning player |
+| `q`, `r` | `i32` | Axial hex coordinates |
+| `health` | `Option<f32>` | Present for units (strength) |
+| `role` | `Option<String>` | e.g. `"Soldier"` for units |
+| `combat_skill` | `Option<f32>` | Reserved for future use |
+| `engaged` | `bool` | In combat |
+| `facing` | `Option<f32>` | Reserved for future use |
+| `resource_type` | `Option<String>` | e.g. `"Food"`, `"Material"`, `"Settlers"` for convoys |
+| `resource_amount` | `Option<f32>` | Cargo amount for convoys |
+| `structure_type` | `Option<String>` | e.g. `"Farm"`, `"Village"`, `"City"` for settlements |
+| `build_progress` | `Option<f32>` | Reserved for future use |
+| `contains_count` | `usize` | Population count at settlements |
 
 `v2_snapshot.players` uses compact HUD buckets instead of exact economy floats: `population`, `territory`, `food_level`, and `material_level`.
 

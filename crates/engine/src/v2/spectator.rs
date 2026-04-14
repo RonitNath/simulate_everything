@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 use super::hex::Axial;
-use super::state::{CargoType, GameState};
+use super::state::{CargoType, GameState, SettlementType};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpectatorInit {
@@ -16,10 +16,39 @@ pub struct SpectatorInit {
     pub agent_names: Vec<String>,
 }
 
+/// Unified entity for the wire protocol. Flattens the engine's component bags into optional
+/// fields so the frontend can render units, convoys, and settlements from one array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpectatorEntity {
+    pub id: u32,
+    pub owner: Option<u8>,
+    pub q: i32,
+    pub r: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub combat_skill: Option<f32>,
+    pub engaged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facing: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_amount: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structure_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_progress: Option<f32>,
+    pub contains_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpectatorSnapshot {
     pub tick: u64,
     pub full_state: bool,
+    pub entities: Vec<SpectatorEntity>,
     pub units: Vec<SpectatorUnit>,
     pub engagements: Vec<(u32, u32)>,
     pub convoys: Vec<SpectatorConvoy>,
@@ -98,9 +127,13 @@ pub fn snapshot_delta(state: &GameState) -> SpectatorSnapshot {
 }
 
 fn build_snapshot(state: &GameState, full_state: bool) -> SpectatorSnapshot {
+    let settl = settlements(state);
+    let entities = build_entities(state, &settl);
+
     SpectatorSnapshot {
         tick: state.tick,
         full_state,
+        entities,
         units: state
             .units
             .values()
@@ -128,9 +161,95 @@ fn build_snapshot(state: &GameState, full_state: bool) -> SpectatorSnapshot {
             })
             .collect(),
         hex_changes: hex_changes(state, full_state),
-        settlements: settlements(state),
+        settlements: settl,
         players: spectator_players(state),
     }
+}
+
+fn build_entities(state: &GameState, settl: &[SpectatorSettlement]) -> Vec<SpectatorEntity> {
+    let mut out = Vec::new();
+
+    // Units → entities with health/role/combat_skill
+    for u in state.units.values() {
+        out.push(SpectatorEntity {
+            id: u.public_id,
+            owner: Some(u.owner),
+            q: u.pos.q,
+            r: u.pos.r,
+            health: Some(u.strength),
+            role: Some("Soldier".to_string()),
+            combat_skill: None,
+            engaged: !u.engagements.is_empty(),
+            facing: None,
+            resource_type: None,
+            resource_amount: None,
+            structure_type: None,
+            build_progress: None,
+            contains_count: 0,
+        });
+    }
+
+    // Convoys → entities with resource_type/resource_amount
+    for c in state.convoys.values() {
+        out.push(SpectatorEntity {
+            id: c.public_id,
+            owner: Some(c.owner),
+            q: c.pos.q,
+            r: c.pos.r,
+            health: None,
+            role: None,
+            combat_skill: None,
+            engaged: false,
+            facing: None,
+            resource_type: Some(format!("{:?}", c.cargo_type)),
+            resource_amount: Some(c.cargo_amount),
+            structure_type: None,
+            build_progress: None,
+            contains_count: 0,
+        });
+    }
+
+    // Settlements → entities with structure_type
+    for s in settl {
+        let stype = settlement_type_at(state, s);
+        out.push(SpectatorEntity {
+            id: 0, // settlements don't have stable public IDs yet
+            owner: Some(s.owner),
+            q: s.q,
+            r: s.r,
+            health: None,
+            role: None,
+            combat_skill: None,
+            engaged: false,
+            facing: None,
+            resource_type: None,
+            resource_amount: None,
+            structure_type: Some(format!("{:?}", stype)),
+            build_progress: None,
+            contains_count: population_at(state, s.owner, Axial { q: s.q, r: s.r }),
+        });
+    }
+
+    out
+}
+
+fn settlement_type_at(state: &GameState, s: &SpectatorSettlement) -> SettlementType {
+    let hex = Axial { q: s.q, r: s.r };
+    state
+        .settlements
+        .values()
+        .find(|st| st.owner == s.owner && st.hex == hex)
+        .map(|st| st.settlement_type)
+        .unwrap_or(SettlementType::Village)
+}
+
+fn population_at(state: &GameState, owner: u8, hex: Axial) -> usize {
+    state
+        .population
+        .values()
+        .filter(|p| p.owner == owner && p.hex == hex)
+        .map(|p| p.count as usize)
+        .sum()
 }
 
 fn settlements(state: &GameState) -> Vec<SpectatorSettlement> {
