@@ -1,23 +1,30 @@
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use simulate_everything_engine::v2::state::EntityKey;
 use simulate_everything_engine::v3::{
     agent::{
-        AgentOutput, EntityTask, LayeredAgent, OperationalCommand, StrategyLayer, TacticalCommand,
-        validate_operational, validate_tactical,
+        AgentOutput, EntityTask, EquipmentType, LayeredAgent, OperationalCommand, StrategyLayer,
+        TacticalCommand, validate_operational, validate_tactical,
     },
+    armor::{ArmorConstruction, ArmorProperties, BodyZone, DamageType, MaterialType},
     damage_table::DamageEstimateTable,
-    equipment::Equipment,
+    equipment::{self, Equipment},
     formation::FormationType,
-    lifecycle::{contain, spawn_entity},
+    lifecycle::{contain, spawn_entity, uncontain},
     mapgen,
     movement::Mobile,
     operations::{NullOperationsLayer, SharedOperationsLayer},
     spatial::{GeoMaterial, Heightfield, Vec3},
-    state::{Combatant, EntityBuilder, GameState, Person, Role, Stack},
+    state::{
+        Combatant, EntityBuilder, GameState, Person, ResourceType, Role, Stack, Structure,
+        StructureType,
+    },
     strategy::{NullStrategy, SpreadStrategy, StrikerStrategy, TurtleStrategy},
     tactical::{NullTacticalLayer, SharedTacticalLayer},
-    weapon::{self, AttackState},
+    vitals::Vitals,
+    weapon::{self, AttackState, WeaponProperties},
 };
+use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -203,6 +210,81 @@ fn make_agent(name: &str, player: u8) -> LayeredAgent {
     LayeredAgent::new(strategy, ops, tactical, player, 50, 5)
 }
 
+fn init_bench_state(
+    width: usize,
+    height: usize,
+    num_players: u8,
+    seed: u64,
+) -> (GameState, EconomyState) {
+    let mut state = mapgen::generate(width, height, num_players, seed);
+    bootstrap_bench_structures(&mut state);
+    let economy = EconomyState::from_state(&state);
+    (state, economy)
+}
+
+fn bootstrap_bench_structures(state: &mut GameState) {
+    let villages: Vec<(u8, Vec3)> = state
+        .entities
+        .values()
+        .filter_map(|entity| {
+            let owner = entity.owner?;
+            let pos = entity.pos?;
+            let structure = entity.structure.as_ref()?;
+            (structure.structure_type == StructureType::Village).then_some((owner, pos))
+        })
+        .collect();
+
+    for (owner, center) in villages {
+        let has_farm = state.entities.values().any(|entity| {
+            entity.owner == Some(owner)
+                && entity
+                    .structure
+                    .as_ref()
+                    .map(|s| s.structure_type == StructureType::Farm)
+                    .unwrap_or(false)
+        });
+        if !has_farm {
+            spawn_entity(
+                state,
+                EntityBuilder::new()
+                    .pos(Vec3::new(center.x + 25.0, center.y, center.z))
+                    .owner(owner)
+                    .structure(Structure {
+                        structure_type: StructureType::Farm,
+                        build_progress: 1.0,
+                        integrity: 80.0,
+                        capacity: 8,
+                        material: MaterialType::Wood,
+                    }),
+            );
+        }
+
+        let has_workshop = state.entities.values().any(|entity| {
+            entity.owner == Some(owner)
+                && entity
+                    .structure
+                    .as_ref()
+                    .map(|s| s.structure_type == StructureType::Workshop)
+                    .unwrap_or(false)
+        });
+        if !has_workshop {
+            spawn_entity(
+                state,
+                EntityBuilder::new()
+                    .pos(Vec3::new(center.x - 25.0, center.y, center.z))
+                    .owner(owner)
+                    .structure(Structure {
+                        structure_type: StructureType::Workshop,
+                        build_progress: 1.0,
+                        integrity: 90.0,
+                        capacity: 24,
+                        material: MaterialType::Wood,
+                    }),
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------
@@ -259,6 +341,280 @@ struct V3MatchupStats {
     games_played: u32,
     results: Vec<V3GameResult>,
 }
+
+#[derive(Clone, Debug)]
+struct EconomyState {
+    food: Vec<f32>,
+    material: Vec<f32>,
+}
+
+impl EconomyState {
+    fn from_state(state: &GameState) -> Self {
+        let mut food = vec![0.0; state.num_players as usize];
+        let mut material = vec![0.0; state.num_players as usize];
+
+        for entity in state.entities.values() {
+            let owner = match entity.owner {
+                Some(owner) => owner as usize,
+                None => continue,
+            };
+            let resource = match entity.resource.as_ref() {
+                Some(resource) => resource,
+                None => continue,
+            };
+            match resource.resource_type {
+                ResourceType::Food => food[owner] += resource.amount,
+                ResourceType::Material => material[owner] += resource.amount,
+                _ => {}
+            }
+        }
+
+        Self { food, material }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Arena config
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+struct ArenaConfigFile {
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    max_ticks: Option<u64>,
+    #[serde(default)]
+    cluster_radius_m: Option<f32>,
+    #[serde(default)]
+    side_a_center: Option<[f32; 2]>,
+    #[serde(default)]
+    side_b_center: Option<[f32; 2]>,
+    #[serde(default)]
+    side_a: Option<ArenaSideConfigFile>,
+    #[serde(default)]
+    side_b: Option<ArenaSideConfigFile>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ArenaSideConfigFile {
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    soldiers: Option<usize>,
+    #[serde(default)]
+    weapon_preset: Option<String>,
+    #[serde(default)]
+    armor: Option<String>,
+    #[serde(default)]
+    armor_ratio: Option<f32>,
+    #[serde(default)]
+    formation: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArenaWeaponPreset {
+    Swords,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArenaArmorPreset {
+    None,
+    LeatherCuirass,
+    BronzeBreastplate,
+}
+
+#[derive(Debug, Clone)]
+struct ArenaScenario {
+    title: String,
+    max_ticks: u64,
+    cluster_radius_m: f32,
+    side_a: ArenaSideScenario,
+    side_b: ArenaSideScenario,
+}
+
+#[derive(Debug, Clone)]
+struct ArenaSideScenario {
+    owner: u8,
+    agent: String,
+    soldiers: usize,
+    weapon_preset: ArenaWeaponPreset,
+    armor_preset: ArenaArmorPreset,
+    armor_ratio: f32,
+    formation: FormationType,
+    center: Vec3,
+}
+
+#[derive(Debug, Clone)]
+struct ArenaSideState {
+    owner: u8,
+    agent: String,
+    members: Vec<simulate_everything_engine::v2::state::EntityKey>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ArenaSideSummary {
+    alive: usize,
+    total: usize,
+    wounds: usize,
+    avg_blood: f32,
+    attacking: usize,
+    cooling_down: usize,
+}
+
+impl ArenaConfigFile {
+    fn for_mode(mode: &str) -> Self {
+        let side_a_agent = if mode == "mutual" { "striker" } else { "null" };
+        Self {
+            mode: Some(mode.to_string()),
+            max_ticks: Some(200),
+            cluster_radius_m: Some(0.0),
+            side_a_center: Some([50.0, 50.0]),
+            side_b_center: Some([70.0, 50.0]),
+            side_a: Some(ArenaSideConfigFile {
+                agent: Some(side_a_agent.to_string()),
+                soldiers: Some(1),
+                weapon_preset: Some("swords".to_string()),
+                armor: Some("none".to_string()),
+                armor_ratio: Some(0.0),
+                formation: Some("line".to_string()),
+            }),
+            side_b: Some(ArenaSideConfigFile {
+                agent: Some("striker".to_string()),
+                soldiers: Some(1),
+                weapon_preset: Some("swords".to_string()),
+                armor: Some("none".to_string()),
+                armor_ratio: Some(0.0),
+                formation: Some("line".to_string()),
+            }),
+        }
+    }
+
+    fn resolve(&self) -> ArenaScenario {
+        let mode = self.mode.as_deref().unwrap_or("null-vs-striker");
+        let defaults = ArenaConfigFile::for_mode(mode);
+        let default_cluster = if defaults
+            .side_a
+            .as_ref()
+            .and_then(|s| s.soldiers)
+            .unwrap_or(1)
+            > 1
+        {
+            30.0
+        } else {
+            defaults.cluster_radius_m.unwrap_or(0.0)
+        };
+        let side_a = resolve_arena_side(
+            0,
+            self.side_a.as_ref().or(defaults.side_a.as_ref()),
+            self.side_a_center
+                .or(defaults.side_a_center)
+                .unwrap_or([50.0, 50.0]),
+        );
+        let side_b = resolve_arena_side(
+            1,
+            self.side_b.as_ref().or(defaults.side_b.as_ref()),
+            self.side_b_center
+                .or(defaults.side_b_center)
+                .unwrap_or([200.0, 50.0]),
+        );
+        let cluster_radius_m = self.cluster_radius_m.unwrap_or_else(|| {
+            if side_a.soldiers > 1 || side_b.soldiers > 1 {
+                30.0
+            } else {
+                default_cluster
+            }
+        });
+        let title = format!(
+            "=== V3 Arena: {}v{} {} ===",
+            side_a.soldiers,
+            side_b.soldiers,
+            if side_a.agent == "striker" && side_b.agent == "striker" {
+                "Mutual Combat"
+            } else {
+                "Configured Scenario"
+            }
+        );
+
+        ArenaScenario {
+            title,
+            max_ticks: self.max_ticks.unwrap_or(200),
+            cluster_radius_m,
+            side_a,
+            side_b,
+        }
+    }
+}
+
+fn resolve_arena_side(
+    owner: u8,
+    side: Option<&ArenaSideConfigFile>,
+    center_xy: [f32; 2],
+) -> ArenaSideScenario {
+    let side = side.cloned().unwrap_or_default();
+    let soldiers = side.soldiers.unwrap_or(1);
+    assert!(
+        (1..=32).contains(&soldiers),
+        "arena side {} soldiers must be between 1 and 32, got {}",
+        owner,
+        soldiers
+    );
+
+    ArenaSideScenario {
+        owner,
+        agent: side.agent.unwrap_or_else(|| "striker".to_string()),
+        soldiers,
+        weapon_preset: parse_arena_weapon_preset(side.weapon_preset.as_deref().unwrap_or("swords")),
+        armor_preset: parse_arena_armor_preset(side.armor.as_deref().unwrap_or("none")),
+        armor_ratio: side.armor_ratio.unwrap_or_else(|| {
+            if side.weapon_preset.as_deref() == Some("mixed") {
+                0.4
+            } else {
+                0.0
+            }
+        }),
+        formation: parse_formation_name(side.formation.as_deref().unwrap_or("line")),
+        center: Vec3::new(center_xy[0], center_xy[1], 0.0),
+    }
+}
+
+fn load_arena_config(path: &str) -> ArenaConfigFile {
+    let raw = fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read arena config {}: {}", path, err));
+    toml::from_str(&raw)
+        .unwrap_or_else(|err| panic!("failed to parse arena config {}: {}", path, err))
+}
+
+fn parse_arena_weapon_preset(value: &str) -> ArenaWeaponPreset {
+    match value {
+        "swords" => ArenaWeaponPreset::Swords,
+        "mixed" => ArenaWeaponPreset::Mixed,
+        other => panic!("unsupported arena weapon_preset '{}'", other),
+    }
+}
+
+fn parse_arena_armor_preset(value: &str) -> ArenaArmorPreset {
+    match value {
+        "none" => ArenaArmorPreset::None,
+        "leather_cuirass" => ArenaArmorPreset::LeatherCuirass,
+        "bronze_breastplate" => ArenaArmorPreset::BronzeBreastplate,
+        other => panic!("unsupported arena armor '{}'", other),
+    }
+}
+
+fn parse_formation_name(value: &str) -> FormationType {
+    match value {
+        "column" => FormationType::Column,
+        "line" => FormationType::Line,
+        "wedge" => FormationType::Wedge,
+        "square" => FormationType::Square,
+        "skirmish" => FormationType::Skirmish,
+        other => panic!("unsupported arena formation '{}'", other),
+    }
+}
+
+const BENCH_FARM_FOOD_PER_TASK: f32 = 5.0;
+const BENCH_WORKSHOP_MATERIAL_PER_TASK: f32 = 2.0;
 
 impl V3MatchupStats {
     fn new(agents: &[&str]) -> Self {
@@ -448,7 +804,7 @@ fn run_profile_game(
     (w, h): (usize, usize),
     num_players: u8,
 ) {
-    let mut state = mapgen::generate(w, h, num_players, seed);
+    let (mut state, mut economy) = init_bench_state(w, h, num_players, seed);
     let mut agents: Vec<LayeredAgent> = agent_names
         .iter()
         .enumerate()
@@ -476,7 +832,7 @@ fn run_profile_game(
             .collect();
 
         for output in &outputs {
-            apply_commands(&mut state, output);
+            apply_commands(&mut state, &mut economy, output);
         }
 
         let t0 = Instant::now();
@@ -518,7 +874,7 @@ fn run_ascii_game(
     (w, h): (usize, usize),
     num_players: u8,
 ) {
-    let mut state = mapgen::generate(w, h, num_players, seed);
+    let (mut state, mut economy) = init_bench_state(w, h, num_players, seed);
     let mut agents: Vec<LayeredAgent> = agent_names
         .iter()
         .enumerate()
@@ -532,7 +888,7 @@ fn run_ascii_game(
 
         let outputs: Vec<AgentOutput> = agents.iter_mut().map(|a| a.tick(&state)).collect();
         for output in &outputs {
-            apply_commands(&mut state, output);
+            apply_commands(&mut state, &mut economy, output);
         }
         simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
     }
@@ -568,7 +924,7 @@ fn run_bench_game(
     (w, h): (usize, usize),
     num_players: u8,
 ) -> V3GameResult {
-    let mut state = mapgen::generate(w, h, num_players, seed);
+    let (mut state, mut economy) = init_bench_state(w, h, num_players, seed);
     let mut agents: Vec<LayeredAgent> = agent_names
         .iter()
         .enumerate()
@@ -615,7 +971,7 @@ fn run_bench_game(
             .collect();
 
         for output in &outputs {
-            apply_commands(&mut state, output);
+            apply_commands(&mut state, &mut economy, output);
         }
 
         let tick_result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
@@ -718,7 +1074,10 @@ fn run_arena(mode: &str) {
         EntityBuilder::new()
             .pos(Vec3::new(50.0, 50.0, 0.0))
             .owner(0)
-            .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+            .person(Person {
+                role: Role::Soldier,
+                combat_skill: 0.5,
+            })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())
             .vitals()
@@ -740,7 +1099,10 @@ fn run_arena(mode: &str) {
         EntityBuilder::new()
             .pos(Vec3::new(70.0, 50.0, 0.0))
             .owner(1)
-            .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+            .person(Person {
+                role: Role::Soldier,
+                combat_skill: 0.5,
+            })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())
             .vitals()
@@ -775,15 +1137,21 @@ fn run_arena(mode: &str) {
     });
 
     // Give B an initial waypoint toward A so it moves before ops kicks in
-    state.entities[soldier_b].mobile.as_mut().unwrap().waypoints.push(
-        Vec3::new(50.0, 50.0, 0.0),
-    );
+    state.entities[soldier_b]
+        .mobile
+        .as_mut()
+        .unwrap()
+        .waypoints
+        .push(Vec3::new(50.0, 50.0, 0.0));
 
     // In mutual mode, A also walks toward B
     if mutual {
-        state.entities[soldier_a].mobile.as_mut().unwrap().waypoints.push(
-            Vec3::new(70.0, 50.0, 0.0),
-        );
+        state.entities[soldier_a]
+            .mobile
+            .as_mut()
+            .unwrap()
+            .waypoints
+            .push(Vec3::new(70.0, 50.0, 0.0));
     }
 
     // Create agents
@@ -796,14 +1164,18 @@ fn run_arena(mode: &str) {
                 Box::new(StrikerStrategy::new()),
                 Box::new(SharedOperationsLayer::new()),
                 Box::new(SharedTacticalLayer::new(damage_table)),
-                0, 50, 5,
+                0,
+                50,
+                5,
             ),
             // Player 1: striker with real tactical layer
             LayeredAgent::new(
                 Box::new(StrikerStrategy::new()),
                 Box::new(SharedOperationsLayer::new()),
                 Box::new(SharedTacticalLayer::new(damage_table_2)),
-                1, 50, 5,
+                1,
+                50,
+                5,
             ),
         ]
     } else {
@@ -813,16 +1185,25 @@ fn run_arena(mode: &str) {
                 Box::new(NullStrategy),
                 Box::new(NullOperationsLayer),
                 Box::new(NullTacticalLayer),
-                0, 50, 5,
+                0,
+                50,
+                5,
             ),
             // Player 1: striker with real tactical layer
             LayeredAgent::new(
                 Box::new(StrikerStrategy::new()),
                 Box::new(SharedOperationsLayer::new()),
                 Box::new(SharedTacticalLayer::new(damage_table)),
-                1, 50, 5,
+                1,
+                50,
+                5,
             ),
         ]
+    };
+
+    let mut economy = EconomyState {
+        food: vec![0.0; state.num_players as usize],
+        material: vec![0.0; state.num_players as usize],
     };
 
     // Run tick by tick
@@ -840,10 +1221,26 @@ fn run_arena(mode: &str) {
         let a_stamina = a.vitals.as_ref().map(|v| v.stamina).unwrap_or(-1.0);
         let b_stamina = b.vitals.as_ref().map(|v| v.stamina).unwrap_or(-1.0);
 
-        let a_atk = a.combatant.as_ref().and_then(|c| c.attack.as_ref()).is_some();
-        let b_atk = b.combatant.as_ref().and_then(|c| c.attack.as_ref()).is_some();
-        let a_cd = a.combatant.as_ref().and_then(|c| c.cooldown.as_ref()).is_some();
-        let b_cd = b.combatant.as_ref().and_then(|c| c.cooldown.as_ref()).is_some();
+        let a_atk = a
+            .combatant
+            .as_ref()
+            .and_then(|c| c.attack.as_ref())
+            .is_some();
+        let b_atk = b
+            .combatant
+            .as_ref()
+            .and_then(|c| c.attack.as_ref())
+            .is_some();
+        let a_cd = a
+            .combatant
+            .as_ref()
+            .and_then(|c| c.cooldown.as_ref())
+            .is_some();
+        let b_cd = b
+            .combatant
+            .as_ref()
+            .and_then(|c| c.cooldown.as_ref())
+            .is_some();
 
         let a_wounds = a.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
         let b_wounds = b.wounds.as_ref().map(|w| w.len()).unwrap_or(0);
@@ -856,9 +1253,24 @@ fn run_arena(mode: &str) {
         if should_print {
             eprintln!(
                 "T{:>4} | dist={:>6.1} | A({:>6.1},{:>6.1}) bl={:.2} st={:.2} w={} atk={} cd={} wp={} | B({:>6.1},{:>6.1}) bl={:.2} st={:.2} w={} atk={} cd={} wp={}",
-                t, dist,
-                a_pos.x, a_pos.y, a_blood, a_stamina, a_wounds, a_atk as u8, a_cd as u8, a_wps,
-                b_pos.x, b_pos.y, b_blood, b_stamina, b_wounds, b_atk as u8, b_cd as u8, b_wps,
+                t,
+                dist,
+                a_pos.x,
+                a_pos.y,
+                a_blood,
+                a_stamina,
+                a_wounds,
+                a_atk as u8,
+                a_cd as u8,
+                a_wps,
+                b_pos.x,
+                b_pos.y,
+                b_blood,
+                b_stamina,
+                b_wounds,
+                b_atk as u8,
+                b_cd as u8,
+                b_wps,
             );
         }
 
@@ -868,8 +1280,12 @@ fn run_arena(mode: &str) {
         if a_dead || b_dead {
             let a_label = if mutual { "striker-A" } else { "null" };
             let b_label = if mutual { "striker-B" } else { "striker" };
-            if a_dead { eprintln!("\n>>> Soldier A ({}) DIED at tick {} <<<", a_label, t); }
-            if b_dead { eprintln!("\n>>> Soldier B ({}) DIED at tick {} <<<", b_label, t); }
+            if a_dead {
+                eprintln!("\n>>> Soldier A ({}) DIED at tick {} <<<", a_label, t);
+            }
+            if b_dead {
+                eprintln!("\n>>> Soldier B ({}) DIED at tick {} <<<", b_label, t);
+            }
             break;
         }
 
@@ -879,16 +1295,24 @@ fn run_arena(mode: &str) {
         // Log agent commands when they happen
         for (pi, po) in outputs.iter().enumerate() {
             if !po.operational_commands.is_empty() {
-                eprintln!("  [agent] P{} ops: {} commands", pi, po.operational_commands.len());
+                eprintln!(
+                    "  [agent] P{} ops: {} commands",
+                    pi,
+                    po.operational_commands.len()
+                );
             }
             if !po.tactical_commands.is_empty() {
-                eprintln!("  [agent] P{} tactical: {} commands ({} stacks engaged)",
-                    pi, po.tactical_commands.len(), po.tactical_stacks);
+                eprintln!(
+                    "  [agent] P{} tactical: {} commands ({} stacks engaged)",
+                    pi,
+                    po.tactical_commands.len(),
+                    po.tactical_stacks
+                );
             }
         }
 
         for output in &outputs {
-            apply_commands(&mut state, output);
+            apply_commands(&mut state, &mut economy, output);
         }
 
         let result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
@@ -912,17 +1336,31 @@ fn run_arena(mode: &str) {
     let b_dead = b.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(true);
 
     eprintln!("\n=== Arena complete at tick {} ===", state.tick);
-    eprintln!("  Soldier A: {} wounds, blood={:.2}, {}", a_wounds, a_blood,
-        if a_dead { "DEAD" } else { "alive" });
-    eprintln!("  Soldier B: {} wounds, blood={:.2}, {}", b_wounds, b_blood,
-        if b_dead { "DEAD" } else { "alive" });
+    eprintln!(
+        "  Soldier A: {} wounds, blood={:.2}, {}",
+        a_wounds,
+        a_blood,
+        if a_dead { "DEAD" } else { "alive" }
+    );
+    eprintln!(
+        "  Soldier B: {} wounds, blood={:.2}, {}",
+        b_wounds,
+        b_blood,
+        if b_dead { "DEAD" } else { "alive" }
+    );
 
     if a_dead && b_dead {
         eprintln!("  Result: MUTUAL KILL");
     } else if a_dead {
-        eprintln!("  Winner: Soldier B (blood={:.2}, {} wounds taken)", b_blood, b_wounds);
+        eprintln!(
+            "  Winner: Soldier B (blood={:.2}, {} wounds taken)",
+            b_blood, b_wounds
+        );
     } else if b_dead {
-        eprintln!("  Winner: Soldier A (blood={:.2}, {} wounds taken)", a_blood, a_wounds);
+        eprintln!(
+            "  Winner: Soldier A (blood={:.2}, {} wounds taken)",
+            a_blood, a_wounds
+        );
     } else {
         eprintln!("  Result: TIME OUT — no winner after {} ticks", max_ticks);
     }
@@ -938,7 +1376,267 @@ fn run_arena(mode: &str) {
 // Command application
 // ---------------------------------------------------------------------------
 
-fn apply_commands(state: &mut GameState, output: &AgentOutput) {
+fn bench_weapon(item_type: EquipmentType) -> Option<WeaponProperties> {
+    match item_type {
+        EquipmentType::Sword => Some(weapon::iron_sword()),
+        EquipmentType::Spear => Some(WeaponProperties {
+            material: MaterialType::Iron,
+            damage_type: DamageType::Pierce,
+            sharpness: 0.7,
+            hardness: 5.0,
+            weight: 1.8,
+            reach: 2.2,
+            hands_required: 2,
+            block_arc: 0.3,
+            block_efficiency: 0.5,
+            projectile_speed: 0.0,
+            projectile_arc: false,
+            accuracy_base: 0.0,
+            windup_ticks: 5,
+            commitment_fraction: 0.6,
+            base_recovery: 4.0,
+        }),
+        EquipmentType::Axe => Some(WeaponProperties {
+            material: MaterialType::Iron,
+            damage_type: DamageType::Slash,
+            sharpness: 0.75,
+            hardness: 5.0,
+            weight: 1.6,
+            reach: 1.4,
+            hands_required: 1,
+            block_arc: 0.35,
+            block_efficiency: 0.55,
+            projectile_speed: 0.0,
+            projectile_arc: false,
+            accuracy_base: 0.0,
+            windup_ticks: 4,
+            commitment_fraction: 0.5,
+            base_recovery: 4.0,
+        }),
+        EquipmentType::Mace => Some(WeaponProperties {
+            material: MaterialType::Iron,
+            damage_type: DamageType::Crush,
+            sharpness: 0.1,
+            hardness: 6.0,
+            weight: 2.0,
+            reach: 1.3,
+            hands_required: 1,
+            block_arc: 0.35,
+            block_efficiency: 0.5,
+            projectile_speed: 0.0,
+            projectile_arc: false,
+            accuracy_base: 0.0,
+            windup_ticks: 5,
+            commitment_fraction: 0.5,
+            base_recovery: 4.0,
+        }),
+        EquipmentType::Bow => Some(weapon::wooden_bow()),
+        EquipmentType::Shield => Some(WeaponProperties {
+            material: MaterialType::Wood,
+            damage_type: DamageType::Crush,
+            sharpness: 0.0,
+            hardness: 3.0,
+            weight: 3.0,
+            reach: 0.7,
+            hands_required: 1,
+            block_arc: 1.8,
+            block_efficiency: 0.2,
+            projectile_speed: 0.0,
+            projectile_arc: false,
+            accuracy_base: 0.0,
+            windup_ticks: 3,
+            commitment_fraction: 0.4,
+            base_recovery: 2.0,
+        }),
+        _ => None,
+    }
+}
+
+fn bench_armor(item_type: EquipmentType) -> Option<ArmorProperties> {
+    match item_type {
+        EquipmentType::HelmetPlate => Some(ArmorProperties {
+            material: MaterialType::Iron,
+            construction: ArmorConstruction::Plate,
+            hardness: 6.5,
+            thickness: 2.0,
+            coverage: 0.9,
+            weight: 2.5,
+            zones_covered: vec![BodyZone::Head],
+        }),
+        EquipmentType::HelmetChain => Some(ArmorProperties {
+            material: MaterialType::Iron,
+            construction: ArmorConstruction::Chain,
+            hardness: 5.5,
+            thickness: 1.5,
+            coverage: 0.85,
+            weight: 2.0,
+            zones_covered: vec![BodyZone::Head],
+        }),
+        EquipmentType::CuirassPlate => Some(ArmorProperties {
+            material: MaterialType::Iron,
+            construction: ArmorConstruction::Plate,
+            hardness: 6.5,
+            thickness: 2.2,
+            coverage: 0.9,
+            weight: 8.0,
+            zones_covered: vec![BodyZone::Torso],
+        }),
+        EquipmentType::CuirassChain => Some(ArmorProperties {
+            material: MaterialType::Iron,
+            construction: ArmorConstruction::Chain,
+            hardness: 5.5,
+            thickness: 1.8,
+            coverage: 0.85,
+            weight: 6.5,
+            zones_covered: vec![BodyZone::Torso, BodyZone::LeftArm, BodyZone::RightArm],
+        }),
+        EquipmentType::CuirassPadded => Some(ArmorProperties {
+            material: MaterialType::Cloth,
+            construction: ArmorConstruction::Padded,
+            hardness: 2.5,
+            thickness: 5.0,
+            coverage: 0.8,
+            weight: 3.0,
+            zones_covered: vec![BodyZone::Torso],
+        }),
+        EquipmentType::Greaves => Some(ArmorProperties {
+            material: MaterialType::Iron,
+            construction: ArmorConstruction::Plate,
+            hardness: 5.5,
+            thickness: 1.8,
+            coverage: 0.8,
+            weight: 3.5,
+            zones_covered: vec![BodyZone::Legs],
+        }),
+        _ => None,
+    }
+}
+
+fn bench_item_cost(item_type: EquipmentType) -> f32 {
+    match item_type {
+        EquipmentType::Sword => 8.0,
+        EquipmentType::Spear => 7.0,
+        EquipmentType::Axe => 7.0,
+        EquipmentType::Mace => 9.0,
+        EquipmentType::Bow => 6.0,
+        EquipmentType::Shield => 5.0,
+        EquipmentType::HelmetPlate => 6.0,
+        EquipmentType::HelmetChain => 5.0,
+        EquipmentType::CuirassPlate => 14.0,
+        EquipmentType::CuirassChain => 11.0,
+        EquipmentType::CuirassPadded => 4.0,
+        EquipmentType::Greaves => 8.0,
+    }
+}
+
+fn soldier_needs_item(state: &GameState, soldier_key: EntityKey, item_key: EntityKey) -> bool {
+    let Some(soldier) = state.entities.get(soldier_key) else {
+        return false;
+    };
+    let Some(item) = state.entities.get(item_key) else {
+        return false;
+    };
+    let equipment = soldier.equipment.as_ref();
+
+    if item.weapon_props.is_some() {
+        let is_shield = item
+            .weapon_props
+            .as_ref()
+            .map(|props| props.block_arc >= 1.2 && props.reach <= 1.0)
+            .unwrap_or(false);
+        if is_shield {
+            return equipment.and_then(|eq| eq.shield).is_none();
+        }
+        return equipment.and_then(|eq| eq.weapon).is_none();
+    }
+
+    if let Some(armor_props) = item.armor_props.as_ref() {
+        let eq = equipment.cloned().unwrap_or_else(Equipment::empty);
+        return armor_props
+            .zones_covered
+            .iter()
+            .any(|zone| eq.armor_slots[equipment::zone_index(*zone)].is_none());
+    }
+
+    false
+}
+
+fn equip_entity_item(state: &mut GameState, entity_key: EntityKey, item_key: EntityKey) -> bool {
+    let Some(item) = state.entities.get(item_key) else {
+        return false;
+    };
+    let weapon_props = item.weapon_props.clone();
+    let armor_props = item.armor_props.clone();
+    let is_shield = weapon_props
+        .as_ref()
+        .map(|props| props.block_arc >= 1.2 && props.reach <= 1.0)
+        .unwrap_or(false);
+
+    let Some(entity) = state.entities.get_mut(entity_key) else {
+        return false;
+    };
+    let equipment = entity.equipment.get_or_insert_with(Equipment::empty);
+
+    let assigned = if let Some(props) = armor_props.as_ref() {
+        equipment::equip_armor(equipment, item_key, props);
+        true
+    } else if is_shield {
+        if equipment.shield.is_none() {
+            equipment.shield = Some(item_key);
+            true
+        } else {
+            false
+        }
+    } else if equipment.weapon.is_none() {
+        equipment.weapon = Some(item_key);
+        true
+    } else {
+        false
+    };
+
+    if !assigned {
+        return false;
+    }
+
+    uncontain(state, item_key);
+    contain(state, entity_key, item_key);
+    true
+}
+
+fn auto_equip_soldier(state: &mut GameState, soldier_key: EntityKey) {
+    let owner = match state
+        .entities
+        .get(soldier_key)
+        .and_then(|entity| entity.owner)
+    {
+        Some(owner) => owner,
+        None => return,
+    };
+
+    let inventory: Vec<_> = state
+        .entities
+        .iter()
+        .filter_map(|(key, entity)| {
+            (entity.owner == Some(owner)
+                && entity.person.is_none()
+                && (entity.weapon_props.is_some() || entity.armor_props.is_some())
+                && entity
+                    .contained_in
+                    .and_then(|container| state.entities.get(container))
+                    .map(|container| container.structure.is_some())
+                    .unwrap_or(false))
+            .then_some(key)
+        })
+        .collect();
+
+    for item_key in inventory {
+        if soldier_needs_item(state, soldier_key, item_key) {
+            let _ = equip_entity_item(state, soldier_key, item_key);
+        }
+    }
+}
+
+fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &AgentOutput) {
     for cmd in &output.operational_commands {
         if !validate_operational(cmd, state) {
             continue;
@@ -961,6 +1659,66 @@ fn apply_commands(state: &mut GameState, output: &AgentOutput) {
                 }
             }
             OperationalCommand::AssignTask { entity, task } => match task {
+                EntityTask::Farm { field } => {
+                    if let Some(owner) = state.entities.get(*entity).and_then(|e| e.owner) {
+                        if state
+                            .entities
+                            .get(*field)
+                            .and_then(|e| e.structure.as_ref())
+                            .map(|s| s.structure_type == StructureType::Farm)
+                            .unwrap_or(false)
+                        {
+                            if let Some(person) = state
+                                .entities
+                                .get_mut(*entity)
+                                .and_then(|e| e.person.as_mut())
+                            {
+                                person.role = Role::Farmer;
+                            }
+                            economy.food[owner as usize] += BENCH_FARM_FOOD_PER_TASK;
+                        }
+                    }
+                }
+                EntityTask::Build { site } => {
+                    if let Some(owner) = state.entities.get(*entity).and_then(|e| e.owner) {
+                        if let Some(person) = state
+                            .entities
+                            .get_mut(*entity)
+                            .and_then(|e| e.person.as_mut())
+                        {
+                            person.role = Role::Worker;
+                        }
+                        if state
+                            .entities
+                            .get(*site)
+                            .and_then(|e| e.structure.as_ref())
+                            .map(|s| s.structure_type == StructureType::Workshop)
+                            .unwrap_or(false)
+                        {
+                            economy.material[owner as usize] += BENCH_WORKSHOP_MATERIAL_PER_TASK;
+                        }
+                    }
+                }
+                EntityTask::Craft { workshop, .. } => {
+                    if let Some(owner) = state.entities.get(*entity).and_then(|e| e.owner) {
+                        if let Some(person) = state
+                            .entities
+                            .get_mut(*entity)
+                            .and_then(|e| e.person.as_mut())
+                        {
+                            person.role = Role::Worker;
+                        }
+                        if state
+                            .entities
+                            .get(*workshop)
+                            .and_then(|e| e.structure.as_ref())
+                            .map(|s| s.structure_type == StructureType::Workshop)
+                            .unwrap_or(false)
+                        {
+                            economy.material[owner as usize] += BENCH_WORKSHOP_MATERIAL_PER_TASK;
+                        }
+                    }
+                }
                 EntityTask::Patrol { waypoints } => {
                     if let Some(e) = state.entities.get_mut(*entity) {
                         if let Some(mobile) = &mut e.mobile {
@@ -968,14 +1726,57 @@ fn apply_commands(state: &mut GameState, output: &AgentOutput) {
                         }
                     }
                 }
-                _ => {
-                    // Other tasks (Farm, Build, Craft, Garrison, Train, Idle) not yet wired.
+                EntityTask::Garrison { position } => {
+                    if let Some(e) = state.entities.get_mut(*entity) {
+                        if let Some(mobile) = &mut e.mobile {
+                            mobile.waypoints = vec![*position];
+                        }
+                    }
+                }
+                EntityTask::Train => {
+                    if let Some(e) = state.entities.get_mut(*entity) {
+                        if let Some(person) = e.person.as_mut() {
+                            person.role = Role::Soldier;
+                            person.combat_skill = person.combat_skill.max(0.35);
+                        }
+                        if e.mobile.is_none() {
+                            e.mobile = Some(Mobile::new(2.0, 10.0));
+                        }
+                        if e.vitals.is_none() {
+                            e.vitals = Some(Vitals::new());
+                            e.wounds = Some(Default::default());
+                        }
+                        if e.combatant.is_none() {
+                            e.combatant = Some(Combatant::new());
+                        }
+                        if e.equipment.is_none() {
+                            e.equipment = Some(Equipment::empty());
+                        }
+                    }
+                    auto_equip_soldier(state, *entity);
+                }
+                EntityTask::Idle => {
+                    if let Some(e) = state.entities.get_mut(*entity) {
+                        if let Some(person) = e.person.as_mut() {
+                            person.role = Role::Idle;
+                        }
+                        if let Some(mobile) = e.mobile.as_mut() {
+                            mobile.waypoints.clear();
+                        }
+                    }
                 }
             },
-            OperationalCommand::FormStack { entities, archetype: _ } => {
-                if entities.is_empty() { continue; }
+            OperationalCommand::FormStack {
+                entities,
+                archetype: _,
+            } => {
+                if entities.is_empty() {
+                    continue;
+                }
                 let leader = entities[0];
-                let owner = state.entities.get(leader)
+                let owner = state
+                    .entities
+                    .get(leader)
                     .and_then(|e| e.owner)
                     .unwrap_or(0);
                 let stack_id = state.alloc_stack_id();
@@ -987,9 +1788,71 @@ fn apply_commands(state: &mut GameState, output: &AgentOutput) {
                     leader,
                 });
             }
-            _ => {
-                // DisbandStack, ProduceEquipment, EquipEntity,
-                // EstablishSupplyRoute, FoundSettlement — stub.
+            OperationalCommand::DisbandStack { stack } => {
+                state.stacks.retain(|existing| existing.id != *stack);
+            }
+            OperationalCommand::ProduceEquipment {
+                workshop,
+                item_type,
+            } => {
+                let Some(owner) = state.entities.get(*workshop).and_then(|e| e.owner) else {
+                    continue;
+                };
+                let owner_idx = owner as usize;
+                let cost = bench_item_cost(*item_type);
+                if economy.material[owner_idx] < cost {
+                    continue;
+                }
+
+                let Some(workshop_pos) = state.entities.get(*workshop).and_then(|e| e.pos) else {
+                    continue;
+                };
+
+                let builder = if let Some(weapon_props) = bench_weapon(*item_type) {
+                    EntityBuilder::new()
+                        .pos(workshop_pos)
+                        .owner(owner)
+                        .weapon_props(weapon_props)
+                } else if let Some(armor_props) = bench_armor(*item_type) {
+                    EntityBuilder::new()
+                        .pos(workshop_pos)
+                        .owner(owner)
+                        .armor_props(armor_props)
+                } else {
+                    continue;
+                };
+
+                economy.material[owner_idx] -= cost;
+                let item_key = spawn_entity(state, builder);
+                contain(state, *workshop, item_key);
+
+                let candidates: Vec<_> = state
+                    .entities
+                    .iter()
+                    .filter_map(|(key, entity)| {
+                        (entity.owner == Some(owner)
+                            && entity
+                                .person
+                                .as_ref()
+                                .map(|person| person.role == Role::Soldier)
+                                .unwrap_or(false))
+                        .then_some(key)
+                    })
+                    .collect();
+                for soldier_key in candidates {
+                    if soldier_needs_item(state, soldier_key, item_key)
+                        && equip_entity_item(state, soldier_key, item_key)
+                    {
+                        break;
+                    }
+                }
+            }
+            OperationalCommand::EquipEntity { entity, equipment } => {
+                let _ = equip_entity_item(state, *entity, *equipment);
+            }
+            OperationalCommand::EstablishSupplyRoute { .. }
+            | OperationalCommand::FoundSettlement { .. } => {
+                // Deferred for bench mode.
             }
         }
     }
