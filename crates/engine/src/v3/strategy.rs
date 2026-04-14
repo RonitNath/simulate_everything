@@ -390,8 +390,8 @@ mod tests {
             terrain: TerrainAssessment {
                 road_coverage: 0.0,
                 fortification_density: 0.0,
-                farming_improvement_density: 0.0,
-                damage_pressure: 0.0,
+                farming_improvements: 0.0,
+                damage_density: 0.0,
             },
         }
     }

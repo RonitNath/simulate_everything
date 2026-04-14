@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::derived::{derive_hex_control, derive_player_stats, region_center};
 use super::spatial::Vec3;
 use super::state::GameState;
+use super::terrain_ops::TerrainOp;
 use crate::v2::hex::{Axial, neighbors};
 
 // ---------------------------------------------------------------------------
@@ -102,10 +103,14 @@ pub struct StackHealth {
 
 #[derive(Debug, Clone)]
 pub struct TerrainAssessment {
+    /// Road operations in controlled territory. Higher = better logistics.
     pub road_coverage: f32,
+    /// Ditch + Wall operations on frontier hexes. Higher = better defense.
     pub fortification_density: f32,
-    pub farming_improvement_density: f32,
-    pub damage_pressure: f32,
+    /// Furrow operations in controlled territory. Higher = better farming.
+    pub farming_improvements: f32,
+    /// Crater operations in controlled territory. Higher = more war damage.
+    pub damage_density: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,40 +193,57 @@ pub fn build_strategic_view(state: &GameState, player: u8) -> StrategicView {
 }
 
 fn assess_terrain(state: &GameState, player: u8) -> TerrainAssessment {
+    let control = derive_hex_control(state);
     let mut roads = 0.0;
     let mut fortifications = 0.0;
     let mut farming = 0.0;
     let mut damage = 0.0;
-    let mut owned_sites: f32 = 0.0;
-
-    for entity in state.entities.values() {
-        if entity.owner == Some(player) && entity.site.is_some() {
-            owned_sites += 1.0;
-        }
-    }
+    let mut controlled_hexes: f32 = 0.0;
 
     for row in 0..state.map_height as i32 {
         for col in 0..state.map_width as i32 {
             let hex = crate::v2::hex::offset_to_axial(row, col);
+            let Some(idx) = hex_index(state, hex) else {
+                continue;
+            };
+            let Some(hex_control) = control.get(idx) else {
+                continue;
+            };
+            let is_controlled = hex_control.owner == Some(player) && !hex_control.contested;
+            if !is_controlled {
+                continue;
+            }
+
+            controlled_hexes += 1.0;
+            let is_frontier = neighbors(hex).into_iter().any(|neighbor| {
+                hex_index(state, neighbor)
+                    .and_then(|neighbor_idx| control.get(neighbor_idx))
+                    .map(|neighbor_control| {
+                        neighbor_control.owner != Some(player) || neighbor_control.contested
+                    })
+                    .unwrap_or(true)
+            });
+
             for op in state.terrain_ops.ops_for_hex(hex) {
                 match op {
-                    super::terrain_ops::TerrainOp::Road { .. } => roads += 1.0,
-                    super::terrain_ops::TerrainOp::Ditch { .. }
-                    | super::terrain_ops::TerrainOp::Wall { .. } => fortifications += 1.0,
-                    super::terrain_ops::TerrainOp::Furrow { .. } => farming += 1.0,
-                    super::terrain_ops::TerrainOp::Crater { .. } => damage += 1.0,
+                    TerrainOp::Road { .. } => roads += 1.0,
+                    TerrainOp::Ditch { .. } | TerrainOp::Wall { .. } if is_frontier => {
+                        fortifications += 1.0
+                    }
+                    TerrainOp::Furrow { .. } => farming += 1.0,
+                    TerrainOp::Crater { .. } => damage += 1.0,
                     _ => {}
                 }
             }
         }
     }
 
-    let denom = owned_sites.max(1.0);
+    let denom = controlled_hexes.max(1.0);
     TerrainAssessment {
         road_coverage: roads / denom,
         fortification_density: fortifications / denom,
-        farming_improvement_density: farming / denom,
-        damage_pressure: damage / denom,
+        farming_improvements: farming / denom,
+        damage_density: damage / denom,
     }
 }
 
@@ -427,14 +449,14 @@ fn hex_index(state: &GameState, hex: Axial) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::hex::hex_to_world;
     use super::super::formation::FormationType;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::physical::{MatterStack, SiteProperties};
-    use super::super::spatial::{GeoMaterial, Heightfield};
-    use super::super::state::{
-        Combatant, CommodityKind, EntityBuilder, Person, Role, Stack, StackId,
-    };
+    use super::super::spatial::{GeoMaterial, Heightfield, Vec2};
+    use super::super::state::{Combatant, CommodityKind, EntityBuilder, Person, Role, Stack};
+    use super::super::terrain_ops::{DitchProfile, TerrainOp, WallProfile};
     use super::*;
     use simulate_everything_protocol::PropertyTag;
     use smallvec::SmallVec;
@@ -458,6 +480,21 @@ mod tests {
                 .combatant(Combatant::new())
                 .vitals(),
         )
+    }
+
+    fn control_hex(state: &mut GameState, hex: Axial, owner: u8) {
+        spawn_soldier(state, hex_to_world(hex), owner);
+    }
+
+    fn push_terrain_op(state: &mut GameState, hex: Axial, op: TerrainOp) {
+        let heightfield = state.heightfield.clone();
+        state.terrain_ops.push_op(
+            hex,
+            op,
+            &heightfield,
+            state.map_width,
+            state.map_height,
+        );
     }
 
     #[test]
@@ -572,5 +609,181 @@ mod tests {
             view.economy.production_capacity >= 1,
             "workshops and workers should contribute to production capacity"
         );
+    }
+
+    #[test]
+    fn test_terrain_empty() {
+        let mut state = test_state();
+        control_hex(&mut state, Axial::new(0, 0), 0);
+
+        let view = build_strategic_view(&state, 0);
+        assert_eq!(view.terrain.road_coverage, 0.0);
+        assert_eq!(view.terrain.fortification_density, 0.0);
+        assert_eq!(view.terrain.farming_improvements, 0.0);
+        assert_eq!(view.terrain.damage_density, 0.0);
+    }
+
+    #[test]
+    fn test_terrain_road_coverage() {
+        let mut state = test_state();
+        let hex = Axial::new(0, 0);
+        control_hex(&mut state, hex, 0);
+        push_terrain_op(
+            &mut state,
+            hex,
+            TerrainOp::Road {
+                points: SmallVec::from_slice(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)]),
+                width: 2.0,
+                grade: 0.0,
+                material: GeoMaterial::Rock,
+            },
+        );
+
+        let view = build_strategic_view(&state, 0);
+        assert!(view.terrain.road_coverage > 0.0);
+        assert_eq!(view.terrain.fortification_density, 0.0);
+        assert_eq!(view.terrain.farming_improvements, 0.0);
+        assert_eq!(view.terrain.damage_density, 0.0);
+    }
+
+    #[test]
+    fn test_terrain_fortification() {
+        let mut state = test_state();
+        let center = Axial::new(4, 4);
+        control_hex(&mut state, center, 0);
+        for neighbor in neighbors(center) {
+            control_hex(&mut state, neighbor, 0);
+        }
+
+        let frontier_hex = neighbors(center)[0];
+        push_terrain_op(
+            &mut state,
+            frontier_hex,
+            TerrainOp::Ditch {
+                start: Vec2::new(0.0, 0.0),
+                end: Vec2::new(10.0, 0.0),
+                width: 3.0,
+                depth: 1.0,
+                profile: DitchProfile::Trapezoidal,
+            },
+        );
+        push_terrain_op(
+            &mut state,
+            center,
+            TerrainOp::Ditch {
+                start: Vec2::new(0.0, 0.0),
+                end: Vec2::new(10.0, 0.0),
+                width: 3.0,
+                depth: 1.0,
+                profile: DitchProfile::Trapezoidal,
+            },
+        );
+        push_terrain_op(
+            &mut state,
+            frontier_hex,
+            TerrainOp::Wall {
+                start: Vec2::new(0.0, 0.0),
+                end: Vec2::new(10.0, 0.0),
+                width: 2.0,
+                height: 1.0,
+                profile: WallProfile::Rounded,
+            },
+        );
+
+        let view = build_strategic_view(&state, 0);
+        assert!(view.terrain.fortification_density > 0.0);
+        assert!((view.terrain.fortification_density - (2.0 / 7.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_terrain_farming() {
+        let mut state = test_state();
+        let hex = Axial::new(1, 1);
+        control_hex(&mut state, hex, 0);
+        push_terrain_op(
+            &mut state,
+            hex,
+            TerrainOp::Furrow {
+                center: Vec2::new(0.0, 0.0),
+                half_extents: Vec2::new(5.0, 2.0),
+                rotation: 0.0,
+                spacing: 1.0,
+                depth: 0.5,
+            },
+        );
+
+        let view = build_strategic_view(&state, 0);
+        assert!(view.terrain.farming_improvements > 0.0);
+        assert_eq!(view.terrain.road_coverage, 0.0);
+        assert_eq!(view.terrain.fortification_density, 0.0);
+        assert_eq!(view.terrain.damage_density, 0.0);
+    }
+
+    #[test]
+    fn test_terrain_damage() {
+        let mut state = test_state();
+        let hex = Axial::new(2, 2);
+        control_hex(&mut state, hex, 0);
+        push_terrain_op(
+            &mut state,
+            hex,
+            TerrainOp::Crater {
+                center: Vec2::new(0.0, 0.0),
+                radius: 5.0,
+                depth: 1.5,
+                rim_height: 0.3,
+            },
+        );
+
+        let view = build_strategic_view(&state, 0);
+        assert!(view.terrain.damage_density > 0.0);
+        assert_eq!(view.terrain.road_coverage, 0.0);
+        assert_eq!(view.terrain.fortification_density, 0.0);
+        assert_eq!(view.terrain.farming_improvements, 0.0);
+    }
+
+    #[test]
+    fn test_terrain_enemy_ops_not_counted() {
+        let mut state = test_state();
+        control_hex(&mut state, Axial::new(0, 0), 0);
+        let enemy_hex = Axial::new(5, 5);
+        control_hex(&mut state, enemy_hex, 1);
+        push_terrain_op(
+            &mut state,
+            enemy_hex,
+            TerrainOp::Road {
+                points: SmallVec::from_slice(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)]),
+                width: 2.0,
+                grade: 0.0,
+                material: GeoMaterial::Rock,
+            },
+        );
+        push_terrain_op(
+            &mut state,
+            enemy_hex,
+            TerrainOp::Furrow {
+                center: Vec2::new(0.0, 0.0),
+                half_extents: Vec2::new(5.0, 2.0),
+                rotation: 0.0,
+                spacing: 1.0,
+                depth: 0.5,
+            },
+        );
+        push_terrain_op(
+            &mut state,
+            enemy_hex,
+            TerrainOp::Crater {
+                center: Vec2::new(0.0, 0.0),
+                radius: 5.0,
+                depth: 1.5,
+                rim_height: 0.3,
+            },
+        );
+
+        let view = build_strategic_view(&state, 0);
+        assert_eq!(view.terrain.road_coverage, 0.0);
+        assert_eq!(view.terrain.fortification_density, 0.0);
+        assert_eq!(view.terrain.farming_improvements, 0.0);
+        assert_eq!(view.terrain.damage_density, 0.0);
     }
 }
