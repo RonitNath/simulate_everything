@@ -4,6 +4,7 @@ import LiveApp from "./LiveApp";
 import ScoreboardApp from "./ScoreboardApp";
 import V2App from "./V2App";
 import V2SimApp from "./V2SimApp";
+import V3App from "./V3App";
 
 const root = document.getElementById("app")!;
 const mode = (window as any).__MODE__;
@@ -12,6 +13,8 @@ if (mode === "live") {
   render(() => <LiveApp />, root);
 } else if (mode === "scoreboard") {
   render(() => <ScoreboardApp />, root);
+} else if (mode === "v3rr") {
+  render(() => <V3App />, root);
 } else if (mode === "v2rr") {
   render(() => <V2App />, root);
 } else if (mode === "v2sim") {
