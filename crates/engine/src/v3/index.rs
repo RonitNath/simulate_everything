@@ -129,6 +129,25 @@ impl SpatialIndex {
 }
 
 // ---------------------------------------------------------------------------
+// Hex disk query (all hexes within N rings)
+// ---------------------------------------------------------------------------
+
+/// Returns all hex coordinates within `max_rings` of `center` (inclusive).
+/// Ring 0 = center hex. Ring 1 = 6 neighbors. Etc.
+///
+/// Uses brute-force coordinate enumeration rather than the ring-walk algorithm,
+/// which avoids the V2 ring() direction-indexing issue.
+pub fn ring_hexes(center: Axial, max_rings: i32) -> Vec<Axial> {
+    let mut hexes = Vec::new();
+    for dq in -max_rings..=max_rings {
+        for dr in (-max_rings).max(-dq - max_rings)..=max_rings.min(-dq + max_rings) {
+            hexes.push(Axial::new(center.q + dq, center.r + dr));
+        }
+    }
+    hexes
+}
+
+// ---------------------------------------------------------------------------
 // Hex projection with hysteresis
 // ---------------------------------------------------------------------------
 
