@@ -1,6 +1,6 @@
 # Stream B: wgpu WASM Viewer
 
-Status: **ready for implementation**
+Status: **B1 done, B2 next**
 Depends on: Phase 0 (protocol crate)
 Design spec: `docs/plans/v3-wgpu-renderer.md`
 Linear: reference IA issue if one exists
@@ -51,6 +51,9 @@ heightmap terrain with natural shading. Camera rotation for 3D viewing.
 - SolidJS div overlay at z-index 1 with `pointer-events: none`
 - Interactive UI elements get `pointer-events: auto`
 - Communication via wasm_bindgen exported functions
+
+**Status:** Done. Compiles to WASM, Trunk builds (569KB gzip), loads in
+browser. Headless can't verify WebGPU rendering — needs manual browser test.
 
 **Gate:** heightmap terrain renders with natural shading, camera orbits
 smoothly, `trunk serve` works in Chrome/Firefox
