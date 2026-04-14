@@ -114,6 +114,50 @@ pub enum TacticalCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Agent traces — structured decision log for review bundles
+// ---------------------------------------------------------------------------
+
+/// Structured trace of an agent layer decision. Queryable by field for
+/// pattern detection and debugging. All variants implement Debug/Display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AgentTrace {
+    Strategy {
+        posture: Posture,
+        trigger: String,
+        alternatives_considered: Vec<(Posture, f32)>,
+    },
+    Operations {
+        task_type: String,
+        target: String,
+        reason: String,
+        resource_cost: Option<f32>,
+    },
+    Tactical {
+        stack: u32,
+        action: String,
+        target_stack: Option<u32>,
+        damage_estimate: Option<f32>,
+        alternatives: Vec<(u32, String, f32)>,
+    },
+}
+
+impl std::fmt::Display for AgentTrace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentTrace::Strategy { posture, trigger, .. } => {
+                write!(f, "Strategy: {:?} ({})", posture, trigger)
+            }
+            AgentTrace::Operations { task_type, target, reason, .. } => {
+                write!(f, "Operations: {} → {} ({})", task_type, target, reason)
+            }
+            AgentTrace::Tactical { stack, action, target_stack, .. } => {
+                write!(f, "Tactical: stack {} → {} target={:?}", stack, action, target_stack)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Layer traits
 // ---------------------------------------------------------------------------
 
@@ -196,6 +240,19 @@ impl LayeredAgent {
             let view = super::perception::build_strategic_view(state, self.player);
             self.active_directives = self.strategy.plan(&view);
             output.strategy_ran = true;
+
+            // Emit strategy trace.
+            if let Some(d) = self.active_directives.first() {
+                let posture = match d {
+                    StrategicDirective::SetPosture(p) => *p,
+                    _ => Posture::Expand,
+                };
+                output.traces.push(AgentTrace::Strategy {
+                    posture,
+                    trigger: format!("tick {} cadence evaluation", tick),
+                    alternatives_considered: Vec::new(),
+                });
+            }
         }
 
         // Operations layer — runs at operations cadence.
@@ -205,6 +262,40 @@ impl LayeredAgent {
                 &self.active_directives,
                 self.player,
             );
+
+            // Emit operations traces.
+            for cmd in &commands {
+                let (task_type, target, reason) = match cmd {
+                    OperationalCommand::AssignTask { entity, task } => {
+                        (format!("{:?}", std::mem::discriminant(task)),
+                         format!("entity {:?}", entity),
+                         "task assignment".to_string())
+                    }
+                    OperationalCommand::FormStack { entities, archetype } => {
+                        ("FormStack".to_string(),
+                         format!("{} entities as {:?}", entities.len(), archetype),
+                         "stack formation".to_string())
+                    }
+                    OperationalCommand::RouteStack { stack, waypoints } => {
+                        ("RouteStack".to_string(),
+                         format!("stack {:?}, {} waypoints", stack, waypoints.len()),
+                         "stack routing".to_string())
+                    }
+                    OperationalCommand::DisbandStack { stack } => {
+                        ("DisbandStack".to_string(),
+                         format!("stack {:?}", stack),
+                         "stack disbanding".to_string())
+                    }
+                    _ => ("Other".to_string(), format!("{:?}", cmd), String::new()),
+                };
+                output.traces.push(AgentTrace::Operations {
+                    task_type,
+                    target,
+                    reason,
+                    resource_cost: None,
+                });
+            }
+
             output.operational_commands = commands;
             output.operations_ran = true;
         }
@@ -216,6 +307,26 @@ impl LayeredAgent {
             }
             if stack_near_enemy(state, stack, ENGAGEMENT_RADIUS) {
                 let commands = self.tactical.decide(state, stack, self.player);
+
+                // Emit tactical traces.
+                for cmd in &commands {
+                    let (action, target_stack) = match cmd {
+                        TacticalCommand::Attack { .. } => ("Engage".to_string(), None),
+                        TacticalCommand::Retreat { .. } => ("Retreat".to_string(), None),
+                        TacticalCommand::Hold { .. } => ("Hold".to_string(), None),
+                        TacticalCommand::Block { .. } => ("Block".to_string(), None),
+                        TacticalCommand::SetFacing { .. } => ("SetFacing".to_string(), None),
+                        TacticalCommand::SetFormation { .. } => ("Reposition".to_string(), None),
+                    };
+                    output.traces.push(AgentTrace::Tactical {
+                        stack: stack.id.0,
+                        action,
+                        target_stack,
+                        damage_estimate: None,
+                        alternatives: Vec::new(),
+                    });
+                }
+
                 output.tactical_commands.extend(commands);
                 output.tactical_stacks += 1;
             }
@@ -233,6 +344,7 @@ pub struct AgentOutput {
     pub tactical_stacks: usize,
     pub operational_commands: Vec<OperationalCommand>,
     pub tactical_commands: Vec<TacticalCommand>,
+    pub traces: Vec<AgentTrace>,
 }
 
 // ---------------------------------------------------------------------------

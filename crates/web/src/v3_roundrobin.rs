@@ -6,9 +6,8 @@ use tracing::info;
 
 use simulate_everything_engine::v3::{
     agent::{
-        LayeredAgent, validate_operational, validate_tactical,
+        AgentTrace, LayeredAgent, validate_operational, validate_tactical,
     },
-    combat_log::CombatLog,
     damage_table::DamageEstimateTable,
     mapgen,
     operations::SharedOperationsLayer,
@@ -347,24 +346,31 @@ impl V3RoundRobin {
 
                 // Agent polling — every tick, agents decide internally
                 // whether to run each layer based on cadence.
-                for agent in agents.iter_mut() {
+                let mut all_traces: Vec<(String, Vec<AgentTrace>)> = Vec::new();
+                for (i, agent) in agents.iter_mut().enumerate() {
                     let output = agent.tick(&state);
+
+                    // Collect agent traces for review system.
+                    if !output.traces.is_empty() {
+                        all_traces.push((
+                            agent_names[i].clone(),
+                            output.traces,
+                        ));
+                    }
 
                     // Apply validated operational commands.
                     for cmd in &output.operational_commands {
                         if validate_operational(cmd, &state) {
-                            // Commands are validated but not yet applied —
-                            // the engine doesn't have an apply function yet.
-                            // This is a stub for when the operations layer
-                            // gets an executor.
+                            // Commands validated but not yet applied —
+                            // engine needs command executors.
                         }
                     }
 
                     // Apply validated tactical commands.
                     for cmd in &output.tactical_commands {
                         if validate_tactical(cmd, &state) {
-                            // Same stub — tactical commands will be applied
-                            // by the sim tick when the engine supports it.
+                            // Same stub — tactical commands applied
+                            // by sim tick when engine supports it.
                         }
                     }
                 }
@@ -372,6 +378,9 @@ impl V3RoundRobin {
                 // Advance simulation.
                 let tick_result = sim::tick(&mut state, dt as f64);
                 self.current_tick.store(state.tick, Ordering::Relaxed);
+
+                // Drain combat observations from the engine.
+                let combat_observations = state.combat_log.drain();
 
                 // Check for game over — all but one player eliminated.
                 if !tick_result.eliminated.is_empty() {
@@ -392,12 +401,15 @@ impl V3RoundRobin {
                     }
                 }
 
-                // Record tick for review system.
-                // Combat observations will be populated when CombatLog is
-                // integrated into the sim tick.
+                // Record tick for review system with real traces + combat log.
                 {
                     let mut review = self.review.lock().await;
-                    review.record_tick(&state, dt, Vec::new());
+                    review.record_tick(
+                        &state,
+                        dt,
+                        combat_observations,
+                        all_traces,
+                    );
                     review.collect_ready_flags().await;
                 }
 

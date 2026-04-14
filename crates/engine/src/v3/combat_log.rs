@@ -60,7 +60,7 @@ pub struct CombatObservation {
 
 /// Accumulator for combat observations during a tick. Drained by the replay
 /// system after each tick.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CombatLog {
     observations: Vec<CombatObservation>,
 }
