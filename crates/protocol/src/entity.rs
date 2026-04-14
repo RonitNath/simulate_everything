@@ -66,6 +66,61 @@ pub enum StructureType {
     Workshop,
 }
 
+/// Physical material kind used by the V3 compositional world model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MaterialKind {
+    Iron,
+    Steel,
+    Bronze,
+    Leather,
+    Wood,
+    Bone,
+    Cloth,
+    Stone,
+    Soil,
+    Sand,
+    Clay,
+    Flesh,
+    Plant,
+}
+
+/// Matter phase for a physical entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MatterState {
+    Solid,
+    Liquid,
+    Gas,
+    Powder,
+}
+
+/// Generic commodity carried by a matter stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CommodityKind {
+    Food,
+    Material,
+    Ore,
+    Wood,
+    Stone,
+}
+
+/// Property tags exposed by the V3 compositional world model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PropertyTag {
+    Harvestable,
+    Edible,
+    Fuel,
+    HeatSource,
+    Tool,
+    Container,
+    Shelter,
+    Workable,
+    Structural,
+    Stockpile,
+    Settlement,
+    Farm,
+    Workshop,
+}
+
 /// Formation type for a group of entities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FormationType {
@@ -84,7 +139,8 @@ pub enum FormationType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntityKind {
     Person,
-    Structure,
+    Site,
+    Object,
 }
 
 /// 2-bit wound severity for spectator wire protocol.
@@ -127,6 +183,39 @@ impl TimeMode {
 // Wire types — entity info
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhysicalInfo {
+    pub material: MaterialKind,
+    pub matter_state: MatterState,
+    pub temperature_k: f32,
+    pub mass_kg: f32,
+    pub hardness: f32,
+    pub tags: Vec<PropertyTag>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolInfo {
+    pub force_mult: f32,
+    pub precision: f32,
+    pub cutting_edge: f32,
+    pub heat_output_k: f32,
+    pub capacity_l: f32,
+    pub durability: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MatterInfo {
+    pub commodity: CommodityKind,
+    pub amount: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SiteInfo {
+    pub build_progress: f32,
+    pub integrity: f32,
+    pub occupancy_capacity: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpectatorEntityInfo {
     pub id: u32,
@@ -153,13 +242,13 @@ pub struct SpectatorEntityInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub armor_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_type: Option<ResourceType>,
+    pub physical: Option<PhysicalInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_amount: Option<f32>,
+    pub tool: Option<ToolInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub structure_type: Option<StructureType>,
+    pub matter: Option<MatterInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_progress: Option<f32>,
+    pub site: Option<SiteInfo>,
     pub contains_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack_id: Option<u32>,
@@ -240,6 +329,14 @@ pub struct EntityUpdate {
     pub weapon_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub armor_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub physical: Option<Option<PhysicalInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<Option<ToolInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matter: Option<Option<MatterInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site: Option<Option<SiteInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contains_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

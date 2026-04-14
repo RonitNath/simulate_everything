@@ -1,6 +1,7 @@
 use crate::v2::hex::{Axial, axial_to_offset, offset_to_axial};
 
-use super::state::{GameState, ResourceType, Role, StructureType};
+use super::state::{CommodityKind, GameState, Role};
+use simulate_everything_protocol::PropertyTag;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HexControl {
@@ -70,7 +71,7 @@ pub fn derive_hex_structures(state: &GameState) -> Vec<Option<u32>> {
     let mut structures: Vec<Option<(u32, f32)>> = vec![None; hex_count];
 
     for entity in state.entities.values() {
-        let Some(structure) = entity.structure.as_ref() else {
+        let Some(site) = entity.site.as_ref() else {
             continue;
         };
         let Some(hex) = entity.hex else {
@@ -80,7 +81,7 @@ pub fn derive_hex_structures(state: &GameState) -> Vec<Option<u32>> {
             continue;
         };
 
-        let candidate = (entity.id, structure.build_progress);
+        let candidate = (entity.id, site.build_progress);
         let replace = match structures[idx] {
             Some((existing_id, existing_progress)) => {
                 candidate.1 > existing_progress
@@ -142,25 +143,24 @@ pub fn derive_player_stats(state: &GameState) -> Vec<PlayerDerivedStats> {
             }
         }
 
-        if let Some(resource) = entity.resource.as_ref() {
-            match resource.resource_type {
-                ResourceType::Food => player.food_stockpile += resource.amount,
-                ResourceType::Material => player.material_stockpile += resource.amount,
-                ResourceType::Ore | ResourceType::Wood | ResourceType::Stone => {
-                    player.material_stockpile += resource.amount
-                }
+        if let Some(resource) = entity.matter.as_ref() {
+            match resource.commodity {
+                CommodityKind::Food => player.food_stockpile += resource.amount,
+                CommodityKind::Material
+                | CommodityKind::Ore
+                | CommodityKind::Wood
+                | CommodityKind::Stone => player.material_stockpile += resource.amount,
             }
         }
 
-        if let Some(structure) = entity.structure.as_ref() {
-            match structure.structure_type {
-                StructureType::Workshop => player.workshops += 1,
-                StructureType::Village
-                | StructureType::City
-                | StructureType::Depot
-                | StructureType::Wall
-                | StructureType::Tower
-                | StructureType::Farm => player.settlements += 1,
+        if entity.site.is_some()
+            && let Some(physical) = entity.physical.as_ref()
+        {
+            if physical.has_tag(PropertyTag::Workshop) {
+                player.workshops += 1;
+            }
+            if physical.has_tag(PropertyTag::Settlement) || physical.has_tag(PropertyTag::Farm) {
+                player.settlements += 1;
             }
         }
     }
@@ -211,8 +211,10 @@ mod tests {
     use super::super::formation::FormationType;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
+    use super::super::physical::{MatterStack, PhysicalProperties, SiteProperties};
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
-    use super::super::state::{Combatant, EntityBuilder, Person, Resource, Stack, Structure};
+    use super::super::state::{Combatant, CommodityKind, EntityBuilder, Person, Stack};
+    use simulate_everything_protocol::{MaterialKind, MatterState, PropertyTag};
     use smallvec::SmallVec;
 
     fn test_state() -> GameState {
@@ -257,8 +259,12 @@ mod tests {
             EntityBuilder::new()
                 .pos(Vec3::new(0.0, 0.0, 0.0))
                 .owner(0)
-                .resource(Resource {
-                    resource_type: ResourceType::Food,
+                .physical(
+                    PhysicalProperties::new(50.0, 0.1, MaterialKind::Plant, MatterState::Solid)
+                        .with_tags(&[PropertyTag::Edible, PropertyTag::Stockpile]),
+                )
+                .matter(MatterStack {
+                    commodity: CommodityKind::Food,
                     amount: 75.0,
                 }),
         );
@@ -267,12 +273,18 @@ mod tests {
             EntityBuilder::new()
                 .pos(Vec3::new(20.0, 0.0, 0.0))
                 .owner(0)
-                .structure(Structure {
-                    structure_type: StructureType::Workshop,
+                .physical(
+                    PhysicalProperties::new(900.0, 0.4, MaterialKind::Wood, MatterState::Solid)
+                        .with_tags(&[
+                            PropertyTag::Workshop,
+                            PropertyTag::Structural,
+                            PropertyTag::Container,
+                        ]),
+                )
+                .site(SiteProperties {
                     build_progress: 1.0,
                     integrity: 100.0,
-                    capacity: 10,
-                    material: super::super::armor::MaterialType::Wood,
+                    occupancy_capacity: 10,
                 }),
         );
         let stack_id = state.alloc_stack_id();

@@ -13,9 +13,9 @@ use simulate_everything_engine::v3::{
 // Re-export all wire types from the protocol crate.
 pub use simulate_everything_protocol::{
     BodyPointWire, BodyRenderInfo, BodyZone, CapsuleWire, DamageType, DiscWire, EntityKind,
-    EntityNeedsInfo, EntityUpdate, FormationType, HexDelta, PlayerInfo, ProjectileInfo,
-    ResourceType, Role, SpectatorEntityInfo, StackInfo, StackUpdate, StructureType, TerrainPatch,
-    TerrainRasterInit, TimeMode, V3Init, V3RrStatus, V3ServerToSpectator, V3Snapshot,
+    EntityNeedsInfo, EntityUpdate, FormationType, HexDelta, MatterInfo, PhysicalInfo, PlayerInfo,
+    ProjectileInfo, Role, SiteInfo, SpectatorEntityInfo, StackInfo, StackUpdate, TerrainPatch,
+    TerrainRasterInit, TimeMode, ToolInfo, V3Init, V3RrStatus, V3ServerToSpectator, V3Snapshot,
     V3SnapshotDelta, WoundSeverity,
 };
 
@@ -62,6 +62,51 @@ fn build_terrain_raster(state: &GameState) -> TerrainRasterInit {
         heights,
         materials,
     }
+}
+
+fn build_physical_info(
+    physical: Option<&simulate_everything_engine::v3::physical::PhysicalProperties>,
+) -> Option<PhysicalInfo> {
+    physical.map(|physical| PhysicalInfo {
+        material: physical.material,
+        matter_state: physical.matter_state,
+        temperature_k: physical.temperature_k,
+        mass_kg: physical.mass_kg,
+        hardness: physical.hardness,
+        tags: physical.tags_vec(),
+    })
+}
+
+fn build_tool_info(
+    tool: Option<&simulate_everything_engine::v3::physical::ToolProperties>,
+) -> Option<ToolInfo> {
+    tool.map(|tool| ToolInfo {
+        force_mult: tool.force_mult,
+        precision: tool.precision,
+        cutting_edge: tool.cutting_edge,
+        heat_output_k: tool.heat_output_k,
+        capacity_l: tool.capacity_l,
+        durability: tool.durability,
+    })
+}
+
+fn build_matter_info(
+    matter: Option<&simulate_everything_engine::v3::physical::MatterStack>,
+) -> Option<MatterInfo> {
+    matter.map(|matter| MatterInfo {
+        commodity: matter.commodity,
+        amount: matter.amount,
+    })
+}
+
+fn build_site_info(
+    site: Option<&simulate_everything_engine::v3::physical::SiteProperties>,
+) -> Option<SiteInfo> {
+    site.map(|site| SiteInfo {
+        build_progress: site.build_progress,
+        integrity: site.integrity,
+        occupancy_capacity: site.occupancy_capacity,
+    })
 }
 
 fn build_terrain_patch(
@@ -304,10 +349,12 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             .hex
             .unwrap_or_else(|| simulate_everything_engine::v2::hex::Axial::new(0, 0));
 
-        let entity_kind = if entity.structure.is_some() {
-            EntityKind::Structure
-        } else {
+        let entity_kind = if entity.site.is_some() {
+            EntityKind::Site
+        } else if entity.person.is_some() {
             EntityKind::Person
+        } else {
+            EntityKind::Object
         };
 
         let role = entity.person.as_ref().map(|p| p.role);
@@ -349,11 +396,10 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             })
         });
 
-        let resource_type = entity.resource.as_ref().map(|r| r.resource_type);
-        let resource_amount = entity.resource.as_ref().map(|r| r.amount);
-
-        let structure_type = entity.structure.as_ref().map(|s| s.structure_type);
-        let build_progress = entity.structure.as_ref().map(|s| s.build_progress);
+        let physical = build_physical_info(entity.physical.as_ref());
+        let tool = build_tool_info(entity.tool_props.as_ref());
+        let matter = build_matter_info(entity.matter.as_ref());
+        let site = build_site_info(entity.site.as_ref());
 
         // Stack membership: find which stack this entity belongs to.
         let stack_id = state
@@ -453,10 +499,10 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             wounds,
             weapon_type,
             armor_type,
-            resource_type,
-            resource_amount,
-            structure_type,
-            build_progress,
+            physical,
+            tool,
+            matter,
+            site,
             contains_count: entity.contains.len(),
             stack_id,
             needs,
@@ -777,6 +823,10 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
         wounds: None,
         weapon_type: None,
         armor_type: None,
+        physical: None,
+        tool: None,
+        matter: None,
+        site: None,
         contains_count: None,
         stack_id: None,
         needs: None,
@@ -843,6 +893,26 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
 
     if cur.armor_type != prev.armor_type {
         update.armor_type = cur.armor_type.clone();
+        changed = true;
+    }
+
+    if cur.physical != prev.physical {
+        update.physical = Some(cur.physical.clone());
+        changed = true;
+    }
+
+    if cur.tool != prev.tool {
+        update.tool = Some(cur.tool.clone());
+        changed = true;
+    }
+
+    if cur.matter != prev.matter {
+        update.matter = Some(cur.matter.clone());
+        changed = true;
+    }
+
+    if cur.site != prev.site {
+        update.site = Some(cur.site.clone());
         changed = true;
     }
 

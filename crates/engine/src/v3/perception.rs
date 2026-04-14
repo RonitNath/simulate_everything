@@ -381,12 +381,13 @@ mod tests {
     use super::super::formation::FormationType;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
+    use super::super::physical::{MatterStack, SiteProperties};
     use super::super::spatial::{GeoMaterial, Heightfield};
     use super::super::state::{
-        Combatant, EntityBuilder, Person, Resource, ResourceType, Role, Stack, StackId, Structure,
-        StructureType,
+        Combatant, CommodityKind, EntityBuilder, Person, Role, Stack, StackId,
     };
     use super::*;
+    use simulate_everything_protocol::PropertyTag;
     use smallvec::SmallVec;
 
     fn test_state() -> GameState {
@@ -475,22 +476,26 @@ mod tests {
         spawn_soldier(&mut state, Vec3::new(0.0, 0.0, 0.0), 0);
         spawn_entity(
             &mut state,
-            EntityBuilder::new().owner(0).resource(Resource {
-                resource_type: ResourceType::Material,
-                amount: 80.0,
-            }),
+            EntityBuilder::new()
+                .owner(0)
+                .physical(super::super::economy::stockpile_physical(
+                    CommodityKind::Material,
+                ))
+                .matter(MatterStack {
+                    commodity: CommodityKind::Material,
+                    amount: 80.0,
+                }),
         );
         spawn_entity(
             &mut state,
             EntityBuilder::new()
                 .pos(Vec3::new(20.0, 0.0, 0.0))
                 .owner(0)
-                .structure(Structure {
-                    structure_type: StructureType::Workshop,
+                .physical(super::super::economy::site_physical(PropertyTag::Workshop))
+                .site(SiteProperties {
                     build_progress: 1.0,
                     integrity: 100.0,
-                    capacity: 10,
-                    material: super::super::armor::MaterialType::Wood,
+                    occupancy_capacity: 10,
                 }),
         );
         spawn_entity(
