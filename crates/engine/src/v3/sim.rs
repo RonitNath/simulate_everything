@@ -2,8 +2,9 @@ use smallvec::SmallVec;
 
 use super::agent::{AgentOutput, LayeredAgent};
 use super::combat_log::CombatObservation;
-use super::commands::{CommandApplySummary, apply_agent_output};
+use super::commands::{apply_agent_output, CommandApplySummary};
 use super::damage::{self, BlockCapability, DefenderState, Impact, ImpactResult};
+use super::economy;
 use super::index::update_hex_membership;
 use super::lifecycle::{self, cleanup_dead, cleanup_inert_projectiles};
 use super::martial;
@@ -74,13 +75,14 @@ pub fn tick_with_agents(state: &mut GameState, agents: &mut [LayeredAgent], dt: 
 ///
 /// Orchestrates all subsystems in the correct order:
 /// 1. Spatial index rebuild
-/// 2. Steering → movement
-/// 3. Melee combat
-/// 4. Projectile advancement
-/// 5. Impact resolution
-/// 6. Vitals (bleed, stamina, stagger)
-/// 7. Cleanup (dead entities, spent projectiles)
-/// 8. Elimination check
+/// 2. Economy
+/// 3. Steering → movement
+/// 4. Melee combat
+/// 5. Projectile advancement
+/// 6. Impact resolution
+/// 7. Vitals (bleed, stamina, stagger)
+/// 8. Cleanup (dead entities, spent projectiles)
+/// 9. Elimination check
 pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     let mut result = TickResult::default();
     let dt_f32 = dt as f32;
@@ -88,24 +90,27 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     // --- Phase 1: Spatial index ---
     rebuild_spatial_index(state);
 
-    // --- Phase 2: Movement ---
+    // --- Phase 2: Economy ---
+    economy::tick_economy(state, dt_f32);
+
+    // --- Phase 3: Movement ---
     compute_steering_and_move(state, dt_f32);
 
-    // --- Phase 3: Melee combat ---
+    // --- Phase 4: Melee combat ---
     let melee_impacts = resolve_melee_attacks(state);
 
-    // --- Phase 4: Projectile advancement ---
+    // --- Phase 5: Projectile advancement ---
     let projectile_impacts = advance_projectiles(state);
     result.impacts = melee_impacts.len() + projectile_impacts.len();
 
-    // --- Phase 5: Impact resolution ---
+    // --- Phase 6: Impact resolution ---
     apply_all_impacts(state, &melee_impacts);
     apply_all_impacts(state, &projectile_impacts);
 
-    // --- Phase 6: Vitals ---
+    // --- Phase 7: Vitals ---
     tick_vitals(state, dt_f32);
 
-    // --- Phase 7: Cleanup ---
+    // --- Phase 8: Cleanup ---
     // Count newly dead before cleanup strips their mobile/combatant
     result.deaths = state
         .entities
@@ -118,7 +123,7 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     cleanup_dead(state);
     cleanup_inert_projectiles(state);
 
-    // --- Phase 8: Elimination ---
+    // --- Phase 9: Elimination ---
     result.eliminated = lifecycle::check_elimination(state);
 
     // --- Advance time ---
@@ -447,7 +452,11 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
         .iter_mut()
         .filter_map(|(key, entity)| {
             let cd = entity.combatant.as_mut()?.cooldown.as_mut()?;
-            if cd.tick() { Some(key) } else { None }
+            if cd.tick() {
+                Some(key)
+            } else {
+                None
+            }
         })
         .collect();
 
@@ -1126,6 +1135,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1151,6 +1161,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1203,6 +1214,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1226,6 +1238,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

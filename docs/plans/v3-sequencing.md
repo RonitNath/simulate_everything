@@ -8,13 +8,15 @@ Source spec: `docs/specs/v3-entity-unification-2026-04-13.md` (revision 2)
 
 V3 is substantial, but it is not fully integrated end-to-end in the shared engine/runtime.
 
-Current baseline after the `v3-shared-exec`, `v3-sim-tick`, and `v3-rr-runtime` passes:
+Current baseline after the `v3-shared-exec`, `v3-sim-tick`, `v3-rr-runtime`, `v3-state-surfaces`, and `v3-shared-economy` passes:
 - shared V3 command application now lives in the engine and is reused by `v3bench`
 - the engine now owns a shared agent phase (`run_agent_phase` / `tick_with_agents`) instead of leaving sim integration as a TODO
-- `v3bench` now reuses the engine-owned agent phase before layering its temporary bench-only economy adapter
+- `v3bench` and V3 RR now start from the same shared economy-ready bootstrap instead of bench-local support structures
+- the engine now owns per-tick food/material production, food consumption, and immediate equipment spawning from shared stockpiles
 - the V3 RR loop now runs through the same engine-owned agent phase as bench/sim
 - live `/v3/rr` and `/v3/replay` now share the same stack-delta merge logic
-- protocol/perception/economy coverage still contains placeholders and module-only landings
+- protocol territory/player/task state and strategic perception are now derived from engine state
+- roads, settlement founding, supply routes, and richer material-processing loops still contain placeholders and module-only landings
 
 Companion docs:
 - [V3 Engine Audit](../v3-engine-audit-2026-04-14.md)
@@ -35,9 +37,10 @@ Additional deliverables outside the original sequencing continue to evolve indep
 
 ## Open Integration Work
 
-- Replace placeholder perception/protocol fields with engine-derived state
 - Finish movement/pathfinding/formation integration in the live tick
-- Reconcile bench-only economy adapters with shared engine systems
+- Finish movement/pathfinding/formation integration in the live tick
+- Finish settlement, supply-route, and richer production-chain integration in the shared economy
+- Finish remaining protocol/economy surfaces that still have no shared engine backing
 
 ## Domain Snapshot
 

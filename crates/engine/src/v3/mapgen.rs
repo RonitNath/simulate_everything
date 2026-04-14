@@ -2,6 +2,7 @@ use rand::Rng;
 use rand::SeedableRng;
 
 use super::armor::{self, MaterialType};
+use super::economy;
 use super::equipment::{self, Equipment};
 use super::hex::{hex_to_world, HEX_SIZE};
 use super::lifecycle::{contain, spawn_entity};
@@ -38,11 +39,7 @@ const STARTING_MATERIAL: f32 = 200.0;
 
 /// Generate a simple heightfield with noise-based terrain.
 /// V3.0: basic rolling hills. Future: V2-style biome/region generation.
-fn generate_heightfield(
-    cols: usize,
-    rows: usize,
-    rng: &mut impl Rng,
-) -> Heightfield {
+fn generate_heightfield(cols: usize, rows: usize, rng: &mut impl Rng) -> Heightfield {
     let mut vertices = Vec::with_capacity(cols * rows);
     // Simple procedural: gentle hills using sin/cos combination
     let freq_x = rng.gen_range(0.02..0.06_f32);
@@ -54,10 +51,10 @@ fn generate_heightfield(
     for row in 0..rows {
         for col in 0..cols {
             let h = amplitude
-                * ((col as f32 * freq_x + phase_x).sin()
-                    * (row as f32 * freq_y + phase_y).cos()
-                    + 0.5 * ((col as f32 * freq_x * 2.3 + phase_y).cos()
-                        * (row as f32 * freq_y * 1.7 + phase_x).sin()));
+                * ((col as f32 * freq_x + phase_x).sin() * (row as f32 * freq_y + phase_y).cos()
+                    + 0.5
+                        * ((col as f32 * freq_x * 2.3 + phase_y).cos()
+                            * (row as f32 * freq_y * 1.7 + phase_x).sin()));
             let material = if h > amplitude * 0.7 {
                 GeoMaterial::Rock
             } else if rng.gen_bool(0.15) {
@@ -65,7 +62,10 @@ fn generate_heightfield(
             } else {
                 GeoMaterial::Soil
             };
-            vertices.push(Vertex { height: h, material });
+            vertices.push(Vertex {
+                height: h,
+                material,
+            });
         }
     }
 
@@ -84,8 +84,7 @@ fn player_spawn_hexes(width: usize, height: usize, num_players: u8) -> Vec<Axial
 
     (0..num_players)
         .map(|i| {
-            let angle =
-                std::f32::consts::TAU * (i as f32) / (num_players as f32);
+            let angle = std::f32::consts::TAU * (i as f32) / (num_players as f32);
             let row = (cy + radius * angle.sin()).round() as i32;
             let col = (cx + radius * angle.cos()).round() as i32;
             let row = row.clamp(1, height as i32 - 2);
@@ -100,12 +99,7 @@ fn player_spawn_hexes(width: usize, height: usize, num_players: u8) -> Vec<Axial
 // ---------------------------------------------------------------------------
 
 /// Spawn a soldier entity with equipment.
-fn spawn_soldier(
-    state: &mut GameState,
-    pos: Vec3,
-    owner: u8,
-    skill: f32,
-) -> EntityKey {
+fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, skill: f32) -> EntityKey {
     let soldier = spawn_entity(
         state,
         EntityBuilder::new()
@@ -114,6 +108,7 @@ fn spawn_soldier(
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: skill,
+                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant::new())
@@ -150,12 +145,7 @@ fn spawn_soldier(
 }
 
 /// Spawn a civilian entity.
-fn spawn_civilian(
-    state: &mut GameState,
-    pos: Vec3,
-    owner: u8,
-    role: Role,
-) -> EntityKey {
+fn spawn_civilian(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> EntityKey {
     spawn_entity(
         state,
         EntityBuilder::new()
@@ -164,6 +154,7 @@ fn spawn_civilian(
             .person(Person {
                 role,
                 combat_skill: 0.1,
+                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS)),
     )
@@ -180,12 +171,7 @@ fn spawn_civilian(
 /// - STARTING_SOLDIERS soldiers with sword + leather armor
 /// - STARTING_CIVILIANS civilian persons (mix of Farmer, Worker, Idle)
 /// - Starting food + material resource entities in the settlement
-pub fn generate(
-    width: usize,
-    height: usize,
-    num_players: u8,
-    seed: u64,
-) -> GameState {
+pub fn generate(width: usize, height: usize, num_players: u8, seed: u64) -> GameState {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
     // Vertex grid: ~2× hex count for vertex resolution
@@ -219,23 +205,19 @@ pub fn generate(
         // Starting resources inside the settlement
         let food = spawn_entity(
             &mut state,
-            EntityBuilder::new()
-                .owner(owner)
-                .resource(Resource {
-                    resource_type: ResourceType::Food,
-                    amount: STARTING_FOOD,
-                }),
+            EntityBuilder::new().owner(owner).resource(Resource {
+                resource_type: ResourceType::Food,
+                amount: STARTING_FOOD,
+            }),
         );
         contain(&mut state, settlement, food);
 
         let material = spawn_entity(
             &mut state,
-            EntityBuilder::new()
-                .owner(owner)
-                .resource(Resource {
-                    resource_type: ResourceType::Material,
-                    amount: STARTING_MATERIAL,
-                }),
+            EntityBuilder::new().owner(owner).resource(Resource {
+                resource_type: ResourceType::Material,
+                amount: STARTING_MATERIAL,
+            }),
         );
         contain(&mut state, settlement, material);
 
@@ -271,6 +253,19 @@ pub fn generate(
     }
 
     state
+}
+
+pub fn generate_economy_ready(
+    width: usize,
+    height: usize,
+    num_players: u8,
+    seed: u64,
+) -> GameState {
+    economy::generate_economy_ready(width, height, num_players, seed)
+}
+
+pub fn bootstrap_shared_economy_layout(state: &mut GameState) {
+    economy::bootstrap_shared_economy_layout(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,8 +352,14 @@ mod tests {
         assert_eq!(civilians.len(), 60, "2 players × 30 civilians = 60");
 
         for civ in &civilians {
-            assert!(civ.combatant.is_none(), "civilians should not be combatants");
-            assert!(civ.equipment.is_none(), "civilians should not have equipment");
+            assert!(
+                civ.combatant.is_none(),
+                "civilians should not be combatants"
+            );
+            assert!(
+                civ.equipment.is_none(),
+                "civilians should not have equipment"
+            );
         }
     }
 
@@ -369,9 +370,7 @@ mod tests {
             let settlement = state
                 .entities
                 .iter()
-                .find(|(_, e)| {
-                    e.owner == Some(player) && e.structure.is_some()
-                })
+                .find(|(_, e)| e.owner == Some(player) && e.structure.is_some())
                 .map(|(k, _)| k)
                 .expect("player has settlement");
 

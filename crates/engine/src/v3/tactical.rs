@@ -4,12 +4,12 @@
 /// using damage table matchup reasoning, manages formations, facing, and
 /// retreat decisions.
 use super::agent::{TacticalCommand, TacticalLayer};
-use super::damage_table::{DamageEstimateTable, MatchupKey};
 use super::armor::{ArmorConstruction, DamageType, MaterialType};
+use super::damage_table::{DamageEstimateTable, MatchupKey};
 use super::formation::FormationType;
-use super::state::{GameState, Stack, StackId};
-use super::index::ring_hexes;
 use super::hex::world_to_hex;
+use super::index::ring_hexes;
+use super::state::{GameState, Stack, StackId};
 use crate::v2::state::EntityKey;
 
 // ---------------------------------------------------------------------------
@@ -61,11 +61,15 @@ impl SharedTacticalLayer {
     /// Check if retreat should be ordered based on recent casualty rates.
     fn should_retreat(&self, current_tick: u64) -> bool {
         let window_start = current_tick.saturating_sub(RETREAT_WINDOW as u64);
-        let recent: Vec<_> = self.casualty_history.iter()
+        let recent: Vec<_> = self
+            .casualty_history
+            .iter()
             .filter(|(t, _, _)| *t >= window_start)
             .collect();
 
-        if recent.is_empty() { return false; }
+        if recent.is_empty() {
+            return false;
+        }
 
         let own_total: u32 = recent.iter().map(|(_, own, _)| own).sum();
         let enemy_total: u32 = recent.iter().map(|(_, _, enemy)| enemy).sum();
@@ -79,15 +83,13 @@ impl SharedTacticalLayer {
     }
 
     /// Select targets for stack members using damage table matchup reasoning.
-    fn assign_targets(
-        &self,
-        state: &GameState,
-        stack: &Stack,
-    ) -> Vec<TacticalCommand> {
+    fn assign_targets(&self, state: &GameState, stack: &Stack) -> Vec<TacticalCommand> {
         let mut commands = Vec::new();
         let nearby_enemies = find_nearby_enemies(state, stack, ENGAGEMENT_RADIUS);
 
-        if nearby_enemies.is_empty() { return commands; }
+        if nearby_enemies.is_empty() {
+            return commands;
+        }
 
         for &member_key in &stack.members {
             let member = match state.entities.get(member_key) {
@@ -96,14 +98,17 @@ impl SharedTacticalLayer {
             };
 
             // Get member's weapon damage type.
-            let weapon_dt = member.equipment.as_ref()
+            let weapon_dt = member
+                .equipment
+                .as_ref()
                 .and_then(|eq| eq.weapon)
                 .and_then(|wk| state.entities.get(wk))
                 .and_then(|we| we.weapon_props.as_ref())
                 .map(|wp| (wp.damage_type, wp.material));
 
             // Score each enemy by expected damage output.
-            let best_target = nearby_enemies.iter()
+            let best_target = nearby_enemies
+                .iter()
                 .filter_map(|&enemy_key| {
                     let enemy = state.entities.get(enemy_key)?;
                     let score = self.score_target(weapon_dt, enemy_key, state);
@@ -129,7 +134,8 @@ impl SharedTacticalLayer {
         target_key: EntityKey,
         state: &GameState,
     ) -> f32 {
-        let (damage_type, weapon_mat) = weapon_info.unwrap_or((DamageType::Slash, MaterialType::Iron));
+        let (damage_type, weapon_mat) =
+            weapon_info.unwrap_or((DamageType::Slash, MaterialType::Iron));
 
         let target = match state.entities.get(target_key) {
             Some(e) => e,
@@ -137,14 +143,13 @@ impl SharedTacticalLayer {
         };
 
         // Check target's armor.
-        let armor_info = target.equipment.as_ref()
-            .and_then(|eq| {
-                // Check torso armor as representative.
-                eq.armor_slots[1] // torso index
-                    .and_then(|ak| state.entities.get(ak))
-                    .and_then(|ae| ae.armor_props.as_ref())
-                    .map(|ap| (ap.construction, ap.material))
-            });
+        let armor_info = target.equipment.as_ref().and_then(|eq| {
+            // Check torso armor as representative.
+            eq.armor_slots[1] // torso index
+                .and_then(|ak| state.entities.get(ak))
+                .and_then(|ae| ae.armor_props.as_ref())
+                .map(|ap| (ap.construction, ap.material))
+        });
 
         let (ac, am) = armor_info.unwrap_or((ArmorConstruction::Padded, MaterialType::Leather));
 
@@ -155,17 +160,14 @@ impl SharedTacticalLayer {
             armor_material: am,
         };
 
-        self.damage_table.get(&key)
+        self.damage_table
+            .get(&key)
             .map(|est| est.wound_rate)
             .unwrap_or(0.5) // no data = neutral
     }
 
     /// Assign formation based on stack composition.
-    fn assign_formation(
-        &self,
-        state: &GameState,
-        stack: &Stack,
-    ) -> Option<TacticalCommand> {
+    fn assign_formation(&self, state: &GameState, stack: &Stack) -> Option<TacticalCommand> {
         let mut has_ranged = false;
         let mut has_shield = false;
         let member_count = stack.members.len();
@@ -176,11 +178,15 @@ impl SharedTacticalLayer {
                 None => continue,
             };
             if let Some(eq) = &member.equipment {
-                if eq.shield.is_some() { has_shield = true; }
+                if eq.shield.is_some() {
+                    has_shield = true;
+                }
                 if let Some(wk) = eq.weapon {
                     if let Some(we) = state.entities.get(wk) {
                         if let Some(wp) = &we.weapon_props {
-                            if wp.is_ranged() { has_ranged = true; }
+                            if wp.is_ranged() {
+                                has_ranged = true;
+                            }
                         }
                     }
                 }
@@ -209,15 +215,13 @@ impl SharedTacticalLayer {
     }
 
     /// Set facing for stack members toward nearest threat.
-    fn assign_facing(
-        &self,
-        state: &GameState,
-        stack: &Stack,
-    ) -> Vec<TacticalCommand> {
+    fn assign_facing(&self, state: &GameState, stack: &Stack) -> Vec<TacticalCommand> {
         let mut commands = Vec::new();
         let nearby_enemies = find_nearby_enemies(state, stack, ENGAGEMENT_RADIUS);
 
-        if nearby_enemies.is_empty() { return commands; }
+        if nearby_enemies.is_empty() {
+            return commands;
+        }
 
         // Find centroid of enemies.
         let (mut cx, mut cy, mut count) = (0.0f32, 0.0f32, 0u32);
@@ -230,7 +234,9 @@ impl SharedTacticalLayer {
                 }
             }
         }
-        if count == 0 { return commands; }
+        if count == 0 {
+            return commands;
+        }
         cx /= count as f32;
         cy /= count as f32;
 
@@ -255,12 +261,7 @@ impl SharedTacticalLayer {
 }
 
 impl TacticalLayer for SharedTacticalLayer {
-    fn decide(
-        &mut self,
-        state: &GameState,
-        stack: &Stack,
-        _player: u8,
-    ) -> Vec<TacticalCommand> {
+    fn decide(&mut self, state: &GameState, stack: &Stack, _player: u8) -> Vec<TacticalCommand> {
         let mut commands = Vec::new();
 
         // Check retreat.
@@ -313,7 +314,9 @@ fn find_nearby_enemies(state: &GameState, stack: &Stack, radius: f32) -> Vec<Ent
 
         for hex in ring_hexes(member_hex, SEARCH_RINGS) {
             for &entity_key in state.spatial_index.entities_at(hex) {
-                if enemies.contains(&entity_key) { continue; }
+                if enemies.contains(&entity_key) {
+                    continue;
+                }
                 let entity = match state.entities.get(entity_key) {
                     Some(e) => e,
                     None => continue,
@@ -322,8 +325,12 @@ fn find_nearby_enemies(state: &GameState, stack: &Stack, radius: f32) -> Vec<Ent
                     Some(o) => o,
                     None => continue,
                 };
-                if entity_owner == stack.owner { continue; }
-                if entity.person.is_none() { continue; }
+                if entity_owner == stack.owner {
+                    continue;
+                }
+                if entity.person.is_none() {
+                    continue;
+                }
                 if let Some(pos) = entity.pos {
                     let dx = pos.x - member_pos.x;
                     let dy = pos.y - member_pos.y;
@@ -353,7 +360,9 @@ fn retreat_direction(state: &GameState, stack: &Stack) -> super::spatial::Vec3 {
             }
         }
     }
-    if sc == 0 { return Vec3::ZERO; }
+    if sc == 0 {
+        return Vec3::ZERO;
+    }
     sx /= sc as f32;
     sy /= sc as f32;
 
@@ -369,7 +378,9 @@ fn retreat_direction(state: &GameState, stack: &Stack) -> super::spatial::Vec3 {
             }
         }
     }
-    if ec == 0 { return Vec3::new(sx, sy, 0.0); }
+    if ec == 0 {
+        return Vec3::new(sx, sy, 0.0);
+    }
     ex /= ec as f32;
     ey /= ec as f32;
 
@@ -388,12 +399,7 @@ fn retreat_direction(state: &GameState, stack: &Stack) -> super::spatial::Vec3 {
 pub struct NullTacticalLayer;
 
 impl TacticalLayer for NullTacticalLayer {
-    fn decide(
-        &mut self,
-        _state: &GameState,
-        _stack: &Stack,
-        _player: u8,
-    ) -> Vec<TacticalCommand> {
+    fn decide(&mut self, _state: &GameState, _stack: &Stack, _player: u8) -> Vec<TacticalCommand> {
         Vec::new()
     }
 }
@@ -404,13 +410,13 @@ impl TacticalLayer for NullTacticalLayer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::equipment::Equipment;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
     use super::super::state::{Combatant, EntityBuilder, Person, Role};
-    use super::super::equipment::Equipment;
     use super::super::weapon;
+    use super::*;
     use smallvec::SmallVec;
 
     fn test_state() -> GameState {
@@ -419,13 +425,20 @@ mod tests {
     }
 
     fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8) -> EntityKey {
-        spawn_entity(state, EntityBuilder::new()
-            .pos(pos)
-            .owner(owner)
-            .person(Person { role: Role::Soldier, combat_skill: 0.5 })
-            .mobile(Mobile::new(2.0, 10.0))
-            .combatant(Combatant::new())
-            .vitals())
+        spawn_entity(
+            state,
+            EntityBuilder::new()
+                .pos(pos)
+                .owner(owner)
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                    task: None,
+                })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
+                .vitals(),
+        )
     }
 
     fn spawn_armed_soldier(state: &mut GameState, pos: Vec3, owner: u8) -> EntityKey {
@@ -434,8 +447,10 @@ mod tests {
         let soldier = spawn_soldier(state, pos, owner);
 
         // Create a sword entity and contain it.
-        let sword_key = spawn_entity(state, EntityBuilder::new()
-            .weapon_props(weapon::iron_sword()));
+        let sword_key = spawn_entity(
+            state,
+            EntityBuilder::new().weapon_props(weapon::iron_sword()),
+        );
         contain(state, soldier, sword_key);
 
         // Equip the sword.
@@ -471,7 +486,8 @@ mod tests {
         let mut tactical = SharedTacticalLayer::new(DamageEstimateTable::from_physics());
         let commands = tactical.decide(&state, &state.stacks[0], 0);
 
-        let attacks: Vec<_> = commands.iter()
+        let attacks: Vec<_> = commands
+            .iter()
             .filter(|c| matches!(c, TacticalCommand::Attack { .. }))
             .collect();
         assert!(!attacks.is_empty(), "should assign attack targets");
@@ -488,7 +504,8 @@ mod tests {
         let mut tactical = SharedTacticalLayer::new(DamageEstimateTable::from_physics());
         let commands = tactical.decide(&state, &state.stacks[0], 0);
 
-        let facings: Vec<_> = commands.iter()
+        let facings: Vec<_> = commands
+            .iter()
             .filter_map(|c| match c {
                 TacticalCommand::SetFacing { angle, .. } => Some(*angle),
                 _ => None,
@@ -496,7 +513,11 @@ mod tests {
             .collect();
         assert!(!facings.is_empty(), "should set facing");
         // Enemy is to the east (positive x), so angle should be near 0.
-        assert!((facings[0]).abs() < 0.5, "should face east toward enemy: {}", facings[0]);
+        assert!(
+            (facings[0]).abs() < 0.5,
+            "should face east toward enemy: {}",
+            facings[0]
+        );
     }
 
     #[test]
@@ -516,7 +537,8 @@ mod tests {
         }
 
         let commands = tactical.decide(&state, &state.stacks[0], 0);
-        let retreats = commands.iter()
+        let retreats = commands
+            .iter()
             .filter(|c| matches!(c, TacticalCommand::Retreat { .. }))
             .count();
         assert!(retreats > 0, "should retreat when losing badly");
@@ -539,7 +561,8 @@ mod tests {
         }
 
         let commands = tactical.decide(&state, &state.stacks[0], 0);
-        let retreats = commands.iter()
+        let retreats = commands
+            .iter()
             .filter(|c| matches!(c, TacticalCommand::Retreat { .. }))
             .count();
         assert_eq!(retreats, 0, "should not retreat when winning");
@@ -549,16 +572,25 @@ mod tests {
     fn formation_changes_for_ranged() {
         let mut state = test_state();
         // Spawn a ranged soldier (bow).
-        let s1 = spawn_entity(&mut state, EntityBuilder::new()
-            .pos(Vec3::new(100.0, 100.0, 0.0))
-            .owner(0)
-            .person(Person { role: Role::Soldier, combat_skill: 0.5 })
-            .mobile(Mobile::new(2.0, 10.0))
-            .combatant(Combatant::new())
-            .vitals());
+        let s1 = spawn_entity(
+            &mut state,
+            EntityBuilder::new()
+                .pos(Vec3::new(100.0, 100.0, 0.0))
+                .owner(0)
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                    task: None,
+                })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
+                .vitals(),
+        );
 
-        let bow_key = spawn_entity(&mut state, EntityBuilder::new()
-            .weapon_props(weapon::wooden_bow()));
+        let bow_key = spawn_entity(
+            &mut state,
+            EntityBuilder::new().weapon_props(weapon::wooden_bow()),
+        );
         super::super::lifecycle::contain(&mut state, s1, bow_key);
         if let Some(e) = state.entities.get_mut(s1) {
             let mut eq = Equipment::empty();
@@ -572,7 +604,8 @@ mod tests {
         let mut tactical = SharedTacticalLayer::new(DamageEstimateTable::from_physics());
         let commands = tactical.decide(&state, &state.stacks[0], 0);
 
-        let formation_cmds: Vec<_> = commands.iter()
+        let formation_cmds: Vec<_> = commands
+            .iter()
             .filter_map(|c| match c {
                 TacticalCommand::SetFormation { formation, .. } => Some(*formation),
                 _ => None,
@@ -580,8 +613,11 @@ mod tests {
             .collect();
 
         // Ranged without shield should get Skirmish.
-        assert!(formation_cmds.contains(&FormationType::Skirmish),
-            "ranged units should use Skirmish formation: {:?}", formation_cmds);
+        assert!(
+            formation_cmds.contains(&FormationType::Skirmish),
+            "ranged units should use Skirmish formation: {:?}",
+            formation_cmds
+        );
     }
 
     #[test]
@@ -594,7 +630,8 @@ mod tests {
         let mut tactical = SharedTacticalLayer::new(DamageEstimateTable::from_physics());
         let commands = tactical.decide(&state, &state.stacks[0], 0);
 
-        let attacks = commands.iter()
+        let attacks = commands
+            .iter()
             .filter(|c| matches!(c, TacticalCommand::Attack { .. }))
             .count();
         assert_eq!(attacks, 0, "should not attack without enemies");

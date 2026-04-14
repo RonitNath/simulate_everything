@@ -12,9 +12,9 @@ use crate::v2::state::EntityKey;
 use serde::{Deserialize, Serialize};
 
 pub use super::commands::{
-    CommandApplySummary, CommandStatus, apply_agent_output, apply_operational_command,
-    apply_tactical_command, validate_operational_command as validate_operational,
-    validate_tactical_command as validate_tactical,
+    apply_agent_output, apply_operational_command, apply_tactical_command,
+    validate_operational_command as validate_operational,
+    validate_tactical_command as validate_tactical, CommandApplySummary, CommandStatus,
 };
 
 // ---------------------------------------------------------------------------
@@ -566,6 +566,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new()),

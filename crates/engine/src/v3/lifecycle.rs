@@ -67,10 +67,7 @@ pub fn contain(state: &mut GameState, container: EntityKey, contained: EntityKey
 /// Remove `contained` from its container. The entity gets no position —
 /// caller should set pos if ejecting to the world.
 pub fn uncontain(state: &mut GameState, contained: EntityKey) {
-    let container_key = state
-        .entities
-        .get(contained)
-        .and_then(|e| e.contained_in);
+    let container_key = state.entities.get(contained).and_then(|e| e.contained_in);
 
     if let Some(container_key) = container_key {
         // Remove from parent's contains list
@@ -132,9 +129,7 @@ pub fn cleanup_dead(state: &mut GameState) {
         .iter()
         .filter_map(|(key, entity)| {
             if let Some(ref vitals) = entity.vitals {
-                if vitals.is_dead()
-                    && (entity.mobile.is_some() || entity.combatant.is_some())
-                {
+                if vitals.is_dead() && (entity.mobile.is_some() || entity.combatant.is_some()) {
                     return Some(key);
                 }
             }
@@ -211,11 +206,7 @@ pub fn check_elimination(state: &GameState) -> SmallVec<[u8; 4]> {
     for (_, entity) in &state.entities {
         if entity.person.is_some() {
             // Dead persons don't count
-            let is_dead = entity
-                .vitals
-                .as_ref()
-                .map(|v| v.is_dead())
-                .unwrap_or(false);
+            let is_dead = entity.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(false);
             if is_dead {
                 continue;
             }
@@ -242,13 +233,13 @@ pub fn check_elimination(state: &GameState) -> SmallVec<[u8; 4]> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::armor::MaterialType;
     use super::super::equipment::Equipment;
     use super::super::movement::Mobile;
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
     use super::super::state::{Combatant, Person, Role, Structure, StructureType};
     use super::super::vitals::Vitals;
-    use super::super::armor::MaterialType;
+    use super::*;
 
     fn test_state() -> GameState {
         let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
@@ -260,7 +251,9 @@ mod tests {
         let mut gs = test_state();
         let k = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(10.0, 10.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(10.0, 10.0, 0.0))
+                .owner(0),
         );
         assert_eq!(gs.entities[k].id, 1);
         assert!(gs.entities[k].pos.is_some());
@@ -272,7 +265,9 @@ mod tests {
         let mut gs = test_state();
         let k = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(10.0, 10.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(10.0, 10.0, 0.0))
+                .owner(0),
         );
         let hex = gs.entities[k].hex.unwrap();
         assert!(gs.spatial_index.entities_at(hex).contains(&k));
@@ -296,15 +291,23 @@ mod tests {
         );
         let item = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(100.0, 100.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(100.0, 100.0, 0.0))
+                .owner(0),
         );
 
         contain(&mut gs, container, item);
 
         assert_eq!(gs.entities[item].contained_in, Some(container));
         assert!(gs.entities[container].contains.contains(&item));
-        assert!(gs.entities[item].pos.is_none(), "contained entity loses pos");
-        assert!(gs.entities[item].hex.is_none(), "contained entity loses hex");
+        assert!(
+            gs.entities[item].pos.is_none(),
+            "contained entity loses pos"
+        );
+        assert!(
+            gs.entities[item].hex.is_none(),
+            "contained entity loses hex"
+        );
     }
 
     #[test]
@@ -312,11 +315,15 @@ mod tests {
         let mut gs = test_state();
         let container = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(100.0, 100.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(100.0, 100.0, 0.0))
+                .owner(0),
         );
         let item = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(100.0, 100.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(100.0, 100.0, 0.0))
+                .owner(0),
         );
 
         contain(&mut gs, container, item);
@@ -334,7 +341,11 @@ mod tests {
             EntityBuilder::new()
                 .pos(Vec3::new(10.0, 10.0, 0.0))
                 .owner(0)
-                .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                    task: None,
+                })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
                 .vitals(),
@@ -344,7 +355,11 @@ mod tests {
             EntityBuilder::new()
                 .pos(Vec3::new(20.0, 20.0, 0.0))
                 .owner(0)
-                .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                    task: None,
+                })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
                 .vitals(),
@@ -359,11 +374,23 @@ mod tests {
         assert!(gs.entities.contains_key(alive));
         assert!(gs.entities.contains_key(dead));
         // Dead entity is inert: no mobile, no combatant
-        assert!(gs.entities[dead].mobile.is_none(), "dead entity should lose mobile");
-        assert!(gs.entities[dead].combatant.is_none(), "dead entity should lose combatant");
+        assert!(
+            gs.entities[dead].mobile.is_none(),
+            "dead entity should lose mobile"
+        );
+        assert!(
+            gs.entities[dead].combatant.is_none(),
+            "dead entity should lose combatant"
+        );
         // Dead entity retains position and person
-        assert!(gs.entities[dead].pos.is_some(), "dead entity keeps position");
-        assert!(gs.entities[dead].person.is_some(), "dead entity keeps person");
+        assert!(
+            gs.entities[dead].pos.is_some(),
+            "dead entity keeps position"
+        );
+        assert!(
+            gs.entities[dead].person.is_some(),
+            "dead entity keeps person"
+        );
         // Alive entity unchanged
         assert!(gs.entities[alive].mobile.is_some());
         assert!(gs.entities[alive].combatant.is_some());
@@ -377,7 +404,11 @@ mod tests {
             EntityBuilder::new()
                 .pos(Vec3::new(50.0, 50.0, 0.0))
                 .owner(0)
-                .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                    task: None,
+                })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
                 .vitals()
@@ -420,7 +451,11 @@ mod tests {
             EntityBuilder::new()
                 .pos(Vec3::new(10.0, 10.0, 0.0))
                 .owner(1)
-                .person(Person { role: Role::Farmer, combat_skill: 0.0 }),
+                .person(Person {
+                    role: Role::Farmer,
+                    combat_skill: 0.0,
+                    task: None,
+                }),
         );
 
         let eliminated = check_elimination(&gs);
@@ -433,7 +468,9 @@ mod tests {
         let mut gs = test_state();
         let k = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(10.0, 10.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(10.0, 10.0, 0.0))
+                .owner(0),
         );
         let hex = gs.entities[k].hex.unwrap();
         assert!(gs.spatial_index.entities_at(hex).contains(&k));
@@ -448,11 +485,15 @@ mod tests {
         let mut gs = test_state();
         let container = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(100.0, 100.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(100.0, 100.0, 0.0))
+                .owner(0),
         );
         let item = spawn_entity(
             &mut gs,
-            EntityBuilder::new().pos(Vec3::new(100.0, 100.0, 0.0)).owner(0),
+            EntityBuilder::new()
+                .pos(Vec3::new(100.0, 100.0, 0.0))
+                .owner(0),
         );
 
         contain(&mut gs, container, item);

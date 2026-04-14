@@ -476,7 +476,10 @@ Implemented in `crates/web/src/v3_roundrobin.rs` (`V3RoundRobin`).
 - Late joiners receive the cached `v3_init`, latest full snapshot, and current RR status before live deltas.
 - Review capture is integrated into RR via `V3ReviewRecorder`, including point flags and start/stop segment capture.
 - RR now uses the same engine-owned V3 agent phase as the shared sim/bench path: `sim::run_agent_phase(...)` applies agent outputs before `sim::tick(...)`.
+- RR and `v3bench` now also use the same shared economy-ready world bootstrap (`mapgen::generate_economy_ready(...)`) instead of bench-local support structures.
+- The shared engine tick now owns per-tick food/material production, food consumption, and immediate workshop equipment spawning from contained stockpile resources.
 - Live `/v3/rr` and `/v3/replay` both merge stack create/update/dissolve deltas through the same frontend helper, so stack state stays visually consistent between live and replay views.
+- V3 snapshots now derive territory ownership, structure overlays, player stockpile levels, and basic entity task labels from shared engine state rather than hardcoded zeros or `None`.
 
 ### V2 Agents
 

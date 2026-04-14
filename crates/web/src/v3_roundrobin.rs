@@ -1,7 +1,7 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::{Mutex, Notify, broadcast};
+use std::sync::Arc;
+use tokio::sync::{broadcast, Mutex, Notify};
 use tracing::info;
 
 use simulate_everything_engine::v3::{
@@ -283,7 +283,8 @@ impl V3RoundRobin {
             self.current_tick.store(0, Ordering::Relaxed);
 
             // Generate map.
-            let mut state = mapgen::generate(MAP_WIDTH, MAP_HEIGHT, NUM_PLAYERS, seed);
+            let mut state =
+                mapgen::generate_economy_ready(MAP_WIDTH, MAP_HEIGHT, NUM_PLAYERS, seed);
 
             // Create agents — alternate between personality types.
             let (mut agents, agent_names, agent_versions) = create_agents(NUM_PLAYERS, game_number);

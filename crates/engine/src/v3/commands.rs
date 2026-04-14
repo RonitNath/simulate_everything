@@ -1,10 +1,11 @@
 use super::agent::{AgentOutput, EntityTask, OperationalCommand, TacticalCommand};
+use super::economy;
 use super::equipment::{self, Equipment};
 use super::formation::FormationType;
 use super::lifecycle::{contain, uncontain};
 use super::martial;
 use super::movement::Mobile;
-use super::state::{Combatant, GameState, Role, Stack};
+use super::state::{Combatant, GameState, Role, Stack, TaskAssignment};
 use super::vitals::Vitals;
 use super::weapon::AttackState;
 use crate::v2::state::EntityKey;
@@ -200,8 +201,17 @@ pub fn apply_operational_command(state: &mut GameState, cmd: &OperationalCommand
             state.stacks.retain(|existing| existing.id != *stack);
             CommandStatus::Applied
         }
-        OperationalCommand::ProduceEquipment { .. }
-        | OperationalCommand::EstablishSupplyRoute { .. }
+        OperationalCommand::ProduceEquipment {
+            workshop,
+            item_type,
+        } => {
+            if economy::produce_equipment_now(state, *workshop, *item_type) {
+                CommandStatus::Applied
+            } else {
+                CommandStatus::Rejected
+            }
+        }
+        OperationalCommand::EstablishSupplyRoute { .. }
         | OperationalCommand::FoundSettlement { .. } => CommandStatus::Deferred,
         OperationalCommand::EquipEntity { entity, equipment } => {
             if equip_entity_item(state, *entity, *equipment) {
@@ -295,6 +305,7 @@ pub fn apply_tactical_command(state: &mut GameState, cmd: &TacticalCommand) -> C
 }
 
 fn apply_entity_task(state: &mut GameState, entity_key: EntityKey, task: &EntityTask) {
+    let assigned_task = economy::task_assignment_for(task);
     match task {
         EntityTask::Farm { .. } => {
             if let Some(person) = state
@@ -303,6 +314,7 @@ fn apply_entity_task(state: &mut GameState, entity_key: EntityKey, task: &Entity
                 .and_then(|e| e.person.as_mut())
             {
                 person.role = Role::Farmer;
+                person.task = Some(assigned_task.clone());
             }
         }
         EntityTask::Build { .. } | EntityTask::Craft { .. } => {
@@ -312,10 +324,14 @@ fn apply_entity_task(state: &mut GameState, entity_key: EntityKey, task: &Entity
                 .and_then(|e| e.person.as_mut())
             {
                 person.role = Role::Worker;
+                person.task = Some(assigned_task.clone());
             }
         }
         EntityTask::Patrol { waypoints } => {
             if let Some(e) = state.entities.get_mut(entity_key) {
+                if let Some(person) = e.person.as_mut() {
+                    person.task = Some(assigned_task.clone());
+                }
                 if let Some(mobile) = &mut e.mobile {
                     mobile.waypoints = waypoints.clone();
                 }
@@ -323,6 +339,9 @@ fn apply_entity_task(state: &mut GameState, entity_key: EntityKey, task: &Entity
         }
         EntityTask::Garrison { position } => {
             if let Some(e) = state.entities.get_mut(entity_key) {
+                if let Some(person) = e.person.as_mut() {
+                    person.task = Some(assigned_task.clone());
+                }
                 if let Some(mobile) = &mut e.mobile {
                     mobile.waypoints = vec![*position];
                 }
@@ -333,6 +352,7 @@ fn apply_entity_task(state: &mut GameState, entity_key: EntityKey, task: &Entity
                 if let Some(person) = e.person.as_mut() {
                     person.role = Role::Soldier;
                     person.combat_skill = person.combat_skill.max(0.35);
+                    person.task = Some(assigned_task.clone());
                 }
                 if e.mobile.is_none() {
                     e.mobile = Some(Mobile::new(2.0, 10.0));
@@ -354,6 +374,7 @@ fn apply_entity_task(state: &mut GameState, entity_key: EntityKey, task: &Entity
             if let Some(e) = state.entities.get_mut(entity_key) {
                 if let Some(person) = e.person.as_mut() {
                     person.role = Role::Idle;
+                    person.task = Some(TaskAssignment::Idle);
                 }
                 if let Some(mobile) = e.mobile.as_mut() {
                     mobile.waypoints.clear();
@@ -494,6 +515,7 @@ mod tests {
                 .person(super::super::state::Person {
                     role: Role::Idle,
                     combat_skill: 0.25,
+                    task: None,
                 }),
         )
     }
@@ -542,6 +564,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0)),
         );
@@ -613,6 +636,38 @@ mod tests {
     }
 
     #[test]
+    fn assign_task_persists_task_state() {
+        let mut state = test_state();
+        let worker = spawn_person(&mut state, Vec3::new(10.0, 10.0, 0.0), 0);
+        let workshop = spawn_entity(
+            &mut state,
+            EntityBuilder::new().owner(0).structure(Structure {
+                structure_type: StructureType::Workshop,
+                build_progress: 1.0,
+                integrity: 100.0,
+                capacity: 10,
+                material: armor::MaterialType::Wood,
+            }),
+        );
+
+        let status = apply_operational_command(
+            &mut state,
+            &OperationalCommand::AssignTask {
+                entity: worker,
+                task: EntityTask::Build { site: workshop },
+            },
+        );
+
+        assert_eq!(status, CommandStatus::Applied);
+        let person = state.entities[worker].person.as_ref().unwrap();
+        assert_eq!(person.role, Role::Worker);
+        assert_eq!(
+            person.task,
+            Some(TaskAssignment::Workshop { site: workshop })
+        );
+    }
+
+    #[test]
     fn apply_form_stack_and_disband_stack_updates_state() {
         let mut state = test_state();
         let a = spawn_person(&mut state, Vec3::new(10.0, 10.0, 0.0), 0);
@@ -676,6 +731,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.6,
+                    task: None,
                 })
                 .combatant(Combatant::new())
                 .equipment(Equipment::empty()),
@@ -754,14 +810,12 @@ mod tests {
             apply_tactical_command(&mut state, &TacticalCommand::Hold { entity }),
             CommandStatus::Applied
         );
-        assert!(
-            state.entities[entity]
-                .mobile
-                .as_ref()
-                .unwrap()
-                .waypoints
-                .is_empty()
-        );
+        assert!(state.entities[entity]
+            .mobile
+            .as_ref()
+            .unwrap()
+            .waypoints
+            .is_empty());
 
         assert_eq!(
             apply_tactical_command(
@@ -814,8 +868,8 @@ mod tests {
             summary,
             CommandApplySummary {
                 operational_applied: 1,
-                operational_rejected: 1,
-                operational_deferred: 1,
+                operational_rejected: 2,
+                operational_deferred: 0,
                 tactical_applied: 0,
                 tactical_rejected: 0,
                 tactical_deferred: 1,

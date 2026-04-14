@@ -4,10 +4,8 @@
 //! from the API. The pad streams snapshots to a WS spectator for real-time
 //! rendering, and returns JSON state + ASCII art from curl.
 
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{broadcast, Mutex};
 use tracing::info;
 
 use simulate_everything_engine::v2::hex::Axial;
@@ -26,9 +24,7 @@ use simulate_everything_engine::v3::{
     wound::{Severity, Wound},
 };
 
-use crate::v3_protocol::{
-    self, DeltaTracker, SpectatorEntityInfo, V3ServerToSpectator,
-};
+use crate::v3_protocol::{self, DeltaTracker, V3ServerToSpectator};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -217,9 +213,9 @@ impl V3Drill {
             state.combat_log.drain();
 
             let delta = delta_tracker.build_delta(state, dt);
-            let _ = self.spectator_tx.send(V3ServerToSpectator::SnapshotDelta {
-                delta,
-            });
+            let _ = self
+                .spectator_tx
+                .send(V3ServerToSpectator::SnapshotDelta { delta });
         }
 
         let entities = build_drill_entities(&inner.state, &inner.entity_keys);
@@ -236,11 +232,9 @@ impl V3Drill {
     /// Get current state without advancing.
     pub async fn status(&self, view: Option<ViewParams>) -> DrillStatus {
         let inner = self.inner.lock().await;
-        let center = view.as_ref().and_then(|v| {
-            match (v.center_q, v.center_r) {
-                (Some(q), Some(r)) => Some(Axial::new(q, r)),
-                _ => None,
-            }
+        let center = view.as_ref().and_then(|v| match (v.center_q, v.center_r) {
+            (Some(q), Some(r)) => Some(Axial::new(q, r)),
+            _ => None,
         });
         let entities = build_drill_entities(&inner.state, &inner.entity_keys);
         let ascii = render_ascii(&inner.state, &inner.entity_keys, center);
@@ -278,9 +272,9 @@ impl V3Drill {
             init,
             game_number: 0,
         });
-        let _ = self.spectator_tx.send(V3ServerToSpectator::Snapshot {
-            snapshot,
-        });
+        let _ = self
+            .spectator_tx
+            .send(V3ServerToSpectator::Snapshot { snapshot });
         info!("V3 drill pad reset");
     }
 
@@ -351,6 +345,7 @@ fn create_drill_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
+                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant::new())
@@ -383,6 +378,7 @@ fn create_drill_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
+                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant {
@@ -638,9 +634,11 @@ fn apply_drill_command(inner: &mut DrillInner, cmd: &DrillCommand) {
             let z = e.pos.map(|p| p.z).unwrap_or(0.0);
             e.pos = Some(Vec3 { x, y, z });
             // Update hex.
-            e.hex = Some(simulate_everything_engine::v3::hex::world_to_hex(
-                Vec3 { x, y, z },
-            ));
+            e.hex = Some(simulate_everything_engine::v3::hex::world_to_hex(Vec3 {
+                x,
+                y,
+                z,
+            }));
         }
     }
 
@@ -667,9 +665,9 @@ fn apply_drill_command(inner: &mut DrillInner, cmd: &DrillCommand) {
                     if let Some(c) = &mut e.combatant {
                         c.target = Some(tk);
                         // Directly initiate attack — bypasses agent/tactical layer.
-                        c.attack = Some(
-                            simulate_everything_engine::v3::weapon::AttackState::new(tk, wk),
-                        );
+                        c.attack = Some(simulate_everything_engine::v3::weapon::AttackState::new(
+                            tk, wk,
+                        ));
                     }
                 }
             }
@@ -697,8 +695,10 @@ fn build_drill_entities(state: &GameState, keys: &[(u32, EntityKey)]) -> Vec<Dri
     let snapshot_entities = v3_protocol::build_snapshot(state, 0.05).entities;
     keys.iter()
         .filter_map(|(id, _)| {
-            snapshot_entities.iter().find(|e| e.id == *id).map(|info| {
-                DrillEntity {
+            snapshot_entities
+                .iter()
+                .find(|e| e.id == *id)
+                .map(|info| DrillEntity {
                     id: info.id,
                     owner: info.owner,
                     x: info.x,
@@ -719,8 +719,7 @@ fn build_drill_entities(state: &GameState, keys: &[(u32, EntityKey)]) -> Vec<Dri
                         .iter()
                         .map(|(z, s)| format!("{:?}:{:?}", z, s))
                         .collect(),
-                }
-            })
+                })
         })
         .collect()
 }
@@ -731,11 +730,7 @@ fn build_drill_entities(state: &GameState, keys: &[(u32, EntityKey)]) -> Vec<Dri
 
 /// Render a focused ASCII view of the drill pad.
 /// Shows hex grid with entity positions marked.
-fn render_ascii(
-    state: &GameState,
-    keys: &[(u32, EntityKey)],
-    _center: Option<Axial>,
-) -> String {
+fn render_ascii(state: &GameState, keys: &[(u32, EntityKey)], _center: Option<Axial>) -> String {
     let mut lines = Vec::new();
 
     // Header with entity positions.

@@ -2,9 +2,10 @@
 /// Strategy never reads raw game state — it reads this abstraction.
 use serde::{Deserialize, Serialize};
 
+use super::derived::{derive_hex_control, derive_player_stats, region_center};
 use super::spatial::Vec3;
 use super::state::GameState;
-use crate::v2::hex::Axial;
+use crate::v2::hex::{neighbors, Axial};
 
 // ---------------------------------------------------------------------------
 // StrategicView
@@ -111,30 +112,11 @@ pub enum Readiness {
 // Perception builder
 // ---------------------------------------------------------------------------
 
-/// Build a StrategicView for a given player from current game state.
-///
-/// This is a placeholder implementation for A1. The full perception layer
-/// with fog of war, territory clustering, and threat analysis will be
-/// refined as A2-A4 drive requirements.
 pub fn build_strategic_view(state: &GameState, player: u8) -> StrategicView {
-    let mut own_soldiers = 0u32;
-    let mut enemy_soldiers = 0u32;
-
-    for entity in state.entities.values() {
-        let owner = match entity.owner {
-            Some(o) => o,
-            None => continue,
-        };
-        if entity.person.is_none() {
-            continue;
-        }
-        if owner == player {
-            own_soldiers += 1;
-        } else {
-            enemy_soldiers += 1;
-        }
-    }
-
+    let player_stats = derive_player_stats(state);
+    let own_stats = &player_stats[player as usize];
+    let enemy_stats = aggregate_enemy_stats(&player_stats, player);
+    let territory = summarize_territory(state, player);
     let own_stacks = state.stacks.iter().filter(|s| s.owner == player).count() as u32;
     let enemy_stacks = state.stacks.iter().filter(|s| s.owner != player).count() as u32;
 
@@ -175,19 +157,19 @@ pub fn build_strategic_view(state: &GameState, player: u8) -> StrategicView {
         .collect();
 
     StrategicView {
-        territory: Vec::new(), // populated in A2+
+        territory,
         relative_strength: StrengthAssessment {
             own_stacks,
             enemy_stacks,
-            own_soldiers,
-            enemy_soldiers,
-            equipment_quality_ratio: 1.0, // placeholder
+            own_soldiers: own_stats.soldiers,
+            enemy_soldiers: enemy_stats.soldiers,
+            equipment_quality_ratio: equipment_quality_ratio(state, player),
         },
         economy: EconomySnapshot {
-            food_surplus: 0.0,
-            material_stockpile: 0.0,
-            production_capacity: 0,
-            growth_trend: 0.0,
+            food_surplus: own_stats.farmers as f32 - own_stats.soldiers as f32 * 0.4,
+            material_stockpile: own_stats.material_stockpile,
+            production_capacity: own_stats.workers + own_stats.workshops,
+            growth_trend: own_stats.food_stockpile / (own_stats.population.max(1) as f32) - 5.0,
         },
         threats: detect_threats(state, player),
         stack_readiness,
@@ -209,18 +191,24 @@ fn detect_threats(state: &GameState, player: u8) -> Vec<ThreatCluster> {
             Some(o) => o,
             None => continue,
         };
-        if owner == player { continue; }
-        if entity.person.is_none() { continue; }
+        if owner == player {
+            continue;
+        }
+        if entity.person.is_none() {
+            continue;
+        }
         let pos = match entity.pos {
             Some(p) => p,
             None => continue,
         };
+        let direction = entity
+            .mobile
+            .as_ref()
+            .and_then(|m| (m.vel.length_squared() > 0.01).then_some(m.vel));
 
         threats.push(ThreatCluster {
             position: pos,
-            direction: entity.mobile.as_ref().map(|m| {
-                if m.vel.length_squared() > 0.01 { m.vel } else { Vec3::ZERO }
-            }),
+            direction,
             entity_count: 1,
             posture: ThreatPosture::Static,
         });
@@ -229,18 +217,176 @@ fn detect_threats(state: &GameState, player: u8) -> Vec<ThreatCluster> {
     threats
 }
 
+fn summarize_territory(state: &GameState, player: u8) -> Vec<Region> {
+    let control = derive_hex_control(state);
+    let mut controlled = Vec::new();
+    let mut contested = Vec::new();
+    let mut frontier_unknown = Vec::new();
+
+    for (idx, hex) in control.iter().enumerate() {
+        if hex.owner == Some(player) && !hex.contested {
+            controlled.push(idx);
+            continue;
+        }
+        if hex.contested {
+            contested.push(idx);
+        }
+    }
+
+    for (idx, hex) in control.iter().enumerate() {
+        if hex.owner.is_some() || hex.contested {
+            continue;
+        }
+        let row = (idx / state.map_width) as i32;
+        let col = (idx % state.map_width) as i32;
+        let axial = Axial::new(col - (row - (row & 1)) / 2, row);
+        if neighbors(axial).into_iter().any(|neighbor| {
+            hex_index(state, neighbor)
+                .and_then(|neighbor_idx| control.get(neighbor_idx))
+                .map(|neighbor_control| neighbor_control.owner == Some(player))
+                .unwrap_or(false)
+        }) {
+            frontier_unknown.push(idx);
+        }
+    }
+
+    let mut regions = Vec::new();
+    if !controlled.is_empty() {
+        regions.push(Region {
+            center: region_center(state, &controlled),
+            hex_count: controlled.len() as u32,
+            status: TerritoryStatus::Controlled,
+        });
+    }
+    if !contested.is_empty() {
+        regions.push(Region {
+            center: region_center(state, &contested),
+            hex_count: contested.len() as u32,
+            status: TerritoryStatus::Contested,
+        });
+    }
+    if !frontier_unknown.is_empty() {
+        regions.push(Region {
+            center: region_center(state, &frontier_unknown),
+            hex_count: frontier_unknown.len() as u32,
+            status: TerritoryStatus::Unknown,
+        });
+    }
+    regions
+}
+
+fn aggregate_enemy_stats(
+    player_stats: &[super::derived::PlayerDerivedStats],
+    player: u8,
+) -> super::derived::PlayerDerivedStats {
+    let mut aggregate = super::derived::PlayerDerivedStats {
+        id: player,
+        population: 0,
+        soldiers: 0,
+        farmers: 0,
+        workers: 0,
+        idle: 0,
+        workshops: 0,
+        settlements: 0,
+        territory: 0,
+        food_stockpile: 0.0,
+        material_stockpile: 0.0,
+        alive: false,
+    };
+
+    for stats in player_stats.iter().filter(|stats| stats.id != player) {
+        aggregate.population += stats.population;
+        aggregate.soldiers += stats.soldiers;
+        aggregate.farmers += stats.farmers;
+        aggregate.workers += stats.workers;
+        aggregate.idle += stats.idle;
+        aggregate.workshops += stats.workshops;
+        aggregate.settlements += stats.settlements;
+        aggregate.territory += stats.territory;
+        aggregate.food_stockpile += stats.food_stockpile;
+        aggregate.material_stockpile += stats.material_stockpile;
+        aggregate.alive |= stats.alive;
+    }
+
+    aggregate
+}
+
+fn equipment_quality_ratio(state: &GameState, player: u8) -> f32 {
+    let own = player_equipment_score(state, player);
+    let enemy = (0..state.num_players)
+        .filter(|&other| other != player)
+        .map(|other| player_equipment_score(state, other))
+        .sum::<f32>();
+    if enemy <= 0.01 {
+        return if own <= 0.01 { 1.0 } else { 2.0 };
+    }
+    (own / enemy).clamp(0.25, 2.0)
+}
+
+fn player_equipment_score(state: &GameState, player: u8) -> f32 {
+    state
+        .entities
+        .values()
+        .filter(|entity| {
+            entity.owner == Some(player)
+                && entity
+                    .person
+                    .as_ref()
+                    .map(|person| person.role == super::state::Role::Soldier)
+                    .unwrap_or(false)
+        })
+        .map(|entity| {
+            let mut score = 0.0;
+            if entity
+                .equipment
+                .as_ref()
+                .and_then(|equipment| equipment.weapon)
+                .is_some()
+            {
+                score += 1.0;
+            }
+            if entity
+                .equipment
+                .as_ref()
+                .map(|equipment| equipment.armor_slots.iter().any(|slot| slot.is_some()))
+                .unwrap_or(false)
+            {
+                score += 1.0;
+            }
+            score
+        })
+        .sum()
+}
+
+fn hex_index(state: &GameState, hex: Axial) -> Option<usize> {
+    let row = hex.r;
+    let col = hex.q + (hex.r - (hex.r & 1)) / 2;
+    if row < 0 || col < 0 {
+        return None;
+    }
+    let row = row as usize;
+    let col = col as usize;
+    if row >= state.map_height || col >= state.map_width {
+        return None;
+    }
+    Some(row * state.map_width + col)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::formation::FormationType;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::spatial::{GeoMaterial, Heightfield};
-    use super::super::state::{Combatant, EntityBuilder, Person, Role, Stack, StackId};
-    use super::super::formation::FormationType;
+    use super::super::state::{
+        Combatant, EntityBuilder, Person, Resource, ResourceType, Role, Stack, StackId, Structure,
+        StructureType,
+    };
+    use super::*;
     use smallvec::SmallVec;
 
     fn test_state() -> GameState {
@@ -254,7 +400,11 @@ mod tests {
             EntityBuilder::new()
                 .pos(pos)
                 .owner(owner)
-                .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                    task: None,
+                })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
                 .vitals(),
@@ -318,5 +468,57 @@ mod tests {
         let view = build_strategic_view(&state, 0);
         assert_eq!(view.stack_readiness.len(), 1);
         assert_eq!(view.stack_readiness[0].readiness, Readiness::Fresh);
+    }
+
+    #[test]
+    fn view_builds_territory_and_economy_from_state() {
+        let mut state = test_state();
+        spawn_soldier(&mut state, Vec3::new(0.0, 0.0, 0.0), 0);
+        spawn_entity(
+            &mut state,
+            EntityBuilder::new().owner(0).resource(Resource {
+                resource_type: ResourceType::Material,
+                amount: 80.0,
+            }),
+        );
+        spawn_entity(
+            &mut state,
+            EntityBuilder::new()
+                .pos(Vec3::new(20.0, 0.0, 0.0))
+                .owner(0)
+                .structure(Structure {
+                    structure_type: StructureType::Workshop,
+                    build_progress: 1.0,
+                    integrity: 100.0,
+                    capacity: 10,
+                    material: super::super::armor::MaterialType::Wood,
+                }),
+        );
+        spawn_entity(
+            &mut state,
+            EntityBuilder::new()
+                .pos(Vec3::new(5.0, 0.0, 0.0))
+                .owner(0)
+                .person(Person {
+                    role: Role::Farmer,
+                    combat_skill: 0.1,
+                    task: None,
+                })
+                .mobile(Mobile::new(2.0, 10.0)),
+        );
+
+        let view = build_strategic_view(&state, 0);
+        assert!(
+            !view.territory.is_empty(),
+            "territory should no longer be empty"
+        );
+        assert!(
+            view.economy.material_stockpile >= 80.0,
+            "economy should include owned material stockpiles"
+        );
+        assert!(
+            view.economy.production_capacity >= 1,
+            "workshops and workers should contribute to production capacity"
+        );
     }
 }
