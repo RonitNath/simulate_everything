@@ -1,6 +1,8 @@
 use serde::Serialize;
 use simulate_everything_engine::v2::spectator::{SpectatorInit, SpectatorSnapshot};
 
+use crate::v2_rr_review::ReviewBundleSummary;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum V2ServerToSpectator {
@@ -25,5 +27,18 @@ pub enum V2ServerToSpectator {
     Config {
         #[serde(skip_serializing_if = "Option::is_none")]
         tick_ms: Option<u64>,
+    },
+    #[serde(rename = "v2_rr_status")]
+    RrStatus {
+        game_number: u64,
+        current_tick: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capturable_start_tick: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capturable_end_tick: Option<u64>,
+        paused: bool,
+        tick_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        active_capture: Option<ReviewBundleSummary>,
     },
 }

@@ -96,6 +96,19 @@ impl V2RoundRobin {
         if let Some(ref snapshot) = snap.latest_snapshot {
             msgs.push(snapshot.clone());
         }
+        drop(snap);
+        // Include current RR status so late joiners get live metadata immediately.
+        let review = self.review.lock().await;
+        let status = review.status();
+        msgs.push(V2ServerToSpectator::RrStatus {
+            game_number: status.game_number.unwrap_or(0),
+            current_tick: status.current_tick.unwrap_or(0),
+            capturable_start_tick: status.capturable_start_tick,
+            capturable_end_tick: status.capturable_end_tick,
+            paused: self.is_paused(),
+            tick_ms: self.get_tick_ms(),
+            active_capture: status.active_capture,
+        });
         msgs
     }
 
@@ -120,9 +133,27 @@ impl V2RoundRobin {
                 snap.init = None;
                 snap.latest_snapshot = None;
             }
-            V2ServerToSpectator::Config { .. } => {}
+            // Config and RrStatus do not update snapshot cache.
+            V2ServerToSpectator::Config { .. } | V2ServerToSpectator::RrStatus { .. } => {}
         }
         drop(snap);
+        let _ = self.spectator_tx.send(msg);
+    }
+
+    /// Broadcast current RR metadata to all spectators without updating snapshot cache.
+    pub async fn broadcast_rr_status(&self) {
+        let review = self.review.lock().await;
+        let status = review.status();
+        let msg = V2ServerToSpectator::RrStatus {
+            game_number: status.game_number.unwrap_or(0),
+            current_tick: status.current_tick.unwrap_or(0),
+            capturable_start_tick: status.capturable_start_tick,
+            capturable_end_tick: status.capturable_end_tick,
+            paused: self.is_paused(),
+            tick_ms: self.get_tick_ms(),
+            active_capture: status.active_capture,
+        };
+        drop(review);
         let _ = self.spectator_tx.send(msg);
     }
 
@@ -139,19 +170,11 @@ impl V2RoundRobin {
         self.review.lock().await.flag_tick(game_number, tick)
     }
 
-    pub async fn start_capture(
-        &self,
-        game_number: u64,
-        tick: u64,
-    ) -> Result<FlagResponse, String> {
+    pub async fn start_capture(&self, game_number: u64, tick: u64) -> Result<FlagResponse, String> {
         self.review.lock().await.start_capture(game_number, tick)
     }
 
-    pub async fn stop_capture(
-        &self,
-        game_number: u64,
-        tick: u64,
-    ) -> Result<FlagResponse, String> {
+    pub async fn stop_capture(&self, game_number: u64, tick: u64) -> Result<FlagResponse, String> {
         let bundle = self.review.lock().await.stop_capture(game_number, tick)?;
         let summary = bundle.summary.clone();
         self.review_store
@@ -218,7 +241,8 @@ impl V2RoundRobin {
 
             let mut state = mapgen::generate(&config);
             state.game_log = Some(GameLog::new());
-            let mut session = ObservationSession::new(state.players.len(), state.width * state.height);
+            let mut session =
+                ObservationSession::new(state.players.len(), state.width * state.height);
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let init = observation::initial_observation(&state, pid as u8);
                 agent.reset();
@@ -251,6 +275,7 @@ impl V2RoundRobin {
                 snapshot: full_snapshot,
             })
             .await;
+            self.broadcast_rr_status().await;
 
             let max_ticks: u64 = TIMEOUT_TICKS;
             let mut aborted = false;
@@ -295,6 +320,7 @@ impl V2RoundRobin {
                     snapshot: spectator::snapshot(&state),
                 })
                 .await;
+                self.broadcast_rr_status().await;
                 state.clear_dirty_hexes();
 
                 let compute_elapsed = tick_start.elapsed();
@@ -314,6 +340,7 @@ impl V2RoundRobin {
                     timed_out: sim::reached_timeout(&state, max_ticks),
                 })
                 .await;
+                self.broadcast_rr_status().await;
             } else {
                 info!("V2 RR game aborted (reset)");
             }

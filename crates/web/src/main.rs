@@ -657,21 +657,25 @@ async fn api_v2_rr_config(
         state.v2_rr.set_tick_ms(ms);
     }
     let _ = state.v2_rr.broadcast_config(body.tick_ms).await;
+    state.v2_rr.broadcast_rr_status().await;
     Json(serde_json::json!({"ok": true}))
 }
 
 async fn api_v2_rr_pause(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.v2_rr.pause();
+    state.v2_rr.broadcast_rr_status().await;
     Json(serde_json::json!({"ok": true, "paused": true}))
 }
 
 async fn api_v2_rr_resume(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.v2_rr.resume();
+    state.v2_rr.broadcast_rr_status().await;
     Json(serde_json::json!({"ok": true, "paused": false}))
 }
 
 async fn api_v2_rr_reset(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     state.v2_rr.reset();
+    state.v2_rr.broadcast_rr_status().await;
     Json(serde_json::json!({"ok": true, "reset": true}))
 }
 
@@ -695,16 +699,19 @@ async fn api_v2_rr_flag(
     axum::Json(body): axum::Json<V2RrFlagRequest>,
 ) -> impl IntoResponse {
     match state.v2_rr.flag_tick(body.game_number, body.tick).await {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "summary": result.summary,
-                "capturable_start_tick": result.capturable_start_tick,
-                "capturable_end_tick": result.capturable_end_tick,
-            })),
-        )
-            .into_response(),
+        Ok(result) => {
+            state.v2_rr.broadcast_rr_status().await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "summary": result.summary,
+                    "capturable_start_tick": result.capturable_start_tick,
+                    "capturable_end_tick": result.capturable_end_tick,
+                })),
+            )
+                .into_response()
+        }
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "ok": false, "error": err })),
@@ -718,16 +725,19 @@ async fn api_v2_rr_capture_start(
     axum::Json(body): axum::Json<V2RrFlagRequest>,
 ) -> impl IntoResponse {
     match state.v2_rr.start_capture(body.game_number, body.tick).await {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "summary": result.summary,
-                "capturable_start_tick": result.capturable_start_tick,
-                "capturable_end_tick": result.capturable_end_tick,
-            })),
-        )
-            .into_response(),
+        Ok(result) => {
+            state.v2_rr.broadcast_rr_status().await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "summary": result.summary,
+                    "capturable_start_tick": result.capturable_start_tick,
+                    "capturable_end_tick": result.capturable_end_tick,
+                })),
+            )
+                .into_response()
+        }
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "ok": false, "error": err })),
@@ -741,16 +751,19 @@ async fn api_v2_rr_capture_stop(
     axum::Json(body): axum::Json<V2RrFlagRequest>,
 ) -> impl IntoResponse {
     match state.v2_rr.stop_capture(body.game_number, body.tick).await {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "summary": result.summary,
-                "capturable_start_tick": result.capturable_start_tick,
-                "capturable_end_tick": result.capturable_end_tick,
-            })),
-        )
-            .into_response(),
+        Ok(result) => {
+            state.v2_rr.broadcast_rr_status().await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "summary": result.summary,
+                    "capturable_start_tick": result.capturable_start_tick,
+                    "capturable_end_tick": result.capturable_end_tick,
+                })),
+            )
+                .into_response()
+        }
         Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "ok": false, "error": err })),
@@ -908,8 +921,14 @@ async fn main() {
         .route("/api/v2/rr/resume", axum::routing::post(api_v2_rr_resume))
         .route("/api/v2/rr/reset", axum::routing::post(api_v2_rr_reset))
         .route("/api/v2/rr/flags", axum::routing::post(api_v2_rr_flag))
-        .route("/api/v2/rr/capture/start", axum::routing::post(api_v2_rr_capture_start))
-        .route("/api/v2/rr/capture/stop", axum::routing::post(api_v2_rr_capture_stop))
+        .route(
+            "/api/v2/rr/capture/start",
+            axum::routing::post(api_v2_rr_capture_start),
+        )
+        .route(
+            "/api/v2/rr/capture/stop",
+            axum::routing::post(api_v2_rr_capture_stop),
+        )
         .route("/api/v2/rr/reviews", get(api_v2_rr_reviews))
         .route(
             "/api/v2/rr/reviews/{id}",

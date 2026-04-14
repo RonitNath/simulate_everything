@@ -122,7 +122,8 @@ const V2App: Component = () => {
   const [reviewFrameIdx, setReviewFrameIdx] = createSignal(0);
   const [reviewLoading, setReviewLoading] = createSignal(false);
   const [flagError, setFlagError] = createSignal<string | null>(null);
-  const [hoveredHex, setHoveredHex] = createSignal<BoardHexHover | null>(null);
+  const [pendingHoverHex, setPendingHoverHex] = createSignal<BoardHexHover | null>(null);
+  const [resolvedHoverHex, setResolvedHoverHex] = createSignal<BoardHexHover | null>(null);
   const [layers, setLayers] = createSignal<Set<RenderLayer>>(
     new Set(["territory", "roads", "settlements", "convoys"]),
   );
@@ -140,12 +141,11 @@ const V2App: Component = () => {
 
   const toggleServerPause = () => {
     const endpoint = serverPaused() ? "/api/v2/rr/resume" : "/api/v2/rr/pause";
-    fetch(endpoint, { method: "POST" }).then(() => setServerPaused((p) => !p));
+    fetch(endpoint, { method: "POST" });
   };
 
   const restartGame = () => {
     fetch("/api/v2/rr/reset", { method: "POST" });
-    setServerPaused(false);
   };
 
   const refreshStatus = async () => {
@@ -351,6 +351,10 @@ const V2App: Component = () => {
               }
               return updated;
             });
+            // Tick-gated hover: promote pending hover on each live tick.
+            if (!reviewBundle()) {
+              setResolvedHoverHex(pendingHoverHex());
+            }
             break;
           }
           case "v2_game_end": {
@@ -386,6 +390,17 @@ const V2App: Component = () => {
             if (msg.tick_ms != null) setTickMs(msg.tick_ms);
             break;
           }
+          case "v2_rr_status": {
+            batch(() => {
+              setServerPaused(!!msg.paused);
+              if (msg.tick_ms != null) setTickMs(msg.tick_ms);
+              setLiveTick(msg.current_tick ?? null);
+              setCapturableStartTick(msg.capturable_start_tick ?? null);
+              setCapturableEndTick(msg.capturable_end_tick ?? null);
+              setActiveCapture(msg.active_capture ?? null);
+            });
+            break;
+          }
         }
       };
 
@@ -402,10 +417,8 @@ const V2App: Component = () => {
     }
 
     connect();
-    void refreshStatus();
     void refreshReviews();
     const poll = setInterval(() => {
-      void refreshStatus();
       void refreshReviews();
     }, 2000);
     onCleanup(() => {
@@ -583,7 +596,7 @@ const V2App: Component = () => {
   });
 
   const hoverInspector = createMemo(() => {
-    const hover = hoveredHex();
+    const hover = resolvedHoverHex();
     const frame = currentFrameData();
     const board = staticData();
     if (!hover || !frame || !board) return null;
@@ -930,8 +943,20 @@ const V2App: Component = () => {
               numPlayers={gameInfo()!.num_players}
               showNumbers={showNumbers()}
               layers={layers()}
-              hoveredHex={hoveredHex()}
-              onHoverHex={setHoveredHex}
+              hoveredHex={resolvedHoverHex()}
+              onHoverHex={(hex) => {
+                if (hex === null) {
+                  setPendingHoverHex(null);
+                  setResolvedHoverHex(null);
+                } else if (reviewBundle() || serverPaused()) {
+                  // Paused or review mode: resolve immediately.
+                  setPendingHoverHex(hex);
+                  setResolvedHoverHex(hex);
+                } else {
+                  // Live mode: buffer until next tick.
+                  setPendingHoverHex(hex);
+                }
+              }}
             />
           </div>
 

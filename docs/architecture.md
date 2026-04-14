@@ -317,10 +317,11 @@ All V2 WebSocket messages are JSON with a `type` discriminant. Defined in `crate
 | `v2_snapshot` | `tick`, `full_state`, `units`, `engagements`, `convoys`, `hex_changes`, `settlements`, `players` | Sent every tick. `full_state=false` frames carry only dynamic hex deltas plus full entity lists; reconnect catchup uses a `full_state=true` snapshot representing the current board. |
 | `v2_game_end` | `winner: Option<u8>`, `tick: u64`, `timed_out: bool` | Sent when the game ends. `winner` is the elimination winner or the score winner at timeout; `timed_out` distinguishes those cases. |
 | `v2_config` | `tick_ms?: u64` | Sent when tick speed changes. |
+| `v2_rr_status` | `game_number: u64`, `current_tick: u64`, `capturable_start_tick?: u64`, `capturable_end_tick?: u64`, `paused: bool`, `tick_ms: u64`, `active_capture?: ReviewBundleSummary` | Broadcast on tick, pause, resume, reset, config change, flag, and capture start/stop. Included in spectator catchup. Replaces the 2-second `/api/v2/rr/status` poll for live clients. |
 
 `v2_snapshot.players` uses compact HUD buckets instead of exact economy floats: `population`, `territory`, `food_level`, and `material_level`.
 
-Late-joining spectators receive a catchup burst of the last `v2_init` plus a `full_state=true` `v2_snapshot` before being subscribed to live deltas.
+Late-joining spectators receive a catchup burst of the last `v2_init`, a `full_state=true` `v2_snapshot`, and the current `v2_rr_status` before being subscribed to live deltas.
 
 ### V2 Round-Robin
 
