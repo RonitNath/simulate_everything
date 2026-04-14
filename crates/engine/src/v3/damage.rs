@@ -491,7 +491,9 @@ mod tests {
         // 1.5 < 2.0 → should deflect (but with transmitted force)
         let result = resolve_impact(&impact, &def);
         match result {
-            ImpactResult::Deflected { transmitted_force } => {
+            ImpactResult::Deflected {
+                transmitted_force, ..
+            } => {
                 assert!(
                     transmitted_force > 0.0,
                     "crush should transmit force on deflection"
@@ -598,10 +600,19 @@ mod tests {
         let result = resolve_impact(&impact, &def);
         match result {
             ImpactResult::Blocked { stamina_cost, .. } => {
-                // cost = KE * efficiency * height_mod = 1.0 * 0.3 * 1.0 = 0.3
+                let effectiveness = martial::block_effectiveness(
+                    BlockManeuver::HighGuard,
+                    impact.attack_motion,
+                    impact.height_diff,
+                );
+                let expected_cost = impact.kinetic_energy
+                    * 0.3
+                    * BLOCK_COST_SCALE
+                    * (1.1 - 0.45 * 1.0)
+                    * (1.3 - 0.75 * effectiveness);
                 assert!(
-                    (stamina_cost - 0.3).abs() < 0.01,
-                    "expected cost ~0.3, got {stamina_cost}"
+                    (stamina_cost - expected_cost).abs() < 0.0001,
+                    "expected cost {expected_cost}, got {stamina_cost}"
                 );
             }
             _ => panic!("should block with full stamina and wide arc"),
@@ -612,8 +623,18 @@ mod tests {
     fn block_with_insufficient_stamina_passes_through() {
         let (attacker, defender_id) = make_keys();
         let impact = sword_impact(attacker, PI);
+        let effectiveness = martial::block_effectiveness(
+            BlockManeuver::HighGuard,
+            impact.attack_motion,
+            impact.height_diff,
+        );
+        let block_cost = impact.kinetic_energy
+            * 0.3
+            * BLOCK_COST_SCALE
+            * (1.1 - 0.45 * 1.0)
+            * (1.3 - 0.75 * effectiveness);
         let mut vitals = Vitals::new();
-        vitals.stamina = 0.1; // not enough to block (cost would be 3.0)
+        vitals.stamina = block_cost * 0.5;
 
         let mut def = defender_with_armor(defender_id, &vitals, None);
         def.block = Some(BlockCapability {
@@ -642,7 +663,10 @@ mod tests {
         let def = defender_with_armor(defender_id, &vitals, Some(&armor));
 
         let result = resolve_impact(&impact, &def);
-        if let ImpactResult::Deflected { transmitted_force } = result {
+        if let ImpactResult::Deflected {
+            transmitted_force, ..
+        } = result
+        {
             assert!(
                 transmitted_force > STAGGER_FORCE_THRESHOLD,
                 "high-KE crush should transmit enough force for stagger"

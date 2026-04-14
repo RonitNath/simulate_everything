@@ -1,50 +1,60 @@
 # V3 Sequencing Graph
 
 Created: 2026-04-13
+Updated: 2026-04-14
 Source spec: `docs/specs/v3-entity-unification-2026-04-13.md` (revision 2)
 
-## Status: V3.0 Implementation Complete
+## Status: Partial Integration
 
-All 25 work items across 5 waves shipped. R5 deferred from V3.0 scope.
+V3 is substantial, but it is not fully integrated end-to-end in the shared engine/runtime.
+
+Current baseline after the `v3-shared-exec` pass:
+- shared V3 command application now lives in the engine and is reused by `v3bench`
+- `v3bench` is no longer the primary owner of V3 command mutation logic
+- the shared sim tick still does not execute agent commands
+- the V3 RR loop still validates commands and drops them
+- protocol/perception/economy coverage still contains placeholders and module-only landings
+
+Companion docs:
+- [V3 Engine Audit](../v3-engine-audit-2026-04-14.md)
+- [V3 Capability Matrix](../v3-capability-matrix.md)
+
+## Wave Status
 
 | Wave | Items | Status |
 |------|-------|--------|
-| 0 | S1, S2, D1, W1, R1 | Done |
-| 1 | M1, D2, W2, A1, R2 | Done |
-| 2 | M2, W3, A2, E1, P1 | Done |
-| 3 | A3, A4, A5, E2, P2, R3, R4 | Done |
-| 4 | P3, P4 | Done |
+| 0 | S1, S2, D1, W1, R1 | Landed |
+| 1 | M1, D2, W2, A1, R2 | Landed with integration gaps |
+| 2 | M2, W3, A2, E1, P1 | Partial |
+| 3 | A3, A4, A5, E2, P2, R3, R4 | Partial |
+| 4 | P3, P4 | Partial |
 | 4 | R5 | Deferred from V3.0 |
 
-Additional deliverables (not in original sequencing):
-- V3 bench CLI with interestingness scoring, matchup matrix
-- Arena duel mode (null-vs-striker, mutual combat)
-- Melee approach steering, idle drift fix, threat detection
-- FormStack command execution
+Additional deliverables outside the original sequencing continue to evolve independently and should not be used as evidence that the original V3 spec is complete.
 
-## Open Items (post V3.0 scope)
+## Open Integration Work
 
-- **Arena replay capture** — write V3Snapshot JSONL from CLI for renderer playback
-- **Territory overlay** — renderer waiting on engine territory implementation
-- **Inspector panel** — click-selected entity detail (SolidJS component)
-- **Tooltip enhancement** — entity details on hover
-- **R5** — chunk textures, isometric toggle, contour lines
+- Wire the shared command executor into `crates/engine/src/v3/sim.rs`
+- Route V3 RR/live execution through the same engine-owned command path
+- Replace placeholder perception/protocol fields with engine-derived state
+- Finish movement/pathfinding/formation integration in the live tick
+- Reconcile bench-only economy adapters with shared engine systems
 
-## Domain Decomposition
+## Domain Snapshot
 
-Seven independent design domains, all specs complete.
+| Domain | Spec File | Current Status |
+|--------|-----------|----------------|
+| **S — Spatial** | `docs/specs/v3-S-spatial.md` | Strong primitive landing; selective runtime integration |
+| **M — Movement** | `docs/specs/v3-M-movement.md` | Partial |
+| **D — Damage** | `docs/specs/v3-D-damage.md` | Landed |
+| **W — Weapons** | `docs/specs/v3-W-weapons.md` | Partial |
+| **A — Agents** | `docs/specs/v3-A-agents.md` | Partial |
+| **R — Renderer** | `docs/specs/v3-R-renderer.md` | R1-R4 partial, R5 deferred |
+| **P — Protocol** | `docs/specs/v3-P-protocol.md` | Partial |
 
-| Domain | Spec File | Status |
-|--------|-----------|--------|
-| **S — Spatial** | `docs/specs/v3-S-spatial.md` | Done |
-| **M — Movement** | `docs/specs/v3-M-movement.md` | Done |
-| **D — Damage** | `docs/specs/v3-D-damage.md` | Done |
-| **W — Weapons** | `docs/specs/v3-W-weapons.md` | Done |
-| **A — Agents** | `docs/specs/v3-A-agents.md` | Done |
-| **R — Renderer** | `docs/specs/v3-R-renderer.md` | R1-R4 done, R5 deferred |
-| **P — Protocol** | `docs/specs/v3-P-protocol.md` | Done |
+## Sequencing Reference
 
-## Implementation Sequencing (reference)
+The original sequencing remains useful as a dependency map, but its completion state must be read through the audit and capability matrix rather than as a shipped-status claim.
 
 ```
 WAVE 0 (foundations, parallel)
