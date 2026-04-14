@@ -23,7 +23,7 @@ use lobby::{Lobby, TurnSubmission};
 use protocol::{AgentToServer, ServerToAgent, SpectatorToServer};
 use rand::{SeedableRng, rngs::StdRng};
 use roundrobin::RoundRobin;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use simulate_everything_engine::{
     agent::Agent,
     game::Game,
@@ -32,8 +32,11 @@ use simulate_everything_engine::{
     scoreboard::Scoreboard,
     v2,
 };
+use std::fs;
+use std::path::PathBuf;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 use tokio::sync::{Mutex, broadcast};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
@@ -641,6 +644,84 @@ async fn v3_replay_page(State(state): State<Arc<AppState>>) -> impl IntoResponse
     )
 }
 
+#[derive(Debug, Serialize)]
+struct ReplayFileEntry {
+    name: String,
+    path: String,
+    size_bytes: u64,
+    modified_unix_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayFileQuery {
+    path: String,
+}
+
+async fn api_v3_replay_files() -> Result<Json<Vec<ReplayFileEntry>>, StatusCode> {
+    let mut entries = Vec::new();
+
+    for root in replay_search_roots() {
+        let Ok(read_dir) = fs::read_dir(&root) else {
+            continue;
+        };
+        for item in read_dir.flatten() {
+            let path = item.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(metadata) = item.metadata() else {
+                continue;
+            };
+            if !metadata.is_file() {
+                continue;
+            }
+            let modified_unix_ms = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            entries.push(ReplayFileEntry {
+                name: path.file_name().and_then(|s| s.to_str()).unwrap_or("unknown").to_string(),
+                path: path.to_string_lossy().to_string(),
+                size_bytes: metadata.len(),
+                modified_unix_ms,
+            });
+        }
+    }
+
+    entries.sort_by(|a, b| {
+        b.modified_unix_ms
+            .cmp(&a.modified_unix_ms)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(Json(entries))
+}
+
+async fn api_v3_replay_file(
+    Query(query): Query<ReplayFileQuery>,
+) -> Result<(StatusCode, String), StatusCode> {
+    let requested = PathBuf::from(&query.path);
+    let canonical = requested.canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
+    if !replay_search_roots()
+        .iter()
+        .any(|root| canonical.starts_with(root))
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let body = fs::read_to_string(&canonical).map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok((StatusCode::OK, body))
+}
+
+fn replay_search_roots() -> Vec<PathBuf> {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    vec![PathBuf::from("/tmp"), repo_root.join("var")]
+}
+
 async fn ws_v2_rr(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let rx = state.v2_rr.spectator_subscribe();
     let catchup = state.v2_rr.spectator_catchup().await;
@@ -1204,6 +1285,8 @@ async fn main() {
         // V3 RR routes
         .route("/v3/rr", get(v3_rr_page))
         .route("/v3/replay", get(v3_replay_page))
+        .route("/api/v3/replay/files", get(api_v3_replay_files))
+        .route("/api/v3/replay/file", get(api_v3_replay_file))
         .route("/ws/v3/rr", get(ws_v3_rr))
         .route("/api/v3/rr/config", axum::routing::post(api_v3_rr_config))
         .route("/api/v3/rr/pause", axum::routing::post(api_v3_rr_pause))

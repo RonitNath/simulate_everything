@@ -17,6 +17,7 @@ interface PlaybackControlsProps {
   onServerResume: () => void;
   onReset: () => void;
   onResync: () => void;
+  showServerControls?: boolean;
 }
 
 const SPEED_PRESETS = [
@@ -78,31 +79,33 @@ const PlaybackControls: Component<PlaybackControlsProps> = (props) => {
         ))}
       </div>
 
-      <div class={css.v3Controls}>
-        <button
-          class={css.v3Btn}
-          onClick={() =>
-            props.serverPaused ? props.onServerResume() : props.onServerPause()
-          }
-          title={props.serverPaused ? "Resume server" : "Pause server"}
-        >
-          {props.serverPaused ? "SRV \u25B6" : "SRV ||"}
-        </button>
-        <button
-          class={css.v3Btn}
-          onClick={() => props.onReset()}
-          title="Reset game"
-        >
-          RST
-        </button>
-        <button
-          class={css.v3Btn}
-          onClick={() => props.onResync()}
-          title="Resync: reconnect WebSocket for fresh full snapshot"
-        >
-          SYNC
-        </button>
-      </div>
+      {props.showServerControls !== false && (
+        <div class={css.v3Controls}>
+          <button
+            class={css.v3Btn}
+            onClick={() =>
+              props.serverPaused ? props.onServerResume() : props.onServerPause()
+            }
+            title={props.serverPaused ? "Resume server" : "Pause server"}
+          >
+            {props.serverPaused ? "SRV \u25B6" : "SRV ||"}
+          </button>
+          <button
+            class={css.v3Btn}
+            onClick={() => props.onReset()}
+            title="Reset game"
+          >
+            RST
+          </button>
+          <button
+            class={css.v3Btn}
+            onClick={() => props.onResync()}
+            title="Resync: reconnect WebSocket for fresh full snapshot"
+          >
+            SYNC
+          </button>
+        </div>
+      )}
     </div>
   );
 };
