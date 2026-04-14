@@ -821,24 +821,24 @@ async fn main() {
         )
         .init();
 
-    let static_dir = std::env::var("GENERALS_STATIC_DIR").unwrap_or_else(|_| {
+    let static_dir = std::env::var("SIMEV_STATIC_DIR").unwrap_or_else(|_| {
         let manifest = env!("CARGO_MANIFEST_DIR");
         format!("{}/../../frontend/dist", manifest)
     });
 
-    let num_players: u8 = std::env::var("GENERALS_PLAYERS")
+    let num_players: u8 = std::env::var("SIMEV_PLAYERS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);
-    let tick_ms: u64 = std::env::var("GENERALS_TICK_MS")
+    let tick_ms: u64 = std::env::var("SIMEV_TICK_MS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(250);
-    let seed: u64 = std::env::var("GENERALS_SEED")
+    let seed: u64 = std::env::var("SIMEV_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(42);
-    let review_dir = std::env::var("GENERALS_V2_RR_REVIEW_DIR").unwrap_or_else(|_| {
+    let review_dir = std::env::var("SIMEV_V2_RR_REVIEW_DIR").unwrap_or_else(|_| {
         let manifest = env!("CARGO_MANIFEST_DIR");
         format!("{}/../../var/v2_rr_reviews", manifest)
     });
@@ -919,14 +919,14 @@ async fn main() {
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 
-    let bind_addr: std::net::IpAddr = std::env::var("GENERALS_BIND_ADDR")
+    let bind_addr: std::net::IpAddr = std::env::var("SIMEV_BIND_ADDR")
         .unwrap_or_else(|_| "0.0.0.0".into())
         .parse()
-        .expect("GENERALS_BIND_ADDR must be a valid IP address");
-    let bind_port: u16 = std::env::var("GENERALS_PORT")
+        .expect("SIMEV_BIND_ADDR must be a valid IP address");
+    let bind_port: u16 = std::env::var("SIMEV_PORT")
         .unwrap_or_else(|_| "3333".into())
         .parse()
-        .expect("GENERALS_PORT must be a valid port number");
+        .expect("SIMEV_PORT must be a valid port number");
     let addr = SocketAddr::from((bind_addr, bind_port));
     info!("Listening on http://{}", addr);
 

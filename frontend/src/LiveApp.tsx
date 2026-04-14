@@ -199,7 +199,7 @@ const LiveApp: Component = () => {
   return (
     <div class={styles.app}>
       <div class={styles.header}>
-        <span class={styles.title}>Generals</span>
+        <span class={styles.title}>Simulate Everything</span>
         <Nav />
         <span style={{ "font-size": "12px", color: "#8888a0" }}>
           <Show when={gameInfo()}>

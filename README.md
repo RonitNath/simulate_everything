@@ -48,7 +48,7 @@ npm run build
 Run the web app:
 
 ```bash
-GENERALS_STATIC_DIR=$PWD/frontend/dist cargo run -p simulate-everything-web
+SIMEV_STATIC_DIR=$PWD/frontend/dist cargo run -p simulate-everything-web
 ```
 
 The server listens on `127.0.0.1:3333` by default.
@@ -97,10 +97,10 @@ The binary name is `simulate_everything_cli`.
 
 The Axum server exposes simulator, live, tournament, and replay APIs.
 
-Start it with the built frontend available at `GENERALS_STATIC_DIR`:
+Start it with the built frontend available at `SIMEV_STATIC_DIR`:
 
 ```bash
-GENERALS_STATIC_DIR=$PWD/frontend/dist cargo run -p simulate-everything-web
+SIMEV_STATIC_DIR=$PWD/frontend/dist cargo run -p simulate-everything-web
 ```
 
 Key HTTP endpoints:
@@ -115,13 +115,13 @@ Key HTTP endpoints:
 
 Key environment variables:
 
-- `GENERALS_STATIC_DIR` path to `frontend/dist`
-- `GENERALS_BIND_ADDR` bind address, default `127.0.0.1`
-- `GENERALS_PORT` listen port, default `3333`
-- `GENERALS_PLAYERS` live lobby size, default `2`
-- `GENERALS_TICK_MS` live tick speed, default `250`
-- `GENERALS_SEED` initial live-game seed, default `42`
-- `GENERALS_PYTHON_CLIENT` path used by the subprocess bridge agent
+- `SIMEV_STATIC_DIR` path to `frontend/dist`
+- `SIMEV_BIND_ADDR` bind address, default `127.0.0.1`
+- `SIMEV_PORT` listen port, default `3333`
+- `SIMEV_PLAYERS` live lobby size, default `2`
+- `SIMEV_TICK_MS` live tick speed, default `250`
+- `SIMEV_SEED` initial live-game seed, default `42`
+- `SIMEV_PYTHON_CLIENT` path used by the subprocess bridge agent
 - `RUST_LOG` tracing level
 
 The binary name is `simulate_everything`.
@@ -171,7 +171,7 @@ Named agents available through `--agents` and `agent_by_name(...)`:
 - `pressure`
 - `random`
 
-The simulator shuffles from `all_builtin_agents()`, which adds the Python-backed `graph-search` subprocess agent when `GENERALS_PYTHON_CLIENT` is set. The round-robin pool is a curated subset: `expander`, `swarm`, and `pressure`.
+The simulator shuffles from `all_builtin_agents()`, which adds the Python-backed `graph-search` subprocess agent when `SIMEV_PYTHON_CLIENT` is set. The round-robin pool is a curated subset: `expander`, `swarm`, and `pressure`.
 
 ## API Notes
 

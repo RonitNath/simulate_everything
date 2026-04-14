@@ -1,4 +1,4 @@
-# generals — Claude Code Context
+# simulate_everything — Claude Code Context
 
 ## Critical: Server process management
 
@@ -54,13 +54,13 @@ docs/            — detailed documentation
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GENERALS_BIND_ADDR` | `0.0.0.0` | IP address to bind the server to |
-| `GENERALS_PORT` | `3333` | Port to listen on |
-| `GENERALS_STATIC_DIR` | `frontend/dist` | Path to built frontend assets |
-| `GENERALS_PLAYERS` | (varies) | Number of players |
-| `GENERALS_TICK_MS` | (varies) | Tick interval in milliseconds |
-| `GENERALS_SEED` | (random) | RNG seed |
-| `GENERALS_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Directory for persisted flagged V2 RR review bundles |
+| `SIMEV_BIND_ADDR` | `0.0.0.0` | IP address to bind the server to |
+| `SIMEV_PORT` | `3333` | Port to listen on |
+| `SIMEV_STATIC_DIR` | `frontend/dist` | Path to built frontend assets |
+| `SIMEV_PLAYERS` | (varies) | Number of players |
+| `SIMEV_TICK_MS` | (varies) | Tick interval in milliseconds |
+| `SIMEV_SEED` | (random) | RNG seed |
+| `SIMEV_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Directory for persisted flagged V2 RR review bundles |
 | `RUST_LOG` | `info` | Tracing filter (e.g. `simulate_everything_engine::v2=debug`) |
 
 ## Commits and docs hygiene

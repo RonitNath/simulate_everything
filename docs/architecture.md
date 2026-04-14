@@ -19,7 +19,7 @@ WebSocket-based multiplayer. External agents connect, spectators watch.
 - `ws /ws/spectate` — Spectator stream
 - `POST /api/live/config` — `{"tick_ms": N, "show_numbers": bool}`
 
-Lobby waits for N players (env `GENERALS_PLAYERS`, default 2). Auto-rematches. Frontend: `LiveApp.tsx` with `__WS_PATH__="/ws/spectate"`.
+Lobby waits for N players (env `SIMEV_PLAYERS`, default 2). Auto-rematches. Frontend: `LiveApp.tsx` with `__WS_PATH__="/ws/spectate"`.
 
 ### Round-Robin
 Continuous automated tournament. Built-in agents play 1v1 on 23x23 maps.
@@ -66,7 +66,7 @@ Implement `trait Agent: Send` with `act(&mut self, obs: &Observation, rng: &mut 
 | ExpanderAgent | expander-v2 | Economy-first with phase transitions (Expand→Pressure→Strike), city-obsessed, FOW memory, 25% frontier attack axis |
 | SwarmAgent | swarm-v3 | Marching-column agent: expand early, then biggest stack marches toward enemy while frontier keeps expanding, FOW memory |
 | PressureAgent | pressure-v3 | Role-based single-objective focus, FOW memory, marauder interception |
-| SubprocessAgent | graph-search-v1 | Bridges to Python process via stdin/stdout (env `GENERALS_PYTHON_CLIENT`) |
+| SubprocessAgent | graph-search-v1 | Bridges to Python process via stdin/stdout (env `SIMEV_PYTHON_CLIENT`) |
 
 Two pools: `all_builtin_agents()` (simulator, includes all + Python) and `rr_agents()` (round-robin, curated subset).
 
@@ -183,12 +183,12 @@ SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on de
 ## Environment Variables
 | Var | Default | Used by |
 |-----|---------|---------|
-| `GENERALS_PLAYERS` | 2 | Live lobby size |
-| `GENERALS_TICK_MS` | 250 | Live tick speed |
-| `GENERALS_SEED` | 42 | Live first game seed |
-| `GENERALS_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Persisted flagged V2 RR review bundles |
-| `GENERALS_STATIC_DIR` | — | Path to `frontend/dist/` |
-| `GENERALS_PYTHON_CLIENT` | — | Path to Python agent dir |
+| `SIMEV_PLAYERS` | 2 | Live lobby size |
+| `SIMEV_TICK_MS` | 250 | Live tick speed |
+| `SIMEV_SEED` | 42 | Live first game seed |
+| `SIMEV_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Persisted flagged V2 RR review bundles |
+| `SIMEV_STATIC_DIR` | — | Path to `frontend/dist/` |
+| `SIMEV_PYTHON_CLIENT` | — | Path to Python agent dir |
 | `RUST_LOG` | — | Tracing level |
 
 ---

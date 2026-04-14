@@ -13,9 +13,9 @@ ExecStartPre=/bin/bash -lc "cargo build --release --bin simulate_everything"
 
 ExecStart=/path/to/simulate_everything/target/release/simulate_everything
 
-Environment=GENERALS_STATIC_DIR=/path/to/simulate_everything/frontend/dist
-Environment=GENERALS_BIND_ADDR=0.0.0.0
-Environment=GENERALS_PORT=3333
+Environment=SIMEV_STATIC_DIR=/path/to/simulate_everything/frontend/dist
+Environment=SIMEV_BIND_ADDR=0.0.0.0
+Environment=SIMEV_PORT=3333
 Environment=RUST_LOG=info
 
 Restart=on-failure

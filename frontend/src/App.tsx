@@ -98,7 +98,7 @@ const App: Component = () => {
   return (
     <div class={styles.app}>
       <div class={styles.header}>
-        <span class={styles.title}>Generals</span>
+        <span class={styles.title}>Simulate Everything</span>
         <Nav />
       </div>
 

@@ -123,7 +123,7 @@ pub trait Agent: Send {
 }
 
 /// Returns all built-in agents (one instance of each).
-/// If GENERALS_PYTHON_CLIENT is set, also includes the Python graph search agent.
+/// If SIMEV_PYTHON_CLIENT is set, also includes the Python graph search agent.
 pub fn all_builtin_agents() -> Vec<Box<dyn Agent>> {
     let mut agents: Vec<Box<dyn Agent>> = vec![
         Box::new(crate::expander_agent::ExpanderAgent::new()),
@@ -131,7 +131,7 @@ pub fn all_builtin_agents() -> Vec<Box<dyn Agent>> {
         Box::new(crate::pressure_agent::PressureAgent::new()),
     ];
 
-    if let Ok(client_dir) = std::env::var("GENERALS_PYTHON_CLIENT") {
+    if let Ok(client_dir) = std::env::var("SIMEV_PYTHON_CLIENT") {
         agents.push(Box::new(crate::subprocess_agent::SubprocessAgent::new(
             "graph-search",
             "python3",

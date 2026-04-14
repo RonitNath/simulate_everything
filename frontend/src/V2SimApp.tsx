@@ -158,7 +158,7 @@ const V2SimApp: Component = () => {
   return (
     <div class={styles.app}>
       <div class={styles.header}>
-        <span class={styles.title}>Generals V2</span>
+        <span class={styles.title}>Simulate Everything</span>
         <Nav />
       </div>
 
