@@ -4,6 +4,7 @@ mod roundrobin;
 mod v2_protocol;
 mod v2_roundrobin;
 mod v2_rr_review;
+mod v3_protocol;
 
 use askama::Template;
 use axum::{
