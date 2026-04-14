@@ -286,6 +286,16 @@ fn init_bench_state(width: usize, height: usize, num_players: u8, seed: u64) -> 
     mapgen::generate_economy_ready(width, height, num_players, seed)
 }
 
+fn apply_combat_learning(
+    state: &GameState,
+    agents: &mut [LayeredAgent],
+    observations: &[CombatObservation],
+) {
+    for agent in agents {
+        agent.observe_combat(state, observations);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared types
 // ---------------------------------------------------------------------------
@@ -1053,6 +1063,8 @@ fn run_profile_game(
         let t0 = Instant::now();
         let result = sim::tick(&mut state, 1.0);
         let sim_us = t0.elapsed().as_micros() as u64;
+        let combat_observations = state.combat_log.drain();
+        apply_combat_learning(&state, &mut agents, &combat_observations);
 
         let tp = V3TickProfile {
             tick: state.tick,
@@ -1464,6 +1476,8 @@ fn run_ascii_game(
 
         let _phase = sim::run_agent_phase(&mut state, &mut agents);
         sim::tick(&mut state, 1.0);
+        let combat_observations = state.combat_log.drain();
+        apply_combat_learning(&state, &mut agents, &combat_observations);
     }
 
     print_ascii(&state);
@@ -1544,6 +1558,8 @@ fn run_bench_game(
         sim::apply_agent_outputs(&mut state, &outputs);
 
         let tick_result = sim::tick(&mut state, 1.0);
+        let combat_observations = state.combat_log.drain();
+        apply_combat_learning(&state, &mut agents, &combat_observations);
         total_deaths += tick_result.deaths;
         tick_count += 1;
 
@@ -2677,6 +2693,7 @@ fn simulate_arena_variant(
             &mut state,
             &side_a.members,
             &side_b.members,
+            Vec::new(),
         ));
     }
 
@@ -2690,14 +2707,15 @@ fn simulate_arena_variant(
         let _phase = sim::run_agent_phase(&mut state, &mut agents);
 
         let _ = sim::tick(&mut state, 1.0);
+        let combat_observations = state.combat_log.drain();
+        apply_combat_learning(&state, &mut agents, &combat_observations);
         if capture_timeline {
             timeline.push(record_arena_frame(
                 &mut state,
                 &side_a.members,
                 &side_b.members,
+                combat_observations,
             ));
-        } else {
-            let _ = state.combat_log.drain();
         }
     }
 
@@ -2786,6 +2804,7 @@ fn record_arena_frame(
     state: &mut GameState,
     side_a_members: &[EntityKey],
     side_b_members: &[EntityKey],
+    combat_log: Vec<CombatObservation>,
 ) -> ArenaTimelineFrame {
     ArenaTimelineFrame {
         tick: state.tick,
@@ -2793,7 +2812,7 @@ fn record_arena_frame(
         side_a: summarize_arena_side(state, side_a_members),
         side_b: summarize_arena_side(state, side_b_members),
         soldiers: collect_arena_units(state, side_a_members, side_b_members),
-        combat_log: state.combat_log.drain(),
+        combat_log,
     }
 }
 

@@ -8,7 +8,8 @@ use super::agent::{
     StrategicDirective,
 };
 use super::armor::{ArmorConstruction, DamageType, MaterialType};
-use super::damage_table::{DamageEstimateTable, MatchupKey};
+use super::combat_log::CombatObservation;
+use super::damage_table::{DamageEstimateTable, MatchupKey, observation_to_matchup};
 use super::state::{GameState, Role, Stack};
 use crate::v2::hex::Axial;
 use crate::v2::state::EntityKey;
@@ -331,6 +332,25 @@ impl OperationsLayer for SharedOperationsLayer {
             });
         }
         commands
+    }
+
+    fn observe_combat(
+        &mut self,
+        state: &GameState,
+        player: u8,
+        observations: &[CombatObservation],
+    ) {
+        for obs in observations {
+            let participated = [obs.attacker, obs.defender]
+                .into_iter()
+                .any(|key| state.entities.get(key).and_then(|entity| entity.owner) == Some(player));
+            if !participated {
+                continue;
+            }
+            if let Some(matchup) = observation_to_matchup(obs) {
+                self.damage_table.observe(matchup);
+            }
+        }
     }
 }
 

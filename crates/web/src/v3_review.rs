@@ -750,13 +750,23 @@ pub async fn list_all_bundles(var_dir: &Path, rr_review_dir: &Path) -> Vec<Bundl
             if !dir_name.starts_with("v3behavior_") {
                 continue;
             }
-            if !entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+            if !entry
+                .file_type()
+                .await
+                .map(|ft| ft.is_dir())
+                .unwrap_or(false)
+            {
                 continue;
             }
             let category = dir_name.to_string();
             if let Ok(mut scenarios) = tokio::fs::read_dir(entry.path()).await {
                 while let Some(scenario) = scenarios.next_entry().await.ok().flatten() {
-                    if !scenario.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+                    if !scenario
+                        .file_type()
+                        .await
+                        .map(|ft| ft.is_dir())
+                        .unwrap_or(false)
+                    {
                         continue;
                     }
                     let scenario_path = scenario.path();
@@ -778,13 +788,23 @@ pub async fn list_all_bundles(var_dir: &Path, rr_review_dir: &Path) -> Vec<Bundl
     if rr_review_dir.exists() {
         if let Ok(mut game_dirs) = tokio::fs::read_dir(rr_review_dir).await {
             while let Some(game_entry) = game_dirs.next_entry().await.ok().flatten() {
-                if !game_entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+                if !game_entry
+                    .file_type()
+                    .await
+                    .map(|ft| ft.is_dir())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 let game_name = game_entry.file_name().to_string_lossy().to_string();
                 if let Ok(mut flag_dirs) = tokio::fs::read_dir(game_entry.path()).await {
                     while let Some(flag_entry) = flag_dirs.next_entry().await.ok().flatten() {
-                        if !flag_entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+                        if !flag_entry
+                            .file_type()
+                            .await
+                            .map(|ft| ft.is_dir())
+                            .unwrap_or(false)
+                        {
                             continue;
                         }
                         let flag_path = flag_entry.path();

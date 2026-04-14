@@ -4,40 +4,137 @@ use simulate_everything_engine::v3::spatial::Vec2;
 use simulate_everything_engine::v3::state::GameState;
 use simulate_everything_engine::v3::terrain_ops::{TerrainOp, terrain_raster_spec};
 use std::path::Path;
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
 
-pub const DEFAULT_RENDER_SIZE: u32 = 1024;
+pub const DEFAULT_RENDER_SIZE: u32 = 960;
+const TERRAIN_CELL_SIZE: f32 = 16.0;
 
-pub fn render_snapshot_png(
-    state: &GameState,
-    snapshot: &BehaviorSnapshot,
-    path: &Path,
-    size: u32,
-) -> Result<(), String> {
-    let mut pixmap =
-        Pixmap::new(size, size).ok_or_else(|| "failed to allocate pixmap".to_string())?;
-    pixmap.fill(Color::from_rgba8(242, 238, 229, 255));
-
-    render_terrain(state, &mut pixmap);
-    render_terrain_ops(state, &mut pixmap);
-    render_entities(snapshot, &mut pixmap);
-    draw_text(
-        &mut pixmap,
-        12,
-        12,
-        &format!("tick {}", snapshot.tick),
-        Color::from_rgba8(32, 32, 32, 255),
-        2,
-    );
-
-    pixmap
-        .save_png(path)
-        .map_err(|err| format!("save_png failed: {}", err))
+#[derive(Debug, Clone, Copy)]
+struct Projection {
+    origin: Vec2,
+    width: f32,
+    height: f32,
+    canvas_size: u32,
 }
 
-fn render_terrain(state: &GameState, pixmap: &mut Pixmap) {
-    let spec = terrain_raster_spec(state.map_width, state.map_height, 16.0);
+impl Projection {
+    fn for_map(map_width: usize, map_height: usize, canvas_size: u32) -> Self {
+        let spec = terrain_raster_spec(map_width, map_height, TERRAIN_CELL_SIZE);
+        Self {
+            origin: spec.origin,
+            width: (spec.width as f32 * spec.cell_size).max(1.0),
+            height: (spec.height as f32 * spec.cell_size).max(1.0),
+            canvas_size,
+        }
+    }
+
+    fn project(&self, x: f32, y: f32) -> (f32, f32) {
+        let nx = ((x - self.origin.x) / self.width).clamp(0.0, 1.0);
+        let ny = ((y - self.origin.y) / self.height).clamp(0.0, 1.0);
+        (nx * self.canvas_size as f32, ny * self.canvas_size as f32)
+    }
+}
+
+fn background_color() -> Color {
+    Color::from_rgba8(242, 238, 229, 255)
+}
+
+pub struct CachedRenderer {
+    size: u32,
+    terrain_background: Option<Pixmap>,
+    terrain_ops_revision: Option<u64>,
+    terrain_ops_overlay: Option<Pixmap>,
+}
+
+impl CachedRenderer {
+    pub fn new(size: u32) -> Self {
+        Self {
+            size,
+            terrain_background: None,
+            terrain_ops_revision: None,
+            terrain_ops_overlay: None,
+        }
+    }
+
+    pub fn render_snapshot_png(
+        &mut self,
+        state: &GameState,
+        snapshot: &BehaviorSnapshot,
+        path: &Path,
+    ) -> Result<(), String> {
+        let projection = Projection::for_map(state.map_width, state.map_height, self.size);
+        let terrain_revision = state.terrain_ops.revision();
+        if self.terrain_background.is_none() {
+            self.terrain_background = Some(render_terrain_background(state, self.size)?);
+        }
+        if self.terrain_ops_revision != Some(terrain_revision) || self.terrain_ops_overlay.is_none()
+        {
+            self.terrain_ops_overlay =
+                Some(render_terrain_ops_overlay(state, self.size, projection)?);
+            self.terrain_ops_revision = Some(terrain_revision);
+        }
+
+        let mut frame = Pixmap::new(self.size, self.size)
+            .ok_or_else(|| "failed to allocate pixmap".to_string())?;
+        frame.fill(background_color());
+        if let Some(background) = &self.terrain_background {
+            frame.draw_pixmap(
+                0,
+                0,
+                background.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+        }
+        if let Some(terrain_ops) = &self.terrain_ops_overlay {
+            frame.draw_pixmap(
+                0,
+                0,
+                terrain_ops.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+        }
+
+        let overlay = render_entities_overlay(snapshot, self.size, projection)?;
+        frame.draw_pixmap(
+            0,
+            0,
+            overlay.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+        draw_text(
+            &mut frame,
+            12,
+            12,
+            &format!("tick {}", snapshot.tick),
+            Color::from_rgba8(32, 32, 32, 255),
+            2,
+        );
+
+        frame
+            .save_png(path)
+            .map_err(|err| format!("save_png failed: {}", err))
+    }
+}
+
+fn render_terrain_background(state: &GameState, size: u32) -> Result<Pixmap, String> {
+    let mut pixmap =
+        Pixmap::new(size, size).ok_or_else(|| "failed to allocate pixmap".to_string())?;
+    pixmap.fill(background_color());
+
+    let spec = terrain_raster_spec(state.map_width, state.map_height, TERRAIN_CELL_SIZE);
     let mut paint = Paint::default();
+    let px_w = (pixmap.width() as f32 / spec.width.max(1) as f32)
+        .ceil()
+        .max(1.0);
+    let px_h = (pixmap.height() as f32 / spec.height.max(1) as f32)
+        .ceil()
+        .max(1.0);
     for y in 0..spec.height {
         for x in 0..spec.width {
             let world = Vec2::new(
@@ -52,24 +149,51 @@ fn render_terrain(state: &GameState, pixmap: &mut Pixmap) {
             );
             let shade = (((h + 20.0) / 40.0).clamp(0.0, 1.0) * 255.0) as u8;
             paint.set_color(Color::from_rgba8(shade, shade, shade, 255));
-            let px = (x as f32 / spec.width as f32) * pixmap.width() as f32;
-            let py = (y as f32 / spec.height as f32) * pixmap.height() as f32;
-            let pw = (pixmap.width() as f32 / spec.width as f32).ceil();
-            let ph = (pixmap.height() as f32 / spec.height as f32).ceil();
-            let rect = tiny_skia::Rect::from_xywh(px, py, pw, ph).unwrap();
+            let px = (x as f32 / spec.width.max(1) as f32) * pixmap.width() as f32;
+            let py = (y as f32 / spec.height.max(1) as f32) * pixmap.height() as f32;
+            let rect = tiny_skia::Rect::from_xywh(px, py, px_w, px_h).unwrap();
             pixmap.fill_rect(rect, &paint, Transform::identity(), None);
         }
     }
+    Ok(pixmap)
 }
 
-fn render_terrain_ops(state: &GameState, pixmap: &mut Pixmap) {
+fn render_terrain_ops_overlay(
+    state: &GameState,
+    size: u32,
+    projection: Projection,
+) -> Result<Pixmap, String> {
+    let mut pixmap =
+        Pixmap::new(size, size).ok_or_else(|| "failed to allocate pixmap".to_string())?;
+    render_terrain_ops(state, &mut pixmap, projection);
+    Ok(pixmap)
+}
+
+fn render_entities_overlay(
+    snapshot: &BehaviorSnapshot,
+    size: u32,
+    projection: Projection,
+) -> Result<Pixmap, String> {
+    let mut pixmap =
+        Pixmap::new(size, size).ok_or_else(|| "failed to allocate pixmap".to_string())?;
+    render_entities(snapshot, &mut pixmap, projection);
+    Ok(pixmap)
+}
+
+fn render_terrain_ops(state: &GameState, pixmap: &mut Pixmap, projection: Projection) {
     for row in 0..state.map_height as i32 {
         for col in 0..state.map_width as i32 {
             let hex = simulate_everything_engine::v2::hex::offset_to_axial(row, col);
             for op in state.terrain_ops.ops_for_hex(hex) {
                 match op {
                     TerrainOp::Road { points, .. } if points.len() >= 2 => {
-                        draw_polyline(pixmap, points, Color::from_rgba8(110, 110, 110, 220), 3.0);
+                        draw_polyline(
+                            pixmap,
+                            points,
+                            Color::from_rgba8(110, 110, 110, 220),
+                            3.0,
+                            projection,
+                        );
                     }
                     TerrainOp::Ditch { start, end, .. } => {
                         draw_segment(
@@ -78,6 +202,7 @@ fn render_terrain_ops(state: &GameState, pixmap: &mut Pixmap) {
                             *end,
                             Color::from_rgba8(70, 115, 191, 220),
                             3.0,
+                            projection,
                         );
                     }
                     TerrainOp::Wall { start, end, .. } => {
@@ -87,6 +212,7 @@ fn render_terrain_ops(state: &GameState, pixmap: &mut Pixmap) {
                             *end,
                             Color::from_rgba8(120, 86, 56, 220),
                             4.0,
+                            projection,
                         );
                     }
                     TerrainOp::Furrow {
@@ -96,7 +222,13 @@ fn render_terrain_ops(state: &GameState, pixmap: &mut Pixmap) {
                     } => {
                         let min = Vec2::new(center.x - half_extents.x, center.y - half_extents.y);
                         let max = Vec2::new(center.x + half_extents.x, center.y + half_extents.y);
-                        draw_rect(pixmap, min, max, Color::from_rgba8(80, 150, 70, 100));
+                        draw_rect(
+                            pixmap,
+                            min,
+                            max,
+                            Color::from_rgba8(80, 150, 70, 100),
+                            projection,
+                        );
                     }
                     _ => {}
                 }
@@ -105,7 +237,7 @@ fn render_terrain_ops(state: &GameState, pixmap: &mut Pixmap) {
     }
 }
 
-fn render_entities(snapshot: &BehaviorSnapshot, pixmap: &mut Pixmap) {
+fn render_entities(snapshot: &BehaviorSnapshot, pixmap: &mut Pixmap, projection: Projection) {
     for entity in &snapshot.entities {
         let owner = entity.owner.unwrap_or(7);
         let color = match owner % 6 {
@@ -117,7 +249,7 @@ fn render_entities(snapshot: &BehaviorSnapshot, pixmap: &mut Pixmap) {
             _ => Color::from_rgba8(59, 201, 219, 255),
         };
         let [x, y, _] = entity.pos;
-        let (sx, sy) = world_to_canvas(snapshot, pixmap, x, y);
+        let (sx, sy) = projection.project(x, y);
         let mut paint = Paint::default();
         paint.set_color(color);
         let circle = tiny_skia::PathBuilder::from_circle(sx, sy, 5.0).unwrap();
@@ -145,15 +277,28 @@ fn render_entities(snapshot: &BehaviorSnapshot, pixmap: &mut Pixmap) {
     }
 }
 
-fn draw_polyline(pixmap: &mut Pixmap, points: &[Vec2], color: Color, width: f32) {
+fn draw_polyline(
+    pixmap: &mut Pixmap,
+    points: &[Vec2],
+    color: Color,
+    width: f32,
+    projection: Projection,
+) {
     for window in points.windows(2) {
-        draw_segment(pixmap, window[0], window[1], color, width);
+        draw_segment(pixmap, window[0], window[1], color, width, projection);
     }
 }
 
-fn draw_segment(pixmap: &mut Pixmap, a: Vec2, b: Vec2, color: Color, width: f32) {
-    let (ax, ay) = world_to_canvas_from_raw(pixmap, a.x, a.y);
-    let (bx, by) = world_to_canvas_from_raw(pixmap, b.x, b.y);
+fn draw_segment(
+    pixmap: &mut Pixmap,
+    a: Vec2,
+    b: Vec2,
+    color: Color,
+    width: f32,
+    projection: Projection,
+) {
+    let (ax, ay) = projection.project(a.x, a.y);
+    let (bx, by) = projection.project(b.x, b.y);
     let mut pb = PathBuilder::new();
     pb.move_to(ax, ay);
     pb.line_to(bx, by);
@@ -167,9 +312,9 @@ fn draw_segment(pixmap: &mut Pixmap, a: Vec2, b: Vec2, color: Color, width: f32)
     pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
 }
 
-fn draw_rect(pixmap: &mut Pixmap, min: Vec2, max: Vec2, color: Color) {
-    let (x0, y0) = world_to_canvas_from_raw(pixmap, min.x, min.y);
-    let (x1, y1) = world_to_canvas_from_raw(pixmap, max.x, max.y);
+fn draw_rect(pixmap: &mut Pixmap, min: Vec2, max: Vec2, color: Color, projection: Projection) {
+    let (x0, y0) = projection.project(min.x, min.y);
+    let (x1, y1) = projection.project(max.x, max.y);
     let rect = tiny_skia::Rect::from_ltrb(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)).unwrap();
     let mut paint = Paint::default();
     paint.set_color(color);
@@ -201,16 +346,4 @@ fn draw_text(pixmap: &mut Pixmap, x: i32, y: i32, text: &str, color: Color, scal
             }
         }
     }
-}
-
-fn world_to_canvas(snapshot: &BehaviorSnapshot, pixmap: &Pixmap, x: f32, y: f32) -> (f32, f32) {
-    let nx = x / (snapshot.map_width.max(1) as f32 * 100.0);
-    let ny = y / (snapshot.map_height.max(1) as f32 * 100.0);
-    (nx * pixmap.width() as f32, ny * pixmap.height() as f32)
-}
-
-fn world_to_canvas_from_raw(pixmap: &Pixmap, x: f32, y: f32) -> (f32, f32) {
-    let nx = ((x + 1000.0) / 2000.0).clamp(0.0, 1.0);
-    let ny = ((y + 1000.0) / 2000.0).clamp(0.0, 1.0);
-    (nx * pixmap.width() as f32, ny * pixmap.height() as f32)
 }

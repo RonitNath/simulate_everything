@@ -671,8 +671,7 @@ async fn v3_reviews_page(State(state): State<Arc<AppState>>) -> impl IntoRespons
 }
 
 async fn api_v3_reviews_all(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let bundles =
-        v3_review::list_all_bundles(&state.var_dir, &state.v3_rr_review_dir).await;
+    let bundles = v3_review::list_all_bundles(&state.var_dir, &state.v3_rr_review_dir).await;
     Json(bundles)
 }
 

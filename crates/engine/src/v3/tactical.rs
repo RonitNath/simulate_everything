@@ -1,11 +1,12 @@
+use super::agent::{TacticalCommand, TacticalLayer};
+use super::armor::{ArmorConstruction, DamageType, MaterialType};
 /// V3 shared tactical layer: per-stack combat decisions every tick.
 ///
 /// Runs for each stack within engagement range of enemies. Assigns targets
 /// using damage table matchup reasoning, manages formations, facing, and
 /// retreat decisions.
-use super::agent::{TacticalCommand, TacticalLayer};
-use super::armor::{ArmorConstruction, DamageType, MaterialType};
-use super::damage_table::{DamageEstimateTable, MatchupKey};
+use super::combat_log::CombatObservation;
+use super::damage_table::{DamageEstimateTable, MatchupKey, observation_to_matchup};
 use super::formation::FormationType;
 use super::hex::world_to_hex;
 use super::index::ring_hexes;
@@ -287,6 +288,25 @@ impl TacticalLayer for SharedTacticalLayer {
         commands.extend(self.assign_facing(state, stack));
 
         commands
+    }
+
+    fn observe_combat(
+        &mut self,
+        state: &GameState,
+        player: u8,
+        observations: &[CombatObservation],
+    ) {
+        for obs in observations {
+            let participated = [obs.attacker, obs.defender]
+                .into_iter()
+                .any(|key| state.entities.get(key).and_then(|entity| entity.owner) == Some(player));
+            if !participated {
+                continue;
+            }
+            if let Some(matchup) = observation_to_matchup(obs) {
+                self.damage_table.observe(matchup);
+            }
+        }
     }
 }
 

@@ -22,6 +22,10 @@ struct TransitionThresholds {
     economy_dominance: f32,
 }
 
+const TURTLE_MIN_FORTIFICATION_DENSITY: f32 = 0.3;
+const TURTLE_MIN_ROAD_COVERAGE: f32 = 0.2;
+const SPREAD_HIGH_DAMAGE_DENSITY: f32 = 0.5;
+
 // ---------------------------------------------------------------------------
 // Spread — economy-first
 // ---------------------------------------------------------------------------
@@ -71,6 +75,12 @@ impl SpreadStrategy {
             self.focus = EconomicFocus::Growth;
             Posture::Expand
         };
+
+        if view.terrain.damage_density > SPREAD_HIGH_DAMAGE_DENSITY
+            && self.posture != Posture::Attack
+        {
+            self.focus = EconomicFocus::Infrastructure;
+        }
     }
 }
 
@@ -230,13 +240,17 @@ impl TurtleStrategy {
         self.posture = if strength_ratio > self.thresholds.attack_strength_ratio {
             self.focus = EconomicFocus::Military;
             Posture::Attack
-        } else if strength_ratio < self.thresholds.defend_strength_ratio {
-            self.focus = EconomicFocus::Infrastructure;
-            Posture::Defend
         } else {
             self.focus = EconomicFocus::Infrastructure;
             Posture::Defend
         };
+
+        if self.posture == Posture::Defend
+            && (view.terrain.fortification_density < TURTLE_MIN_FORTIFICATION_DENSITY
+                || view.terrain.road_coverage < TURTLE_MIN_ROAD_COVERAGE)
+        {
+            self.focus = EconomicFocus::Infrastructure;
+        }
     }
 }
 
@@ -361,7 +375,6 @@ impl StrategyLayer for NullStrategy {
 #[cfg(test)]
 mod tests {
     use super::super::perception::*;
-    use super::super::state::StackId;
     use super::*;
     use crate::v2::hex::Axial;
 
@@ -473,6 +486,19 @@ mod tests {
         assert_eq!(extract_posture(&directives), Some(Posture::Defend));
     }
 
+    #[test]
+    fn spread_prefers_infrastructure_when_terrain_is_damaged() {
+        let mut s = SpreadStrategy::new();
+        let mut view = base_view();
+        view.terrain.damage_density = 0.8;
+
+        let directives = s.plan(&view);
+        assert_eq!(
+            extract_focus(&directives),
+            Some(EconomicFocus::Infrastructure)
+        );
+    }
+
     // --- Striker ---
 
     #[test]
@@ -534,6 +560,20 @@ mod tests {
 
         let directives = s.plan(&view);
         assert_eq!(extract_posture(&directives), Some(Posture::Defend));
+    }
+
+    #[test]
+    fn turtle_prefers_infrastructure_when_fortifications_are_low() {
+        let mut s = TurtleStrategy::new();
+        let mut view = view_with_strength(10, 10);
+        view.terrain.fortification_density = 0.1;
+        view.terrain.road_coverage = 0.1;
+
+        let directives = s.plan(&view);
+        assert_eq!(
+            extract_focus(&directives),
+            Some(EconomicFocus::Infrastructure)
+        );
     }
 
     // --- Cross-personality ---

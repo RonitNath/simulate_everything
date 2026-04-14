@@ -16,6 +16,9 @@ Current baseline after the `v3-shared-exec`, `v3-sim-tick`, `v3-rr-runtime`, `v3
 - the V3 RR loop now runs through the same engine-owned agent phase as bench/sim
 - live `/v3/rr` and `/v3/replay` now share the same stack-delta merge logic
 - protocol territory/player/task state and strategic perception are now derived from engine state
+- combat observations now feed the shared V3 damage tables in RR and bench paths
+- behavior/mapgen spawns now allocate live behavior state and starting civilian tools
+- forensic terrain-op artifacts now serialize as `{hex, ops}` entries with cached renderer layers
 - roads, settlement founding, supply routes, and richer material-processing loops still contain placeholders and module-only landings
 
 Companion docs:

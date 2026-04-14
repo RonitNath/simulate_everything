@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 
 use super::armor::{self, ArmorConstruction, DamageType, MaterialType};
+use super::combat_log::CombatObservation;
+use super::wound::{self, Severity};
 
 // ---------------------------------------------------------------------------
 // Tunable constants
@@ -88,6 +90,34 @@ pub struct MatchupObservation {
     pub staggered: bool,
     pub stamina_cost: f32,
     pub tick: u64,
+}
+
+pub fn observation_to_matchup(obs: &CombatObservation) -> Option<MatchupObservation> {
+    let (armor_construction, armor_material) = match (obs.armor_construction, obs.armor_material) {
+        (Some(construction), Some(material)) => (construction, material),
+        _ => return None,
+    };
+
+    Some(MatchupObservation {
+        key: MatchupKey {
+            damage_type: obs.damage_type,
+            weapon_material: obs.weapon_material,
+            armor_construction,
+            armor_material,
+        },
+        wounded: obs.penetrated || obs.wound_severity.is_some(),
+        severity: severity_weight(obs.wound_severity),
+        staggered: obs.stagger,
+        stamina_cost: obs.block_stamina_cost.max(obs.residual_force.abs() * 0.02),
+        tick: obs.tick,
+    })
+}
+
+fn severity_weight(severity: Option<Severity>) -> f32 {
+    severity
+        .map(wound::wound_severity_weight)
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +307,54 @@ mod tests {
         }
     }
 
+    fn combat_obs(
+        armor_construction: Option<ArmorConstruction>,
+        armor_material: Option<MaterialType>,
+        wound_severity: Option<Severity>,
+    ) -> CombatObservation {
+        use crate::v2::state::EntityKey;
+        use slotmap::SlotMap;
+
+        let mut sm = SlotMap::<EntityKey, ()>::with_key();
+        let attacker = sm.insert(());
+        let defender = sm.insert(());
+        CombatObservation {
+            tick: 7,
+            attacker,
+            defender,
+            damage_type: DamageType::Slash,
+            weapon_material: MaterialType::Iron,
+            weapon_sharpness: 0.8,
+            weapon_hardness: 5.0,
+            weapon_weight: 1.2,
+            armor_construction,
+            armor_material,
+            armor_hardness: 4.0,
+            armor_thickness: 2.0,
+            armor_coverage: 0.8,
+            hit_zone: super::super::armor::BodyZone::Torso,
+            angle_of_incidence: 0.3,
+            impact_force: 20.0,
+            attack_motion: super::super::martial::AttackMotion::Forehand,
+            blocked: false,
+            block_maneuver: None,
+            block_stamina_cost: 0.4,
+            penetrated: wound_severity.is_some(),
+            penetration_depth: 0.8,
+            residual_force: 10.0,
+            wound_severity,
+            bleed_rate: 0.1,
+            stagger_force: 2.0,
+            stagger: true,
+            distance: 1.0,
+            height_diff: 0.0,
+            attacker_skill: 0.5,
+            defender_skill: 0.4,
+            defender_stamina: 0.7,
+            defender_facing_offset: 0.0,
+        }
+    }
+
     #[test]
     fn from_physics_populates_entries() {
         let table = DamageEstimateTable::from_physics();
@@ -440,5 +518,26 @@ mod tests {
             "after surprise reset, wound_rate should reflect recent: {}",
             est.wound_rate
         );
+    }
+
+    #[test]
+    fn observation_to_matchup_converts_armored_hit() {
+        let obs = combat_obs(
+            Some(ArmorConstruction::Plate),
+            Some(MaterialType::Iron),
+            Some(Severity::Puncture),
+        );
+        let matchup = observation_to_matchup(&obs).expect("armored matchup");
+        assert_eq!(matchup.key.armor_construction, ArmorConstruction::Plate);
+        assert_eq!(matchup.key.armor_material, MaterialType::Iron);
+        assert!(matchup.wounded);
+        assert!(matchup.severity > 0.0);
+        assert!(matchup.staggered);
+    }
+
+    #[test]
+    fn observation_to_matchup_skips_unarmored_targets() {
+        let obs = combat_obs(None, None, Some(Severity::Scratch));
+        assert!(observation_to_matchup(&obs).is_none());
     }
 }

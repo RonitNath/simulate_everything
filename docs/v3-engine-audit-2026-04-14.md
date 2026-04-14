@@ -67,6 +67,10 @@ generation.
   stability, terrain exploitation
 - TOML scenario configs with invariant checking
 - Tick-level entity state snapshots with full decision context
+- Behavior-state activation now lands for mapgen and bench-local people, terrain-op
+  forensic output no longer panics on JSON serialization, and the forensic renderer
+  caches terrain background/terrain-op layers separately to keep release runs near
+  the 15s acceptance budget
 
 ### Visual verification
 - WebGPU headless limitation: rendering pipeline verified but screenshots blank

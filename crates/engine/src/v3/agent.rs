@@ -1,3 +1,4 @@
+use super::combat_log::CombatObservation;
 use super::formation::FormationType;
 use super::perception::StrategicView;
 use super::spatial::Vec3;
@@ -218,6 +219,14 @@ pub trait OperationsLayer: Send {
         directives: &[StrategicDirective],
         player: u8,
     ) -> Vec<OperationalCommand>;
+
+    fn observe_combat(
+        &mut self,
+        _state: &GameState,
+        _player: u8,
+        _observations: &[CombatObservation],
+    ) {
+    }
 }
 
 /// Runs every tick for stacks within engagement range of enemies.
@@ -229,6 +238,14 @@ pub trait TacticalLayer: Send {
         stack: &super::state::Stack,
         player: u8,
     ) -> Vec<TacticalCommand>;
+
+    fn observe_combat(
+        &mut self,
+        _state: &GameState,
+        _player: u8,
+        _observations: &[CombatObservation],
+    ) {
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +392,16 @@ impl LayeredAgent {
         }
 
         output
+    }
+
+    pub fn observe_combat(&mut self, state: &GameState, observations: &[CombatObservation]) {
+        if observations.is_empty() {
+            return;
+        }
+        self.operations
+            .observe_combat(state, self.player, observations);
+        self.tactical
+            .observe_combat(state, self.player, observations);
     }
 }
 

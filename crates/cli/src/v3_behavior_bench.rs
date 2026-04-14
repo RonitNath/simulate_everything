@@ -1,10 +1,11 @@
-use crate::headless_renderer::{DEFAULT_RENDER_SIZE, render_snapshot_png};
+use crate::headless_renderer::{CachedRenderer, DEFAULT_RENDER_SIZE};
 use serde::{Deserialize, Serialize};
 use simulate_everything_engine::v2::hex::offset_to_axial;
 use simulate_everything_engine::v2::state::EntityKey;
 use simulate_everything_engine::v3::behavior_snapshot::{
     BehaviorSnapshot, capture_behavior_snapshot,
 };
+use simulate_everything_engine::v3::hex::world_to_hex;
 use simulate_everything_engine::v3::lifecycle::spawn_entity;
 use simulate_everything_engine::v3::mapgen;
 use simulate_everything_engine::v3::movement::Mobile;
@@ -12,7 +13,9 @@ use simulate_everything_engine::v3::physical::{PhysicalProperties, SitePropertie
 use simulate_everything_engine::v3::sim;
 use simulate_everything_engine::v3::social::SocialState;
 use simulate_everything_engine::v3::spatial::{GeoMaterial, Heightfield, Vec2, Vec3};
-use simulate_everything_engine::v3::state::{EntityBuilder, GameState, Person, Role};
+use simulate_everything_engine::v3::state::{
+    BehaviorState, EntityBuilder, GameState, Person, Role,
+};
 use simulate_everything_engine::v3::terrain_ops::{TerrainOp, terrain_raster_spec};
 use simulate_everything_protocol::{
     CommodityKind, EntityNeedsInfo, MaterialKind, MatterState, PropertyTag,
@@ -76,6 +79,20 @@ struct TimelinePoint {
     needs: Option<EntityNeedsInfo>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct TerrainOpsEntry {
+    hex: TerrainOpsHex,
+    ops: Vec<TerrainOp>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TerrainOpsHex {
+    q: i32,
+    r: i32,
+}
+
+const FRAME_STRIDE: u64 = 2;
+
 pub fn main(args: &[String]) {
     let config = flag_value(args, "--scenario-file")
         .map(load_config)
@@ -110,6 +127,7 @@ pub fn main(args: &[String]) {
 
         let mut timelines: BTreeMap<u32, Vec<TimelinePoint>> = BTreeMap::new();
         let mut snapshots = Vec::new();
+        let mut renderer = CachedRenderer::new(DEFAULT_RENDER_SIZE);
         for _ in 0..config.duration_ticks {
             if let Some(tick) = injection_tick
                 && state.tick == tick
@@ -121,7 +139,7 @@ pub fn main(args: &[String]) {
             final_tick = snapshot.tick;
             collect_timelines(&snapshot, &mut timelines);
             if let ScenarioMode::Forensic = mode {
-                write_snapshot_artifacts(&scenario_dir, &snapshot, &state);
+                write_snapshot_artifacts(&scenario_dir, &snapshot, &state, &mut renderer);
             }
             snapshots.push(snapshot);
         }
@@ -327,7 +345,7 @@ fn setup_terrain_scenario(seed: u64) -> (GameState, Vec<u32>, Option<u64>) {
 }
 
 fn spawn_person(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> EntityKey {
-    spawn_entity(
+    let person = spawn_entity(
         state,
         EntityBuilder::new()
             .pos(pos)
@@ -338,7 +356,9 @@ fn spawn_person(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> Enti
             })
             .mobile(Mobile::new(2.0, 10.0))
             .vitals(),
-    )
+    );
+    state.entities[person].behavior = Some(Box::new(BehaviorState::default()));
+    person
 }
 
 fn spawn_site(state: &mut GameState, pos: Vec3, owner: u8, shelter: bool, farm: bool) -> EntityKey {
@@ -369,7 +389,7 @@ fn spawn_site(state: &mut GameState, pos: Vec3, owner: u8, shelter: bool, farm: 
 fn seed_settlement_ops(state: &mut GameState, home: EntityKey, farm: EntityKey) {
     let home_pos = state.entities[home].pos.unwrap();
     let farm_pos = state.entities[farm].pos.unwrap();
-    let home_hex = offset_to_axial(1, 1);
+    let home_hex = world_to_hex(home_pos);
     state.terrain_ops.push_op(
         home_hex,
         TerrainOp::Road {
@@ -423,12 +443,20 @@ fn collect_timelines(
     }
 }
 
-fn write_snapshot_artifacts(dir: &Path, snapshot: &BehaviorSnapshot, state: &GameState) {
+fn write_snapshot_artifacts(
+    dir: &Path,
+    snapshot: &BehaviorSnapshot,
+    state: &GameState,
+    renderer: &mut CachedRenderer,
+) {
     let tick_path = dir.join("ticks").join(format!("{:04}.json", snapshot.tick));
     fs::write(&tick_path, serde_json::to_vec_pretty(snapshot).unwrap())
         .expect("write tick snapshot");
+    if !snapshot.tick.is_multiple_of(FRAME_STRIDE) {
+        return;
+    }
     let frame_path = dir.join("frames").join(format!("{:04}.png", snapshot.tick));
-    let _ = render_snapshot_png(state, snapshot, &frame_path, DEFAULT_RENDER_SIZE);
+    let _ = renderer.render_snapshot_png(state, snapshot, &frame_path);
 }
 
 fn write_forensic_outputs(
@@ -461,7 +489,7 @@ fn write_forensic_outputs(
     .unwrap();
     fs::write(
         dir.join("terrain_ops.json"),
-        serde_json::to_vec_pretty(&state.terrain_ops).unwrap(),
+        serde_json::to_vec_pretty(&terrain_ops_entries(state)).unwrap(),
     )
     .unwrap();
     fs::write(
@@ -470,6 +498,19 @@ fn write_forensic_outputs(
     )
     .unwrap();
     let _ = build_filmstrip(dir, snapshots);
+}
+
+fn terrain_ops_entries(state: &GameState) -> Vec<TerrainOpsEntry> {
+    let mut entries: Vec<_> = state
+        .terrain_ops
+        .entries()
+        .map(|(hex, ops)| TerrainOpsEntry {
+            hex: TerrainOpsHex { q: hex.q, r: hex.r },
+            ops: ops.to_vec(),
+        })
+        .collect();
+    entries.sort_by_key(|entry| (entry.hex.q, entry.hex.r));
+    entries
 }
 
 fn build_filmstrip(dir: &Path, snapshots: &[BehaviorSnapshot]) -> Result<(), String> {

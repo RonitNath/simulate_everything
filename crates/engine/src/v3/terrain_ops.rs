@@ -262,6 +262,8 @@ pub struct TerrainOpLog {
     dirty_hexes: HashSet<Axial>,
     #[serde(skip)]
     cache: HashMap<Axial, RasterizedPatch>,
+    #[serde(skip)]
+    revision: u64,
 }
 
 impl TerrainOpLog {
@@ -271,6 +273,14 @@ impl TerrainOpLog {
 
     pub fn ops_for_hex(&self, hex: Axial) -> &[TerrainOp] {
         self.stacks.get(&hex).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = (Axial, &[TerrainOp])> + '_ {
+        self.stacks.iter().map(|(hex, ops)| (*hex, ops.as_slice()))
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn push_op(
@@ -329,6 +339,7 @@ impl TerrainOpLog {
     fn invalidate(&mut self, hex: Axial) {
         self.cache.remove(&hex);
         self.dirty_hexes.insert(hex);
+        self.revision = self.revision.wrapping_add(1);
     }
 
     fn compact(&mut self, hex: Axial, base: &Heightfield, map_width: usize, map_height: usize) {

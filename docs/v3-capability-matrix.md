@@ -30,12 +30,12 @@ Legend:
 | P1 | `engine-live` | Wire types, snapshot, territory/player/task surfaces. |
 | A3 | `engine-live` | Tactical reasoning via resolution demand (E6). |
 | A4 | `engine-live` | Strategy personalities — now adjust need weights (E). |
-| A5 | `shared-engine-unused` | Damage tables and observations; learning loop partial. |
+| A5 | `engine-live` | Damage tables now learn from shared combat-log observations in RR and bench paths. |
 | E2 | `engine-live` | Engine-owned agent phase, shared economy. |
 | P2 | `engine-live` | RR/replay surface. |
 | R3 | `engine-live` | Projectile/wound/equipment presentation. |
 | R4 | `engine-live` | Viewport culling. |
-| P3 | `placeholder` | Live status; roads and deeper economy scaffolded. |
+| P3 | `placeholder` | Live status remains scaffolded; behavior forensics now emit stable terrain-op artifacts and cached renderer output. |
 | P4 | `placeholder` | Review/capture surface. |
 | R5 | `not-landed` | Deferred from V3.0 scope. |
 

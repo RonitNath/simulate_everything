@@ -1669,7 +1669,8 @@ mod tests {
 
         let mover = &state.entities[entity_key];
         assert!(
-            mover.behavior
+            mover
+                .behavior
                 .as_ref()
                 .expect("entity should keep behavior")
                 .action_queue
@@ -1683,7 +1684,8 @@ mod tests {
             "entity should arrive near target before work begins"
         );
         assert!(
-            mover.mobile
+            mover
+                .mobile
                 .as_ref()
                 .expect("entity should stay mobile")
                 .waypoints

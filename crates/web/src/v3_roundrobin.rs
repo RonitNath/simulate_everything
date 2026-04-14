@@ -341,6 +341,9 @@ impl V3RoundRobin {
 
                 // Drain combat observations from the engine.
                 let combat_observations = state.combat_log.drain();
+                for agent in &mut agents {
+                    agent.observe_combat(&state, &combat_observations);
+                }
 
                 // Check for game over — all but one player eliminated.
                 if !tick_result.eliminated.is_empty() {

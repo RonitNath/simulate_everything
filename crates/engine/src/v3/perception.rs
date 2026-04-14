@@ -449,8 +449,8 @@ fn hex_index(state: &GameState, hex: Axial) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::hex::hex_to_world;
     use super::super::formation::FormationType;
+    use super::super::hex::hex_to_world;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::physical::{MatterStack, SiteProperties};
@@ -488,13 +488,9 @@ mod tests {
 
     fn push_terrain_op(state: &mut GameState, hex: Axial, op: TerrainOp) {
         let heightfield = state.heightfield.clone();
-        state.terrain_ops.push_op(
-            hex,
-            op,
-            &heightfield,
-            state.map_width,
-            state.map_height,
-        );
+        state
+            .terrain_ops
+            .push_op(hex, op, &heightfield, state.map_width, state.map_height);
     }
 
     #[test]

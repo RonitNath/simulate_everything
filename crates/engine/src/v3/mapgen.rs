@@ -4,12 +4,14 @@ use rand::SeedableRng;
 use super::armor::{self, MaterialType};
 use super::economy;
 use super::equipment::{self, Equipment};
-use super::hex::hex_to_world;
+use super::hex::{hex_to_world, world_to_hex};
 use super::lifecycle::{contain, spawn_entity};
 use super::movement::Mobile;
 use super::physical::{MatterStack, PhysicalProperties, SiteProperties, ToolProperties};
 use super::spatial::{GeoMaterial, Heightfield, Vec3, Vertex};
-use super::state::{Combatant, CommodityKind, EntityBuilder, GameState, Person, Role};
+use super::state::{
+    BehaviorState, Combatant, CommodityKind, EntityBuilder, GameState, Person, Role,
+};
 use super::terrain_ops::TerrainOp;
 use super::weapon;
 use crate::v2::hex::{Axial, offset_to_axial};
@@ -32,6 +34,8 @@ const STARTING_CIVILIANS: usize = 30;
 const STARTING_FOOD: f32 = 500.0;
 /// Starting material amount per player.
 const STARTING_MATERIAL: f32 = 200.0;
+/// Starting behavior relationship labels.
+const SEEDED_RELATIONSHIP_LABELS: [&str; 3] = ["neighbor", "coworker", "family"];
 
 // ---------------------------------------------------------------------------
 // Heightfield generation
@@ -114,6 +118,7 @@ fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, skill: f32) -> Ent
             .vitals()
             .equipment(Equipment::empty()),
     );
+    state.entities[soldier].behavior = Some(Box::new(BehaviorState::default()));
 
     // Spawn and equip a sword
     let sword = spawn_entity(
@@ -163,7 +168,7 @@ fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, skill: f32) -> Ent
 
 /// Spawn a civilian entity.
 fn spawn_civilian(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> EntityKey {
-    spawn_entity(
+    let civilian = spawn_entity(
         state,
         EntityBuilder::new()
             .pos(pos)
@@ -179,7 +184,44 @@ fn spawn_civilian(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> En
                 combat_skill: 0.1,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS)),
-    )
+    );
+    state.entities[civilian].behavior = Some(Box::new(BehaviorState::default()));
+    civilian
+}
+
+fn spawn_starting_tool(
+    state: &mut GameState,
+    owner: u8,
+    holder: EntityKey,
+    role: Role,
+    durability: f32,
+) {
+    let Some((material, mass_kg, hardness, force_mult, precision, cutting_edge)) = (match role {
+        Role::Farmer => Some((MaterialKind::Wood, 3.0, 0.45, 1.3, 0.65, 0.35)),
+        Role::Worker => Some((MaterialKind::Iron, 2.4, 0.8, 1.6, 0.55, 0.6)),
+        _ => None,
+    }) else {
+        return;
+    };
+
+    let tool = spawn_entity(
+        state,
+        EntityBuilder::new()
+            .owner(owner)
+            .physical(
+                PhysicalProperties::new(mass_kg, hardness, material, MatterState::Solid)
+                    .with_tags(&[PropertyTag::Tool, PropertyTag::Workable]),
+            )
+            .tool_props(ToolProperties {
+                force_mult,
+                precision,
+                cutting_edge,
+                heat_output_k: 0.0,
+                capacity_l: 0.0,
+                durability,
+            }),
+    );
+    contain(state, holder, tool);
 }
 
 fn settlement_physical() -> PhysicalProperties {
@@ -313,7 +355,9 @@ pub fn generate(width: usize, height: usize, num_players: u8, seed: u64) -> Game
                 1 => Role::Worker,
                 _ => Role::Idle,
             };
-            spawn_civilian(&mut state, pos, owner, role);
+            let civilian = spawn_civilian(&mut state, pos, owner, role);
+            let durability = rng.gen_range(0.3..=0.7_f32);
+            spawn_starting_tool(&mut state, owner, civilian, role, durability);
         }
 
         seed_settlement_behavior_state(&mut state, owner, center);
@@ -324,7 +368,7 @@ pub fn generate(width: usize, height: usize, num_players: u8, seed: u64) -> Game
 
 fn seed_settlement_behavior_state(state: &mut GameState, owner: u8, center: Vec3) {
     let farm_pos = Vec3::new(center.x + 70.0, center.y, center.z);
-    let hex = crate::v2::hex::offset_to_axial(1, 1);
+    let hex = world_to_hex(center);
     state.terrain_ops.push_op(
         hex,
         TerrainOp::Road {
@@ -360,6 +404,7 @@ fn seed_settlement_behavior_state(state: &mut GameState, owner: u8, center: Vec3
         }
     }
 
+    let mut person_index = 0usize;
     for entity in state.entities.values_mut() {
         if entity.owner != Some(owner) {
             continue;
@@ -370,13 +415,33 @@ fn seed_settlement_behavior_state(state: &mut GameState, owner: u8, center: Vec3
         behavior.needs.hunger = 0.25;
         behavior.needs.rest = 0.2;
         behavior.needs.social = 0.15;
-        for counterpart in related.iter().copied().take(3) {
-            if counterpart != entity.id {
-                behavior
-                    .social
-                    .remember(0, counterpart, "seeded settlement familiarity");
+        let counterpart_count = 2 + (person_index % 2);
+        for offset in 0..counterpart_count {
+            let counterpart = related
+                .iter()
+                .copied()
+                .cycle()
+                .skip(person_index + offset + 1)
+                .find(|counterpart| *counterpart != entity.id);
+            let Some(counterpart) = counterpart else {
+                continue;
+            };
+            let summary = format!(
+                "seeded settlement {}",
+                SEEDED_RELATIONSHIP_LABELS
+                    [(person_index + offset) % SEEDED_RELATIONSHIP_LABELS.len()]
+            );
+            behavior.social.remember(0, counterpart, summary);
+            if let Some((_, score)) = behavior
+                .social
+                .relationship_cache
+                .iter_mut()
+                .find(|(id, _)| *id == counterpart)
+            {
+                *score = 5 + ((person_index + offset) % 11) as i16;
             }
         }
+        person_index += 1;
     }
 }
 
@@ -437,6 +502,39 @@ mod tests {
                 "player {player} should have exactly 1 settlement"
             );
         }
+    }
+
+    #[test]
+    fn people_spawn_with_behavior_state() {
+        let state = generate(20, 20, 2, 42);
+        assert!(
+            state
+                .entities
+                .values()
+                .filter(|entity| entity.person.is_some())
+                .all(|entity| entity.behavior.is_some())
+        );
+    }
+
+    #[test]
+    fn farmers_and_workers_spawn_with_tools() {
+        let state = generate(20, 20, 1, 42);
+        assert!(state.entities.values().any(|entity| {
+            entity.person.as_ref().map(|p| p.role) == Some(Role::Farmer)
+                && entity
+                    .contains
+                    .iter()
+                    .filter_map(|contained| state.entities.get(*contained))
+                    .any(|item| item.tool_props.is_some())
+        }));
+        assert!(state.entities.values().any(|entity| {
+            entity.person.as_ref().map(|p| p.role) == Some(Role::Worker)
+                && entity
+                    .contains
+                    .iter()
+                    .filter_map(|contained| state.entities.get(*contained))
+                    .any(|item| item.tool_props.is_some())
+        }));
     }
 
     #[test]
