@@ -1,123 +1,245 @@
 # Spec: V3 Entity Unification
 
+Updated: 2026-04-13 (revision 2 — continuous spatial model, material-interaction
+damage, unified attack pipeline, multi-resolution time, z-axis)
+
 ## Vision
 
-Replace the V2 engine's four separate entity types (Unit, Convoy, Population, Settlement)
-with a single composable Entity primitive. Every mobile thing is an entity. Every static
-thing is an entity. Entities contain entities. A soldier is a person with combat skill.
-A convoy is a person leading pack animals carrying cargo. A settlement is a structure
-containing population. Composition determines capability — unit types emerge from
-properties, not from hardcoded categories.
+Replace the V2 engine's four separate entity types (Unit, Convoy, Population,
+Settlement) with a single composable Entity primitive. Every mobile thing is an
+entity. Every static thing is an entity. Entities contain entities. A soldier is
+a person with combat skill, wearing armor, carrying a weapon. A convoy is a person
+leading pack animals carrying cargo. A settlement is a structure containing
+population. Composition determines capability — unit types emerge from properties,
+not from hardcoded categories.
 
-Simultaneously, restructure the agent architecture from "military agents + autonomous
-city AI" to three coordinated layers: Strategy (grand vision, posture, priorities),
-Operations (theater allocation, logistics, production), and Tactical (per-stack combat
-decisions). All three layers are shared infrastructure; agent personalities (Spread,
-Striker, Turtle) differentiate at the Strategy layer only. Each layer operates on a
-compute budget — allocating intelligence across entities is itself a strategic decision.
+Entities live in **continuous 3D space**. The hex grid is a spatial acceleration
+structure — a projection derived from each entity's real position, not the position
+itself. Movement uses steering behaviors in continuous space. Nothing teleports.
 
-Replace the SVG frontend renderer with PixiJS (WebGL) to support the target scale of
-100k tiles and 10k entities with zoom/pan, viewport culling, entity interpolation
-between ticks, and LOD tiers.
+Combat resolves through **material-interaction physics**. There are no health bars.
+A sword hits a body zone, the impact is resolved against whatever armor covers that
+zone, and the result is a wound with a bleed rate — or a deflection. Most deaths
+are from accumulated bleeding. The same pipeline resolves a fist, a spear thrust,
+an arrow, a sling stone, and (in future versions) a cannon ball. Weapons and armor
+are defined by physical properties (material, sharpness, thickness, weight), not
+by abstract damage/defense numbers.
 
-This is V3 of the engine. V2's company-level abstractions (strength 0-100, hex-edge
-engagement, aggregate combat) are replaced by individual-level simulation where each
-person is one entity. "Strength loss" is people dying. Combat resolves per-individual
-with continuous facing angles. Stacking is a visual/command grouping layer, not an
-entity abstraction. The game is algorithm competition — the quality of your formation,
-retreat, supply, and engagement algorithms is what wins.
+Restructure the agent architecture from "military agents + autonomous city AI" to
+three coordinated layers: Strategy (grand vision, posture, priorities), Operations
+(theater allocation, logistics, production), and Tactical (per-stack combat
+decisions, weapon-armor matchup reasoning). All three layers are shared
+infrastructure; agent personalities (Spread, Striker, Turtle) differentiate at the
+Strategy layer only.
+
+Replace the SVG frontend renderer with PixiJS (WebGL) to support the target scale
+of 100k tiles and 10k entities with zoom/pan, viewport culling, entity
+interpolation between ticks, and LOD tiers. Primary viewport is top-down; future
+isometric toggle to visualize height.
 
 ## Supersedes
 
 - `docs/plans/v2-remaining-systems.md` — economy, population, convoys, roads, terrain.
   Concepts retained, implementation replaced by entity-based approach.
-- `docs/plans/frontend-rendering-overhaul.md` — PixiJS migration. Folded into this spec
-  as the frontend half of V3.
-- `docs/plans/svg-quick-fixes.md` — SVG renderer improvements. Moot; SVG replaced by PixiJS.
+- `docs/plans/frontend-rendering-overhaul.md` — PixiJS migration. Folded into this spec.
+- `docs/plans/svg-quick-fixes.md` — SVG renderer improvements. Moot; SVG replaced.
 - `docs/plans/agent-intelligence-pipeline.md` — agent improvements. Superseded by
   three-layer architecture.
+- Revision 1 of this spec — combat geometry, combat resolution, entity component
+  details, movement model, and simulation tick sections are replaced.
 
 ## Use Cases
 
-### 1. Two armies meet on a hex
+### 1. Two armies meet
 
-A stack of 15 soldiers (individual entities) controlled by Player 0 moves to a hex
-occupied by 10 soldiers of Player 1. The tactical layer for each side decides engagement:
-which individuals engage which. Combat resolves per-tick per-pair. Individuals die
-(entity removed). The stack shrinks. When one side is eliminated or retreats, the
-survivors hold the hex.
+A stack of 15 swordsmen moves toward a stack of 10 spearmen. Both stacks move
+through continuous space — no teleportation. As they close to spear range (~3m),
+the spearmen's tactical layer orders engagement: spear thrusts target the
+approaching swordsmen. Spears have longer reach, so the spearmen get first strikes.
+Each thrust resolves: hit location on the target's body, check armor at that zone,
+compute penetration from spear hardness/sharpness vs armor material/thickness at
+the impact angle. Some thrusts pierce leather, causing puncture wounds that bleed.
+Some deflect off iron breastplates.
 
-*Implementation: Individual combat resolution in sim tick. Tactical layer assigns
-engagements based on local force assessment. No hex-edge abstraction — individuals
-face a direction and fight what's in front of them. Flanking = multiple attackers
-from different directions on one defender.*
+The swordsmen close to melee range (~1.5m). Now swords engage — slashing attacks
+against the spearmen, who must block with their shield or parry with the spear
+shaft. Each block costs stamina. Sustained pressure exhausts the defenders. A
+flanking group of swordsmen arrives from the side — the spearmen can't face both
+directions. Side and rear attacks bypass shields entirely.
 
-### 2. Settlement produces soldiers
+Wounded soldiers bleed. Blood loss accumulates across all wounds. When vitality
+drops below threshold, the person collapses. The tactical layer decides when to
+retreat — retreating soldiers take rear hits as they withdraw through continuous
+space, damage proportional to how long their backs are turned.
 
-Population entities (people) live in a settlement structure. The operations layer
-assigns some population to "soldier training" role. After training completes, those
-population entities transition to soldier status (gain Combatant component, lose
-productivity role). Operations forms them into a stack and routes them to a front.
+### 2. Archer volley over friendly lines
 
-*Implementation: Role assignment changes components on existing entities. No "unit
-production cost" — the cost is the person's labor time diverted from farming/building.
-The operations layer manages this tradeoff based on strategic directives.*
+An archer line stands behind a friendly spear wall. Operations has positioned them
+10 hexes (~1-2km) behind the front. The tactical layer orders volley fire at the
+enemy formation visible 15 hexes away. Each arrow is an entity: it launches at a
+high arc (projectile with Vec3 velocity, gravity applied each tick). The arrows
+rise above the friendly spearmen (z > friendlies' height at that x,y position),
+arc over them, and descend into the enemy formation.
 
-### 3. Supply convoy runs food to front line
+Each arrow that reaches ground level checks for entity collisions at impact. An
+arrow hitting an unarmored target: pierce damage type, high sharpness — penetrates
+cloth/leather, deep wound, high bleed rate. The same arrow hitting plate armor:
+penetration check fails at typical angles, deflects. Against chain mail: may
+penetrate at perpendicular impact, deflects at glancing angles.
 
-Operations identifies that a forward stack needs food. It assigns a person + pack
-animal (both entities) to convoy duty. Population loads food (resource entities) into
-the pack animal's container. The convoy moves along roads toward the front. Food
-entities are consumed by the convoy members en route — transport eats what it
-transports. Remaining food is delivered.
+Crossbow bolts travel flat (no arc) — they can't fire over friendly lines but hit
+harder at shorter range. The tactical layer must position crossbowmen with clear
+sight lines.
 
-*Implementation: Containment system — pack animal entity contains food entities.
-Movement consumes food from contained resources. A* pathfinding with road preference
-(already implemented). Convoy = just entities moving together with cargo.*
+### 3. Slingers vs plate infantry
 
-### 4. Building a structure
+The agent's tactical layer sends slingers against plate-armored infantry. Sling
+stones are crush damage against plate: the penetration check fails (stone can't
+pierce iron), but the impact force transmits through the armor — stagger effect,
+stamina drain, possible concussion at head zone. The plate infantry is barely
+wounded but fatigued. The agent's observation journal records: "sling vs plate →
+low wound rate, moderate stagger." The empirical damage table updates. Next
+engagement, the tactical layer assigns slingers to softer targets.
 
-Operations directs population to build a farmhouse on an unoccupied hex. Builder
-entities travel to the hex and begin construction (incrementing build_progress).
-The structure entity exists from the start at 0% progress. Once complete, population
-can move in and begin farming. The structure provides shelter (future: weather
-protection, defense bonus).
+### 4. Settlement produces soldiers
 
-*Implementation: Structure entities with build_progress. Builder entities tick
-construction forward. Structure starts providing benefits at 100% progress. Structures
-can be damaged (health decreases) and destroyed (entity removed, contents ejected).*
+Same as revision 1: population entities in settlement structures. Operations
+assigns roles, soldiers train (gain combat_skill). Additionally, soldiers are
+equipped from stockpile — weapon entities and armor entities are assigned to body
+slots. A soldier without armor fights in cloth. A soldier with a bronze sword and
+leather cuirass fights differently from one with an iron spear and chain mail. The
+operations layer's equipment decisions affect what the tactical layer can do.
 
-### 5. Strategy agent sets grand direction
+### 5. Convoy under raid
 
-The Striker agent's strategy layer observes: strong food surplus, enough military,
-enemy settlement visible to the east. It emits: SetPosture(Attack),
-PrioritizeRegion(east, 0.9), SetEconomicFocus(Military). Operations receives these
-directives and reallocates: shifts population from farming to soldier training, forms
-a strike stack, routes it east. Tactical takes over when the stack contacts enemies.
+A supply convoy (person + pack animals + food/material entities) moves through
+continuous space along a road. An enemy cavalry stack approaches from a
+perpendicular direction. The cavalry entities have high speed — they close the
+continuous-space distance quickly. The convoy has no combatant components; the
+escorts (if any) engage. If the escorts are overwhelmed, the cavalry reaches the
+pack animals. Pack animals die (from combat) and drop their contained cargo
+entities onto the ground. The raider can pick up cargo or destroy it.
 
-*Implementation: Strategy emits typed directives. Operations consumes them and
-translates to entity-level commands. Tactical activates per-stack near enemies.*
+### 6. Multi-resolution battle observation
 
-### 6. Player observes a battle in detail (future)
+The map runs at strategic resolution (1 tick = 1 hour) — armies march, population
+grows. Two armies make contact in the eastern theater. The engine switches that
+region to tactical resolution (1 tick = 1 second) — individual combat resolves.
+The spectator clicks on a specific duel. The engine switches that micro-region to
+cinematic resolution (1 tick = 10ms) — you watch a spear thrust connect, see the
+angle of incidence against sloped plate, watch the point skip off the curved
+surface. The rest of the battle continues at tactical resolution. The western
+provinces stay strategic.
 
-A player clicks on a hex where combat is happening. The UI zooms to show individual
-soldiers, their facing, their equipment. In the future, the engine can switch to
-granular physics-level ticks for this specific battle while the rest of the map
-continues at strategic tick rate.
-
-*V1: Frontend shows stacked entities on a hex with count and aggregate health.
-Individual rendering is deferred. Multi-resolution switching is deferred.*
+---
 
 ## Architecture
 
+### Spatial Model
+
+**The hex grid is not the world. It is a lens over the world.**
+
+Entities exist in continuous 3D space. The hex grid is a spatial acceleration
+structure — a projection computed from each entity's position, used for O(1)
+proximity queries and for game-mechanical bucketing (territory, resource collection,
+structure interaction).
+
+```
+World space: Vec3 (x: f64, y: f64, z: f64)
+  x, y: continuous horizontal position
+  z: altitude/depth
+    negative = underground (tunnel depth)
+    0.0 = surface (adjusted by terrain height at that x,y)
+    positive = above surface (scouting balloon, bird, future air unit)
+
+Hex projection: pixel_to_hex(pos.xy) -> Axial
+  Recomputed each tick. Not stored as authoritative state.
+  Uses cube_round algorithm for O(1) conversion.
+
+Hex column: (Axial, layer) where layer = Underground | Surface | Air
+  Derived from hex projection + z relative to terrain height.
+```
+
+One hex ≈ 150 meters across (flat-to-flat). A 30×30 map ≈ 4.5 km per side. A
+200×200 map ≈ 30 km per side (theater of war). A person walks across one hex in
+~2 minutes real time (≈20 ticks at 1 tick/sec default).
+
+**Structures snap to hex centers.** A farmhouse, a wall segment, a depot — these
+are fixed infrastructure anchored to the hex grid. Their position is a hex
+coordinate, not continuous. This is intentional: infrastructure defines the grid's
+game-mechanical meaning.
+
+**Entities have continuous positions.** A person, a horse, a wagon, a projectile —
+these live in continuous (x, y, z) space. Their hex membership is derived.
+
+### Movement
+
+Movement uses **steering behaviors** in continuous space. No teleportation between
+hex centers. No "on an edge" intermediate state.
+
+Three-layer movement architecture:
+
+1. **Pathfinding** — A* on hex graph produces a waypoint sequence of hex centers.
+   For mass movement, flow fields: Dijkstra fills the hex grid with direction
+   vectors, entities sample via barycentric interpolation of 3 nearest hex centers.
+
+2. **Path smoothing** — String-pulling / funnel algorithm on the hex center polyline
+   removes unnecessary waypoints, producing a smooth continuous-space path.
+
+3. **Steering** — Craig Reynolds behaviors operate in continuous space:
+   - `Seek` — steer toward next waypoint
+   - `Arrive` — decelerate approaching destination
+   - `Separation` — maintain personal spacing (prevents overlap)
+   - `Cohesion` — stay with formation group
+   - `Obstacle avoidance` — steer around impassable terrain
+   - `FlowFieldFollow` — sample flow field at continuous position
+
+   Output: acceleration vector. Integration: `vel += accel * dt`, `pos += vel * dt`.
+
+```
+Mobile
+  vel: Vec3              // current velocity
+  max_speed: f32         // base maximum speed
+  steering_force: f32    // maximum acceleration
+  radius: f32            // collision radius (person ~10m, ox cart ~30m)
+  waypoints: Vec<Vec3>   // smoothed path waypoints in continuous space
+```
+
+**Entities have a radius, not a footprint.** A person: ~10m radius (0.07 hex). An
+ox cart: ~30m (0.2 hex). A marching column is N entities in formation, each with
+their own position. The column "spans multiple hexes" because its members are in
+multiple hexes — no special multi-hex entity logic.
+
+**Hex boundary hysteresis.** An entity near a hex boundary would otherwise flicker
+between hexes tick-to-tick. Once assigned to a hex, an entity only changes hex
+membership when its continuous position is past the center of the new hex (> 50%
+of the way across). Prevents oscillation.
+
+### Collision
+
+Continuous positions require collision resolution. The model matches the
+simulation's grain — people moving through space, not rigid body physics.
+
+**Entity-entity separation.** Soft collision via Reynolds' `Separation` steering
+behavior. Entities within each other's radius experience a repulsive steering
+force. Entities pushed together (bottleneck, retreat) compress but don't phase
+through each other. Formations manage spacing; separation enforces it.
+
+**Entity-terrain.** Hard boundary. Before committing a position update, check
+destination hex passability. If impassable (mountain, deep water, wall), clamp
+velocity to the boundary. Walls on hex edges block movement across specific edges.
+
+**Entity-structure.** Structures occupy hex centers. Walled structures block entry
+unless the entity has permission (friendly) or the wall is breached.
+
 ### Entity Model
 
-One `SlotMap<EntityKey, Entity>` replaces all four current SlotMaps.
+One `SlotMap<EntityKey, Entity>` replaces all V2 entity storage.
 
 ```
 Entity
   id: u32                       // Public monotonic ID
-  pos: Option<Axial>            // None if contained in another entity
+  pos: Option<Vec3>             // None if contained in another entity
   owner: Option<u8>             // Player owner
 
   // Containment
@@ -126,82 +248,478 @@ Entity
 
   // Components (presence = capability)
   person: Option<Person>         // Is a living being
-  mobile: Option<Mobile>         // Can move
+  mobile: Option<Mobile>         // Can move through space
   vision: Option<Vision>         // Can see
   combatant: Option<Combatant>   // Can fight
+  body: Option<Body>             // Has body zones, takes wounds
+  equipment: Option<Equipment>   // Wears armor, carries weapons
   resource: Option<Resource>     // Is a material/food quantity
   structure: Option<Structure>   // Is a building/fortification
+  projectile: Option<Projectile> // Is a projectile in flight
 ```
 
 #### Component Details
 
 ```
 Person
-  health: f32          // 0.0 dead, 1.0 full
-  combat_skill: f32    // Base ability (everyone can fight; training improves this)
-  role: Role           // Current assignment: Idle, Farmer, Worker, Soldier, Builder
+  blood: f32             // 0.0 dead, 1.0 full. Drains from wounds.
+  stamina: f32           // 0.0 exhausted, 1.0 full. Drains from blocking, sprinting.
+  combat_skill: f32      // Training level 0.0-1.0. Affects aim, block timing.
+  role: Role             // Idle, Farmer, Worker, Soldier, Builder
 
 Mobile
-  speed: f32
-  move_cooldown: u8
-  destination: Option<Axial>
-  route: Vec<Axial>    // Cached A* waypoints
+  vel: Vec3              // Current velocity
+  max_speed: f32         // Base max speed (terrain, encumbrance modify)
+  steering_force: f32    // Max acceleration magnitude
+  radius: f32            // Collision radius in world units
+  waypoints: Vec<Vec3>   // Smoothed path in continuous space
 
 Vision
-  radius: i32          // Modified by terrain height, structure bonuses (future)
+  radius: f32            // Base vision distance (modified by height, weather)
 
 Combatant
-  engaged_with: Vec<EntityKey>
-  facing: f32          // Radians, continuous. 0 = east, PI/2 = north. Shield arc centered here.
+  facing: f32            // Radians. 0 = east, PI/2 = north.
+  stance: Stance         // Affects block arc and mobility
+  target: Option<EntityKey>  // Current engagement target
+
+Body
+  zones: [BodyZone; ZONE_COUNT]  // Head, Torso, LeftArm, RightArm, Legs
+  wounds: Vec<Wound>             // Active wounds with bleed rates
+
+BodyZone
+  armor_slot: Option<EntityKey>  // Armor entity covering this zone
+  surface_normal: f32            // Angle of surface (for ricochet calc)
+
+Wound
+  zone: usize            // Which body zone
+  bleed_rate: f32        // Blood loss per tick
+  severity: Severity     // Scratch, Laceration, Puncture, Fracture, Severed
+
+Equipment
+  weapon: Option<EntityKey>      // Wielded weapon entity
+  shield: Option<EntityKey>      // Held shield entity
+  armor_slots: [Option<EntityKey>; ZONE_COUNT]  // Per-zone armor
 
 Resource
-  resource_type: ResourceType   // Food, Material
+  resource_type: ResourceType   // Food, Material, Ore, Wood, Stone
   amount: f32
 
 Structure
-  structure_type: StructureType // Farm, Village, City, Depot (future: Wall, Tower, etc.)
+  structure_type: StructureType // Farm, Village, City, Depot, Wall, Tower
   build_progress: f32           // 0.0 - 1.0
-  health: f32                   // Damageable
+  integrity: f32                // Structural health (material-dependent)
   capacity: usize               // Max contained entities
+  material: MaterialType        // What it's built from (affects integrity)
+
+Projectile
+  damage_type: DamageType       // Pierce, Crush (no Slash for projectiles)
+  sharpness: f32
+  hardness: f32
+  mass: f32                     // For kinetic energy at impact
+  arc: bool                     // true = parabolic (arrow), false = flat (bolt)
+  source_owner: u8              // Who fired it
 ```
+
+#### Weapon and Armor as Entities
+
+Weapons and armor are entities with specialized components. They exist in the
+world — on the ground, in a stockpile, equipped by a person. Equipment is not
+abstract stats; it's a physical object with material properties.
+
+```
+WeaponProperties
+  damage_type: DamageType    // Slash, Pierce, Crush
+  sharpness: f32             // Edge quality. Degrades with use.
+  hardness: f32              // Material hardness (bronze < iron < steel)
+  weight: f32                // Affects swing speed, force, stamina cost
+  reach: f32                 // Engagement distance in world units
+  block_arc: f32             // Radians of coverage when parrying
+  block_efficiency: f32      // Stamina cost multiplier when blocking
+  projectile_speed: Option<f32>  // None = melee. Some(v) = ranged.
+  projectile_arc: bool       // Whether projectiles arc over obstacles
+  accuracy_base: f32         // Base hit probability at range 0
+
+ArmorProperties
+  material: MaterialType     // Cloth, Leather, Chain, Plate
+  hardness: f32              // Resists penetration
+  thickness: f32             // Depth of material
+  coverage: f32              // 0.0-1.0 fraction of zone covered (gaps in plate)
+  weight: f32                // Affects wearer stamina drain, speed
+```
+
+**Damage type interactions:**
+- **Slash** — effective against unarmored/leather, deflected by metal. Slashes
+  cause lacerations (high bleed rate, moderate depth).
+- **Pierce** — concentrates force on a point. Gets through chain links, finds
+  gaps in plate. Puncture wounds (moderate bleed rate, deep).
+- **Crush** — ignores surface hardness, transmits force through armor. Causes
+  concussions, fractures, stagger. Low bleed but high incapacitation.
 
 #### Composition Examples
 
-**Soldier**: Entity { person(health=1.0, combat_skill=0.6, role=Soldier), mobile, vision(5), combatant }
+**Swordsman**: Entity { person(blood=1.0, stamina=1.0, skill=0.6, Soldier),
+  mobile(speed=3.0, radius=10), vision(150), combatant, body(5 zones),
+  equipment(iron sword, leather cuirass, wooden shield) }
 
-**Farmer**: Entity { person(health=1.0, combat_skill=0.1, role=Farmer), mobile, vision(3) }
-  - Can be drafted: add combatant, change role to Soldier. Fights poorly (low combat_skill).
+**Spearman**: Entity { person(..., Soldier), mobile(speed=2.8, radius=10),
+  vision(150), combatant, body, equipment(iron spear, chain hauberk, no shield) }
+  - Longer reach than swordsman. First strike advantage. Vulnerable if flanked.
 
-**Pack animal**: Entity { person(health=1.0, combat_skill=0.0), mobile(speed=0.7), contains=[food entities] }
-  - No vision. Can't fight. Carries cargo.
+**Archer**: Entity { person(..., Soldier), mobile(speed=3.0, radius=10),
+  vision(200), combatant, body, equipment(bow, cloth tunic, no shield) }
+  - Ranged. Arc projectiles over friendlies. Useless in melee. Unarmored.
 
-**Food stockpile**: Entity { resource(Food, 50.0) }
-  - No mobility, no vision. Sits in a structure or on the ground.
+**Slinger**: Entity { person(..., Soldier), mobile(speed=3.5, radius=10),
+  vision(150), combatant, body, equipment(sling, cloth tunic, no shield) }
+  - Crush damage. Cheap. Effective against unarmored. Useless against plate.
 
-**Farmhouse**: Entity { structure(Farm, progress=1.0, health=1.0, capacity=10) }
-  - Contains farmer entities. Farmers inside produce food.
+**Farmer**: Entity { person(blood=1.0, stamina=1.0, skill=0.1, Farmer),
+  mobile(speed=2.5, radius=10), vision(100) }
+  - No combatant or body components by default. Can be drafted: add combatant +
+    body, fights poorly (low skill, no equipment).
 
-**Settlement**: Multiple structure entities on adjacent hexes, containing population entities.
-  Not a single entity — it's an emergent cluster.
+**Pack animal**: Entity { person(blood=1.0, stamina=0.8, skill=0.0),
+  mobile(speed=2.0, radius=25), contains=[cargo entities] }
+  - Larger radius. Can't fight. Carries cargo.
+
+**Arrow in flight**: Entity { pos: Vec3, mobile(vel=Vec3(40, 0, 15)),
+  projectile(Pierce, sharpness=0.7, hardness=0.5, mass=0.05, arc=true) }
+  - Lightweight entity. No person, no body. Exists during flight only.
+  - Gravity applied: vel.z -= 9.8 * dt each tick.
+
+**Iron breastplate (on ground)**: Entity { pos: Vec3, resource-like but with
+  ArmorProperties(Plate, hardness=0.8, thickness=2mm, coverage=0.85, weight=15) }
+  - Sits in a stockpile or on the ground until equipped.
 
 ### Stacking
 
-A "stack" is NOT an entity. It's a command grouping: entities on the same hex,
-belonging to the same player, grouped by the operations layer. Stacks are identified
-by (hex, player) tuple or by explicit stack ID assigned by operations.
+A "stack" is NOT an entity. It's a command grouping: entities near each other in
+continuous space, belonging to the same player, grouped by the operations layer.
+Stacks are identified by explicit StackId assigned by operations.
 
 The tactical layer reasons about stacks. The frontend renders stacks as grouped
-icons with count labels. Individual entities within a stack are not individually
-visible in the strategic map view (future: zoom to see individuals).
+icons at mid zoom. Individual entities within a stack are visible at close zoom.
 
-Moving a stack moves all entities in it. Splitting a stack creates two stacks.
-Merging puts entities together.
+Moving a stack sets waypoints for all entities in it. Formation algorithms
+distribute entities around the stack's center of mass. Splitting and merging are
+operations-layer commands.
+
+### Damage Model
+
+**No health bars.** Combat resolves through material-interaction physics. The same
+pipeline handles every scale from fist to future cannon.
+
+#### Impact Resolution Pipeline
+
+Every attack — melee swing, arrow hit, sling stone, ram against wall — passes
+through this pipeline:
+
+**Step 1: Hit Location**
+
+Determine where on the target the attack lands.
+
+```
+hit_location: f32 = aim_center + dispersion * random
+```
+
+`aim_center` is attacker intent (head, torso, etc). `dispersion` decreases with
+combat_skill and increases with distance, target speed, and attacker fatigue.
+
+The hit_location value maps to a body zone:
+
+| Range | Zone | Notes |
+|-------|------|-------|
+| 0.00 - 0.10 | Head | Small target, high lethality |
+| 0.10 - 0.50 | Torso | Largest target, vital organs |
+| 0.50 - 0.65 | Left Arm | Reduces grip / shield use |
+| 0.65 - 0.80 | Right Arm | Reduces weapon use |
+| 0.80 - 1.00 | Legs | Reduces movement speed |
+
+Zone boundaries are thresholds on a continuous value — extending to 20 zones or
+continuous coverage is just changing the lookup table, not the resolution logic.
+
+**Step 2: Block Check**
+
+Before impact resolution, check if the defender blocks.
+
+- Is the attack within the defender's block arc? (Depends on weapon/shield held
+  and current facing relative to attack angle.)
+- Does the defender have stamina to execute the block?
+
+Successful block: **full negation** of the attack. No partial blocks. Stamina cost
+to blocker proportional to attack force (weight × speed). Heavy weapons drain
+blocker stamina faster. A shield blocks a wider arc but is heavier. A sword parry
+blocks a narrow arc but costs less stamina.
+
+When stamina is depleted, the defender **cannot block**. This is how sustained
+pressure breaks a defense — not by penetrating the shield, but by exhausting the
+person holding it. Shield walls work because defenders rotate — fresh arms replace
+tired ones.
+
+Stamina recovers slowly when not blocking or sprinting. Recovery rate decreases
+with wound count and blood loss.
+
+**Step 3: Surface Lookup**
+
+What covers the hit zone? Look up the armor entity (if any) equipped at that zone.
+Get its material properties: hardness, thickness, coverage.
+
+Coverage < 1.0 means gaps. Roll against coverage to determine if the attack hits
+armor or finds a gap. Chain mail: high coverage (0.95) but low thickness. Plate:
+lower coverage (0.85 — joints, visor slits) but high thickness.
+
+**Step 4: Angle of Incidence**
+
+Compute the attack angle relative to the armor surface normal at the hit zone.
+
+```
+angle = |attack_direction - surface_normal|
+```
+
+Glancing blows (high angle) deflect. Perpendicular hits (low angle) penetrate.
+This is the ricochet primitive: a sloped breastplate deflects at shallow angles
+exactly like sloped tank armor. The surface_normal per zone captures the body's
+curvature — a torso hit from the side strikes at a different angle than from the
+front.
+
+**Step 5: Penetration Check**
+
+Does the attack's penetration exceed the surface's resistance?
+
+```
+kinetic_energy = 0.5 * mass * speed²
+penetration_factor = kinetic_energy * sharpness / cross_section
+resistance = armor_hardness * armor_thickness / sin(angle)
+
+if penetration_factor > resistance:
+  penetrate → wound
+else:
+  deflect → stagger (force transmitted, no wound)
+```
+
+Damage type modifiers:
+- **Slash**: high cross_section (edge), effective against soft materials, deflected
+  by hard surfaces. Multiplier: 1.0x against cloth/leather, 0.3x against chain, 0.1x against plate.
+- **Pierce**: low cross_section (point), concentrates force. 1.0x against all
+  materials. Finds chain links, exploits plate gaps.
+- **Crush**: ignores surface hardness entirely. Force transmits through armor.
+  No penetration → no wound, but always applies stagger and stamina damage.
+  Against head zone: concussion (temporary incapacitation).
+
+**Step 6: Wound Application**
+
+If penetration succeeds:
+
+```
+Wound {
+  zone: usize,
+  severity: computed from penetration_depth,
+  bleed_rate: computed from severity and zone vascularity,
+}
+```
+
+| Severity | Bleed Rate | Effect |
+|----------|-----------|--------|
+| Scratch | 0.001/tick | Cosmetic. Accumulates over many hits. |
+| Laceration | 0.005/tick | Painful. Reduces combat effectiveness at that zone. |
+| Puncture | 0.01/tick | Deep. Significant bleed. Organ risk at torso. |
+| Fracture | 0.003/tick | Low bleed but zone disabled. Crush damage specialty. |
+
+Zone-specific effects:
+- **Head wound**: any severity → accuracy penalty. Puncture+ → unconsciousness risk.
+- **Arm wound**: laceration+ → reduced block/attack speed on that side.
+- **Leg wound**: laceration+ → reduced movement speed. Fracture → immobile.
+- **Torso wound**: puncture+ → accelerated bleed (vital organs).
+
+**Step 7: Bleed Accumulation**
+
+Each tick, total bleed across all wounds drains the person's blood pool:
+
+```
+blood -= sum(wound.bleed_rate for wound in wounds)
+```
+
+When blood < 0.5: combat effectiveness reduced (slower, less accurate).
+When blood < 0.2: collapse (entity falls, can't act, continues bleeding).
+When blood <= 0.0: death.
+
+Most combat deaths are from accumulated bleeding over many ticks, not instant
+kills. A wounded soldier fights at reduced capacity for a long time before dying.
+This creates "walking wounded" — historically the majority of casualties.
+
+If penetration fails (deflection), the impact force still applies:
+- Stamina drain on the defender (proportional to kinetic energy)
+- Stagger: if force exceeds a threshold, defender is briefly unable to act
+  (~2-5 ticks). A mace hit on a helmet concusses through the steel.
+
+### Attack Pipeline
+
+Melee and ranged are the **same system** with different parameters. A sword swing
+and an arrow flight both produce an Impact that enters the damage pipeline.
+
+```
+AttackProfile
+  damage_type: DamageType     // Slash, Pierce, Crush
+  sharpness: f32              // Edge/point quality
+  hardness: f32               // Material (bronze < iron < steel)
+  mass: f32                   // Projectile/weapon mass
+  speed: f32                  // Impact speed (swing speed or projectile velocity)
+  reach: f32                  // Max engagement distance
+  windup: f32                 // Ticks before damage resolves
+  projectile_speed: Option<f32>  // None = melee (instant at reach). Some = ranged.
+  arc: bool                   // Parabolic trajectory (arrows) vs flat (bolts)
+  accuracy_base: f32          // Hit probability at range 0, falls off with distance
+```
+
+**Melee** (sword, fist): reach < 2m, no projectile, instant at contact. Swing
+speed derived from weapon weight and person's stamina. Must be within reach
+distance in continuous space.
+
+**Reach weapons** (spear, pike): reach 2-5m, no projectile. Spear wall holds
+enemies at arm's length — spearmen strike before swordsmen can close. Swordsmen
+must get inside spear range (flanking, or absorbing the first spear strikes).
+
+**Thrown** (javelin, sling stone): reach 15-40m, has projectile speed, moderate
+accuracy. One or two volleys before melee contact. Skirmisher weapon.
+
+**Ranged** (bow, crossbow): reach 80-200m, has projectile speed, accuracy falls
+off with distance. Bow: arc=true (arcs over obstacles and friendly lines), fast
+rate of fire, lower damage. Crossbow: arc=false (flat trajectory, needs clear line
+of sight), slow rate of fire, higher penetration.
+
+#### Projectile Entities
+
+When a ranged attack fires, a lightweight Projectile entity is spawned:
+
+```
+Entity {
+  pos: Vec3(source_pos),
+  mobile: Mobile { vel: Vec3(aim_direction * projectile_speed) },
+  projectile: Projectile { damage_type, sharpness, hardness, mass, arc, source_owner },
+}
+```
+
+Each tick: `pos += vel * dt`. If arc: `vel.z -= GRAVITY * dt` (parabolic).
+If not arc: flat trajectory (vel.z stays ~0).
+
+**Impact detection**: when `pos.z <= terrain_height_at(pos.xy)`, the projectile
+has reached ground level. Check for entity collisions at the impact point using
+the spatial index — any entity whose continuous position is within the projectile's
+impact radius. If hit, run the full impact resolution pipeline. If miss, the
+projectile entity is removed.
+
+**Friendly fire**: projectiles are entities in continuous space. A flat-trajectory
+bolt fired over a friendly line at low angle may intersect a friendly entity's
+position. Arc projectiles (arrows) rise above nearby friendlies — but a bad angle
+or short range can still hit friendlies. This falls out naturally from the physics.
+
+### Height
+
+Height matters for combat, vision, and movement without requiring full 3D
+rendering. Height is a **modifier on the 2D combat and movement math**.
+
+Each entity's effective height comes from two sources:
+
+```
+effective_z = terrain_height_at(pos.xy) + personal_elevation
+```
+
+Where personal_elevation = standing (1.7m), crouching (1.0m), mounted (2.5m),
+on a wall (wall_height), on a siege tower (tower_height).
+
+**Height effects on combat:**
+- **Hit location distribution**: Attacking uphill biases hits toward legs and
+  shield (attacker swings up). Attacking downhill biases toward head and shoulders
+  (attacker swings down). Implemented as an offset on the hit_location roll.
+- **Projectile range**: Elevated archers have longer effective range (gravity
+  assists downhill shots). Shooting uphill reduces range.
+- **Block angle**: Defending against a downhill attacker means blocking above you.
+  Shield must be raised — wider exposure, higher stamina cost.
+
+**Height effects on vision:**
+- Higher position → larger vision radius. `effective_radius = base_radius + height_bonus(z)`.
+- Line-of-sight occlusion: intervening terrain height can block vision to distant
+  hexes. Computed by ray-marching through hex columns.
+
+**Height effects on movement:**
+- Steep slope → reduced speed. `speed_modifier = 1.0 - slope_penalty * gradient`.
+- Very steep → impassable without engineering (stairs, ramp, road).
+
+**Rendering**: Top-down view shows height as terrain shading (darker = lower,
+lighter = higher) plus contour lines. Future isometric toggle shows actual
+elevation difference. Combat effects of height are visible in consequences —
+uphill defenders take fewer casualties, downhill charges are devastating — even
+without 3D rendering.
+
+### Z-Axis: Underground and Air
+
+The z-coordinate is designed from day one to support future underground and air
+layers. In V3, z = terrain_height for all surface entities. The infrastructure
+is in place for later expansion.
+
+**Underground** (future):
+- Negative z relative to terrain height. Tunnels, mines, siege sapping.
+- Entities transition via tunnel entrances (structure entities on surface hexes).
+- Underground movement in continuous space, hex grid applies at each depth layer.
+- Vision: hidden from surface unless detection (counter-mining, vibration).
+
+**Air** (future):
+- Positive z above terrain. Scouting balloons, messenger birds, (much later)
+  flying units.
+- Air entities visible from surface. Surface entities can target air with ranged.
+- Air entities ignore surface terrain for movement but are affected by it for
+  combat (mountains bring surface closer to air layer).
+
+**Spatial indexing for z**: The hex grid gains a layer dimension:
+`(Axial, Layer)` where Layer = Underground(depth) | Surface | Air(altitude).
+Proximity queries can span layers when relevant (ranged combat from surface to
+air, detection from surface to underground).
+
+### Multi-Resolution Time
+
+The engine separates **simulation time** from **tick rate**. Each tick advances
+simulation time by `tick_duration` game-seconds.
+
+```
+tick_duration: f64   // game-seconds per tick
+
+Modes:
+  Strategic:  tick_duration = 3600.0  (1 tick = 1 hour)
+  Tactical:   tick_duration = 1.0     (1 tick = 1 second) — DEFAULT
+  Cinematic:  tick_duration = 0.01    (1 tick = 10ms)
+```
+
+**Strategic mode** (1 tick = 1 hour): Armies march. Population grows. Seasons
+change. Convoys traverse the map. No individual combat — engagements in contact
+zones are resolved statistically using precomputed damage lookup tables (expected
+casualties given force composition, terrain, fortification). Agents run strategy
+layer only.
+
+**Tactical mode** (1 tick = 1 second): The default. Individual entities move,
+fight, bleed. Full material-interaction combat. All three agent layers active.
+
+**Cinematic mode** (1 tick = 10ms or less): Bullet time. Every arrow is tracked.
+Individual weapon swings resolve at high temporal resolution. Same physics, smaller
+dt. Useful for observing specific engagements in detail, or (much later) for
+resolving fast projectiles like sling stones or bolts precisely.
+
+**Per-region resolution** (future): Different regions of the map can run at
+different tick_duration values. A battle runs at tactical while distant provinces
+run at strategic. The boundary is a hex ring where entities transition between
+resolution levels. Entity state is resolution-independent (continuous positions,
+velocity) — only the dt changes.
+
+All physics formulas use `dt` (tick_duration), not tick count. Velocity
+integration: `pos += vel * dt`. Bleed: `blood -= bleed_rate * dt`. Stamina
+recovery: `stamina += recovery_rate * dt`. This makes resolution switching
+seamless — same formulas, different timestep.
 
 ### Agent Architecture
 
-Three layers, each at a different time horizon and abstraction level.
+Three layers, each at a different time horizon and abstraction level. Layer
+cadences scale with tick_duration.
 
-#### Strategy Layer (~50 ticks, agent personality lives here)
+#### Strategy Layer (every ~50 game-seconds)
 
 Each agent personality (Spread, Striker, Turtle) implements this differently.
 Receives full observation. Emits strategic directives:
@@ -211,13 +729,13 @@ StrategicDirective
   SetPosture(Posture)                              // Expand, Defend, Attack, Consolidate
   PrioritizeRegion { center: Axial, priority: f32 }
   SetEconomicFocus(EconomicFocus)                  // Growth, Military, Infrastructure
-  RequestStackFormation { size: usize, role: StackRole }
+  RequestStackFormation { size: usize, role: StackRole, equipment_profile: EquipmentProfile }
   SetExpansionTarget { hex: Axial }
 ```
 
 The strategy layer does NOT issue entity-level commands. It sets intent.
 
-#### Operations Layer (~5 ticks, shared across all agent personalities)
+#### Operations Layer (every ~5 game-seconds)
 
 Receives strategic directives + observation. Translates to entity commands:
 
@@ -225,232 +743,273 @@ Receives strategic directives + observation. Translates to entity commands:
 OperationalCommand
   AssignRole { entity: EntityKey, role: Role }
   FormStack { entities: Vec<EntityKey> }
-  RouteStack { stack: StackId, destination: Axial, via: Option<Vec<Axial>> }
+  RouteStack { stack: StackId, destination: Vec3, via: Option<Vec<Vec3>> }
   DisbandStack { stack: StackId }
+  EquipEntity { entity: EntityKey, weapon: EntityKey, armor: Vec<EntityKey> }
   BuildStructure { hex: Axial, structure_type: StructureType }
   EstablishSupplyRoute { from: Axial, to: Axial }
-  ProducePerson { settlement_hex: Axial }          // Population growth directive
+  ProducePerson { settlement_hex: Axial }
+  ProduceEquipment { settlement_hex: Axial, item_type: EquipmentType }
 ```
 
-Operations is the current city_ai promoted and generalized. It manages:
+Operations manages:
 - Population role assignment (who farms, who trains, who builds)
-- Stack formation and routing
+- Equipment production and distribution (what weapons and armor to make, who gets them)
+- Stack formation, composition, and routing
 - Infrastructure decisions (roads, structures)
 - Supply line management (convoy assignment and routing)
 - Settlement expansion (settler dispatch)
 
 All agent personalities share the same operations layer implementation.
-The difference is what strategic directives drive it.
 
-#### Tactical Layer (~1 tick, per stack near enemies)
+#### Tactical Layer (every tick, per stack near enemies)
 
-Activates only for stacks within engagement range of enemies.
-Receives local observation (entities on this hex and adjacent hexes).
-Emits per-entity combat commands:
+Activates only for stacks within engagement range of enemies. Receives local
+observation. Emits per-entity commands:
 
 ```
 TacticalCommand
-  Engage { attacker: EntityKey, target: EntityKey }
-  Disengage { entity: EntityKey }
-  SetFacing { entity: EntityKey, angle: f32 }    // Continuous radians
-  Retreat { entity: EntityKey, toward: Axial }
-  Hold { entity: EntityKey }                       // Stay and fight
+  Attack { attacker: EntityKey, target: EntityKey }
+  SetFacing { entity: EntityKey, angle: f32 }
+  Block { entity: EntityKey }                      // Enter blocking stance
+  Retreat { entity: EntityKey, toward: Vec3 }
+  Hold { entity: EntityKey }
+  SetFormation { stack: StackId, formation: FormationType }
 ```
 
-The tactical layer assesses local force ratio, decides engagements,
-manages retreat. V1 implementation is simple (engage when advantaged,
-retreat when outnumbered). The architecture supports sophisticated
-tactical AI in the future.
+The tactical layer's key responsibility: **weapon-armor matchup reasoning**. It
+must assess "my slingers are ineffective against their plate; redirect them to
+the unarmored archers on the flank." This uses the damage lookup table.
 
-### Combat Geometry
+#### Damage Lookup Table
 
-**Hex grid for position, continuous angles for combat.**
+Agents need fast approximate combat assessment without simulating every impact.
 
-Entities occupy hexes (discrete positions for spatial indexing at 100k tile scale).
-Facing is continuous (f32 radians) — not discretized to 6 hex directions. Attack
-angles are computed from hex center-to-center vectors via atan2. Shield arcs are
-continuous cones centered on facing direction.
+```
+DamageLookup: Cache<(WeaponType, ArmorType), ExpectedOutcome>
+  ExpectedOutcome {
+    wound_rate: f32,      // expected wounds per attack
+    avg_severity: f32,    // average wound severity
+    stagger_rate: f32,    // probability of stagger
+    stamina_drain: f32,   // expected stamina cost to defender
+  }
+```
 
-This hybrid gives: O(1) spatial queries from hex grid, realistic combat geometry
-from continuous angles, and natural support for V5 ranged combat (projectile
-trajectories use the same atan2 angles).
+Initialized from theoretical material physics. Updated from the agent's
+**observation journal** — each observed combat outcome is logged, and empirical
+results update the cache. Uses `moka` for time-based eviction (old observations
+age out, keeping the table current as equipment and tactics evolve).
 
-**Sub-hex rendering interpolation** solves the "teleporting between tiles" visual
-problem. Entities at hex A moving to hex B are rendered at the interpolated position
-between hex centers based on movement cooldown progress. Zero simulation cost —
-purely a frontend lerp.
+The tactical layer consults the lookup table for fast matchup assessment. The sim
+runs the full material physics. Over time, the table converges toward ground truth
+for the actual combat conditions the agent encounters.
 
-### Combat Resolution
-
-Per-individual, per-tick. No aggregate strength abstractions. No engagement lock —
-combat is moment-to-moment, not a persistent state.
-
-Each tick, for each attacker/defender pair in contact:
-1. Compute attack angle: `atan2(defender.y - attacker.y, defender.x - attacker.x)`
-   using hex center pixel coordinates
-2. Compute facing difference: `|attack_angle - defender.facing|`
-3. Apply facing modifier based on shield arc coverage:
-   - Within shield arc (front): damage × 0.3 (shield blocks most)
-   - Within PI/2 of facing (side): damage × 0.7
-   - Beyond PI/2 (rear): damage × 1.5
-4. `damage = attacker.combat_skill * DAMAGE_PER_TICK * facing_modifier`
-5. Apply to defender health. At 0, entity dies.
-
-**No engagement lock.** V2's "engaged on hex edge, 30% penalty to disengage" is
-gone. Retreating under attack means taking hits to the back (1.5x damage). The
-cost of retreat is the damage you take while your back is turned, not an arbitrary
-penalty. Attackers can also freely walk away.
-
-**No 1/sqrt(N) formula.** V2's multi-edge effectiveness penalty was abstracting
-"a unit can only face one direction." With individual facing, this IS the simulation.
-A defender facing north who is attacked from north and south can only block the
-north attacker — the south attacker gets the rear bonus naturally.
-
-**Flanking emerges from geometry:** Two attackers from different directions means the
-defender can only face one. The tactical layer's job is to coordinate approaches so
-attackers arrive from multiple directions simultaneously.
-
-**Formation is the core tactical mechanic.** A line of defenders facing the same
-direction creates a wall — their shield arcs collectively cover the front. A bad
-formation algorithm leaves gaps. A good one overlaps arcs. Historical formations
-(phalanx, shield wall, wedge) emerge as algorithmically optimal configurations for
-specific combat situations.
+This is the foundation for future learned agents: the observation journal is
+training data. When eventually switching to NN-based tactical decisions, the
+journal format is the dataset.
 
 ### Simulation Tick
 
 ```
-tick(state):
-  rebuild_spatial_index()
-  compute_territory()           // From structures + entity presence
-  
-  // Agent layers (at their cadences)
-  if tick % 50 == 0: run_strategy(state)
-  if tick % 5 == 0: run_operations(state)
-  run_tactical(state)           // Every tick for engaged stacks
-  
+tick(state, dt):
+  // Spatial
+  rebuild_spatial_index()             // Recompute hex membership from positions
+  compute_territory()                 // From structures + entity presence
+
+  // Agent layers (cadences scale with dt)
+  if game_time % 50.0 < dt: run_strategy(state)
+  if game_time % 5.0 < dt: run_operations(state)
+  run_tactical(state)                 // Every tick for stacks near enemies
+
   // Simulation
-  execute_commands(state)       // Apply agent commands
-  produce_resources(state)      // Farmers/workers in structures generate resources
-  consume_food(state)           // Every person eats (from local resources or carried)
-  resolve_combat(state)         // Per-individual damage
-  move_entities(state)          // Pathfinding and movement
-  update_structures(state)      // Construction progress, damage
-  cleanup_dead(state)           // Remove dead entities
-  check_elimination(state)      // Player eliminated when all structures lost
-  
+  execute_commands(state)             // Apply agent commands
+  produce_resources(state, dt)        // Farmers/workers in structures
+  consume_food(state, dt)             // Every person eats
+  recover_stamina(state, dt)          // Stamina regeneration (reduced by wounds)
+  apply_steering(state, dt)           // Compute steering forces
+  integrate_movement(state, dt)       // vel += accel*dt, pos += vel*dt
+  resolve_collisions(state)           // Separation, terrain clamping
+  advance_projectiles(state, dt)      // Move projectiles, check impacts
+  resolve_combat(state, dt)           // Melee impact resolution for entities in range
+  apply_bleed(state, dt)              // Wounds drain blood
+  update_structures(state, dt)        // Construction progress, decay
+  cleanup_dead(state)                 // Remove dead entities, drop equipment
+  check_elimination(state)            // Player eliminated when all structures lost
+
+  state.game_time += dt
   state.tick += 1
 ```
 
 ### Frontend: PixiJS Renderer
 
 **Replace SVG (HexBoard.tsx) with PixiJS WebGL (HexCanvas.tsx).** SVG caps at ~5k
-elements at 60fps. V3 targets 100k tiles, 10k entities. PixiJS with sprite batching
-handles this.
+elements at 60fps. V3 targets 100k tiles and 10k entities.
 
 Architecture: PixiJS renders the map canvas. SolidJS renders UI panels (score bar,
-controls, tooltips) as HTML overlaid via CSS positioning.
+controls, tooltips, inspector) as HTML overlaid via CSS positioning.
 
 **Rendering layers (bottom to top):**
 1. Hex Grid — biome-colored hex sprites, chunked at far zoom
-2. Territory — player-colored overlay, recomputed on territory change
-3. Infrastructure — roads as line segments
-4. Entity — unified sprites for all entity types (people, structures, resources)
-5. UI Overlay — count badges, health indicators, facing arrows
+2. Height — terrain shading (lighter = higher) + contour lines
+3. Territory — player-colored overlay
+4. Infrastructure — roads, walls, structures
+5. Entity — unified sprites for all entity types at continuous positions
+6. Projectiles — arrows, stones in flight (small, fast-moving sprites)
+7. UI Overlay — count badges, wound indicators, facing arrows
 
-**Entity interpolation:** Buffer two server ticks. Each render frame, lerp entity
-positions: `pos = lerp(state[t-1].pos, state[t].pos, elapsed / tickInterval)`.
-Eliminates hex-to-hex teleporting.
+**Entity rendering uses continuous positions directly.** No interpolation between
+hex centers — the entity's pos is already continuous. The renderer just converts
+world-space Vec3 to screen-space Vec2 (projecting z as a height shadow or offset
+in future isometric mode).
 
 **Zoom / LOD tiers:**
 | Zoom  | Hex rendering      | Entity rendering                    |
 |-------|--------------------|-------------------------------------|
-| Close | Individual sprites | Individual entities, facing arrows  |
-| Mid   | Individual sprites | Stack badges ("x15"), structure icons|
+| Close | Individual sprites | Individual entities, facing, equipment visible |
+| Mid   | Individual sprites | Stack badges ("x15"), structure icons |
 | Far   | Chunk textures     | Density heatmap, settlement dots    |
 
 **Spatial indexing:**
 - Flatbush (static R-tree) for hex grid viewport queries
 - RBush (dynamic R-tree) for entity click/hover queries
 
-**What's NOT in V1 frontend:**
-- Texture atlas optimization (use simple colored shapes first)
-- Chunk pre-rendering for far zoom (20x20 map doesn't need it)
-- Delta sync protocol (full snapshot per tick at V1 scale)
-- Animated route lines
-
 ### Observation / Protocol
 
 ```
-EntityInfo (replaces UnitInfo + ConvoyInfo + PopulationInfo)
-  id: EntityKey
+EntityInfo
+  id: u32
   owner: Option<u8>
-  q: i32, r: i32
-  health: Option<f32>           // If person
-  role: Option<Role>            // If person
-  combat_skill: Option<f32>     // If combatant
-  engaged: bool
-  resource_type: Option<ResourceType>  // If resource
+  x: f64, y: f64, z: f64       // Continuous position
+  hex_q: i32, hex_r: i32       // Derived hex (for convenience)
+  facing: Option<f32>
+  role: Option<Role>
+  blood: Option<f32>
+  stamina: Option<f32>
+  wound_count: u8
+  weapon_type: Option<String>
+  armor_type: Option<String>    // Dominant armor (for quick assessment)
+  resource_type: Option<ResourceType>
   resource_amount: Option<f32>
-  structure_type: Option<StructureType> // If structure
-  contains_count: usize         // How many entities inside
+  structure_type: Option<StructureType>
+  build_progress: Option<f32>
+  contains_count: usize
 ```
 
 Agents see:
-- All own entities (full detail)
-- Visible enemy entities (position, owner, health, combat status)
-- Visible structures (type, health)
+- All own entities (full detail including exact wounds, equipment, blood)
+- Visible enemy entities (position, owner, approximate wound state, equipment visible)
+- Visible structures (type, integrity, material)
 - Scouted terrain (permanent)
+- Projectiles in flight (position, velocity — can't identify damage properties)
+
+---
 
 ## Scope
 
-### V1 (ship this)
+### V3.0 (ship this)
 
 **Engine:**
 - [ ] Single Entity type with component bag replacing Unit/Convoy/Population/Settlement
-- [ ] Containment system (entities in entities)
-- [ ] Individual-level entities (1 person = 1 entity)
-- [ ] Stacking as visual/command grouping
-- [ ] Per-individual combat resolution with continuous facing (f32 radians)
-- [ ] Strategy layer (posture, priorities, economic focus)
-- [ ] Operations layer (role assignment, stack formation, routing, infrastructure)
-- [ ] Tactical layer (per-stack engagement, facing, formation decisions)
+- [ ] Continuous Vec3 positions with hex grid as derived projection
+- [ ] Steering-based movement (seek, arrive, separation, obstacle avoidance)
+- [ ] Collision system (entity-entity separation, entity-terrain hard boundary)
+- [ ] Body zone system (Head, Torso, LeftArm, RightArm, Legs)
+- [ ] Material-interaction damage pipeline (hit location → block check → surface
+      lookup → angle of incidence → penetration check → wound → bleed)
+- [ ] Weapon and armor entities with material properties
+- [ ] Bleed/blood system replacing health bars
+- [ ] Stamina system for blocking
+- [ ] Unified attack pipeline (melee and ranged as parameter differences)
+- [ ] Projectile entities (arrows, sling stones, javelins)
+- [ ] Projectile arc physics (parabolic for bows, flat for crossbows)
+- [ ] Height effects on combat (hit location bias, range, block angle)
+- [ ] Height effects on vision (elevated = further sight, LOS occlusion)
+- [ ] Strategy layer (posture, priorities, economic focus, equipment profiles)
+- [ ] Operations layer (role assignment, equipment production/distribution, stack
+      formation, routing, infrastructure, supply lines)
+- [ ] Tactical layer (weapon-armor matchup reasoning, engagement assignment,
+      facing, formation, retreat)
+- [ ] Damage lookup table with moka caching
+- [ ] Observation journal (log combat outcomes for empirical table updates)
 - [ ] Resource production via person-in-structure
 - [ ] Food consumption per-person
-- [ ] Structure construction (build progress)
-- [ ] Structure damage and destruction
-- [ ] A* pathfinding (reuse existing)
-- [ ] Small scale: 20x20 map, 2 players, ~200-300 entities, 10 ticks/sec
+- [ ] Structure construction (build progress, material-dependent integrity)
+- [ ] A* pathfinding on hex graph + path smoothing
+- [ ] Default tick_duration = 1.0 game-second
+- [ ] Small scale: 30×30 map, 2 players, ~500 entities
 
 **Frontend:**
 - [ ] PixiJS WebGL renderer replacing SVG HexBoard.tsx
-- [ ] Entity interpolation between ticks (lerp positions)
-- [ ] Zoom/pan camera with LOD tiers (close: individuals, mid: stacks, far: density)
-- [ ] Viewport culling via Flatbush spatial index
-- [ ] Unified entity rendering (no separate unit/convoy/settlement visuals)
-- [ ] SolidJS UI panels overlaid on canvas (score bar, controls)
+- [ ] Continuous-position entity rendering (no hex-center snapping)
+- [ ] Zoom/pan camera with LOD tiers
+- [ ] Viewport culling via Flatbush
+- [ ] Projectile rendering (arrows in flight)
+- [ ] Height visualization (terrain shading + contour lines)
+- [ ] Wound indicators at close zoom
+- [ ] SolidJS UI panels overlaid on canvas
 
 **Integration:**
-- [ ] All existing functionality preserved (round-robin, spectator, replay)
-- [ ] Updated wire protocol (SpectatorEntity replaces SpectatorUnit/SpectatorConvoy)
+- [ ] Round-robin, spectator, replay preserved
+- [ ] Updated wire protocol (continuous positions, entity info with wound/equipment)
 
-### Deferred
+### V3.1
 
-- Body slots and equipment as entities (V3.1)
-- Carrying capacity tradeoffs — rations vs weapons vs cargo (V3.1)
-- Training and skill progression (V3.2)
-- Injury system and body part damage (V3.2)
-- Durability and wear on items (V3.2)
-- Physics-level resolution layer (V3.3)
-- Multi-resolution simulation switching (V3.3)
-- Data-driven aggregate resolution (V3.4)
-- Environmental effects (weather, clothing) (V4)
-- Morale, loyalty, factions, politics (V4)
-- Technology tree unlocking new compositions (V4)
-- Commander delegation and field officers (V4)
-- Ministers and advisors (V4)
-- Texture atlas and chunk pre-rendering (scale optimization)
-- Delta sync protocol (scale optimization)
-- Large-scale maps (100x100+) with optimized entity processing (ongoing)
+- Equipment as entities with full material properties (done in V3.0 for basic
+  weapons/armor, extended here for variety)
+- Carrying capacity tradeoffs — rations vs weapons vs cargo
+- Equipment degradation (sharpness decreases with use, armor dents)
+- More weapon types (mace, axe, halberd, pike)
+- More armor types (scale mail, brigandine, full plate with articulation)
+
+### V3.2
+
+- Multi-resolution time (strategic 1hr / tactical 1s / cinematic 10ms)
+- Per-region resolution switching
+- Statistical combat resolution for strategic mode
+- Flow field pathfinding for mass movement
+
+### V3.3
+
+- Underground layer (tunnels, mines, siege sapping)
+- Air layer (observation balloons, messenger birds)
+- Z-axis combat (surface-to-air targeting, tunnel collapse)
+
+### Deferred to V4+
+
+- Morale, loyalty, factions, politics
+- Commander delegation and field officers
+- Technology tree
+- Fortification and siege equipment
+- Water transport
+- NN-based agent learning
+- Environmental effects (weather, seasons)
+
+## Resolved Questions
+
+1. **Settlers as entities**: Yes. Population entities physically walk to a new hex
+   and build a structure.
+
+2. **Pack animals**: Treated as Person entities with skill=0 in V3.0. Future:
+   distinct Animal component with different body zones.
+
+3. **Structure ownership transfer**: Structures become unowned when all owner's
+   entities on that hex die. Any player's entities can then occupy.
+
+4. **Population growth**: New person entity spawns at settlement when food surplus
+   sustained. Future: more nuanced.
+
+5. **Movement model**: Continuous Vec3 positions with steering behaviors. Hex grid
+   is spatial indexing only.
+
+6. **Damage model**: Material-interaction physics with body zones, wounds, and
+   bleed. No health bars.
+
+7. **Ranged combat**: In V3.0 scope. Same attack pipeline as melee with projectile
+   parameters.
+
+8. **Height**: Modifier on 2D math. Z-coordinate from day one for future air/underground.
+
+9. **Time resolution**: Default 1 tick = 1 second. Multi-resolution in V3.2.
 
 ## Security
 
@@ -462,110 +1021,61 @@ No new endpoints. No PII.
 ### Build and Test
 ```bash
 cargo build --release
-cargo test -p simulate-everything-engine -- v2  # (becomes v3)
+cargo test -p simulate-everything-engine
 ```
 
 ### Gameplay Verification
 ```bash
-# ASCII simulation — entities visible as individual counts
-cargo run --release --bin simulate_everything_cli -- v2bench \
-  --agents spread,striker --seeds 0-4 --size 20x20
+# ASCII simulation
+cargo run --release --bin simulate_everything_cli -- v3bench \
+  --agents spread,striker --seeds 0-4 --size 30x30
 
-# Round-robin — all three agent layers running
-curl -s http://localhost:3333/api/v2/rr/status
+# Round-robin
+curl -s http://localhost:3333/api/v3/rr/status
 
-# Visual verification — frontend renders entity stacks
-# Open browser to localhost:3333, observe V2 RR game
+# Visual — browser to localhost:3333, observe V3 RR game
 ```
 
 ### Architecture Verification
-- [ ] No remaining references to old Unit/Convoy/Population/Settlement types
-- [ ] All entities use single EntityKey
-- [ ] Containment works: create structure, put person inside, verify vision/production
-- [ ] Combat resolves per-individual: two stacks meet, individuals die, stack shrinks
-- [ ] Strategy layer emits directives, operations translates, tactical engages
-- [ ] Transport eats cargo: food convoy loses food en route (even without equipment system)
+- [ ] All entities use single EntityKey with Vec3 positions
+- [ ] Hex membership derived from continuous position (not stored)
+- [ ] Movement is continuous — no teleportation between hex centers
+- [ ] Combat resolves through material physics — no health bars
+- [ ] Projectiles are entities that fly through space with gravity
+- [ ] Body zones, wounds, and bleed produce realistic casualty patterns
+- [ ] Weapon-armor interactions match physical expectations (sling vs plate = stagger, not wound)
+- [ ] Archers fire over friendly lines via parabolic arc
+- [ ] Height affects hit location, range, vision
+- [ ] Tactical layer uses damage lookup table for matchup decisions
 - [ ] Git clean: no stale worktrees, no stale branches, all committed
 
 ### Completion State
 - All changes committed to main
 - No open worktrees
-- No stale branches
 - `cargo build --release` clean
 - `cargo test` all green
-- Round-robin playable with new entity system
-- Frontend renders correctly
-
-## Files Modified
-
-### Engine (complete rewrite of most files)
-- `crates/engine/src/v2/state.rs` — Entity struct replaces Unit/Convoy/Population/Settlement
-- `crates/engine/src/v2/mod.rs` — Updated constants, removed company-level constants
-- `crates/engine/src/v2/sim.rs` — New tick loop with per-individual resolution
-- `crates/engine/src/v2/combat.rs` — Individual combat with facing
-- `crates/engine/src/v2/agent.rs` — Three-layer architecture, strategy/operations/tactical
-- `crates/engine/src/v2/city_ai.rs` — Becomes operations layer (may rename)
-- `crates/engine/src/v2/directive.rs` — Strategic/Operational/Tactical command types
-- `crates/engine/src/v2/observation.rs` — EntityInfo replaces UnitInfo/ConvoyInfo/PopInfo
-- `crates/engine/src/v2/spectator.rs` — SpectatorEntity replaces SpectatorUnit/SpectatorConvoy
-- `crates/engine/src/v2/replay.rs` — EntitySnapshot replaces UnitSnapshot/ConvoySnapshot
-- `crates/engine/src/v2/vision.rs` — Simplified: vision from individual entities
-- `crates/engine/src/v2/mapgen.rs` — Generate individual entities, structures
-- `crates/engine/src/v2/pathfinding.rs` — Mostly unchanged (A* reused)
-- `crates/engine/src/v2/integration_tests.rs` — Complete rewrite for entity system
-
-### Frontend (PixiJS migration)
-- `frontend/src/HexCanvas.tsx` — NEW: PixiJS WebGL renderer replacing HexBoard.tsx
-- `frontend/src/HexBoard.tsx` — DELETED: SVG renderer replaced
-- `frontend/src/v2types.ts` — V3EntitySnapshot replaces V2UnitSnapshot/V2ConvoySnapshot
-- `frontend/src/V2SimApp.tsx` — Wire HexCanvas instead of HexBoard
-- `frontend/src/V2App.tsx` — Wire HexCanvas instead of HexBoard
-- `frontend/src/styles/app.css.ts` — Canvas layout, UI panel positioning
-- `frontend/package.json` — Add pixi.js, flatbush, rbush dependencies
-
-### CLI
-- `crates/cli/src/bin/v2_scaling_bench.rs` — Updated for entity system
-
-### Web
-- `crates/web/src/v2_protocol.rs` — Updated wire types
-- `crates/web/src/v2_roundrobin.rs` — May need agent initialization changes
+- Round-robin playable with new systems
+- Frontend renders correctly with continuous positions
+- Combat produces plausible casualty patterns
 
 ## Convention Observations
 
-- The V2 engine module structure (one file per concern) scales well for this refactor.
-  city_ai.rs naturally becomes the operations layer. agent.rs naturally splits into
-  strategy + tactical. No new module organization needed.
+- The V2 engine module structure (one file per concern) scales well. New modules
+  needed: `damage.rs` (impact pipeline), `steering.rs` (movement behaviors),
+  `projectile.rs` (projectile physics), `equipment.rs` (weapon/armor properties).
 
-- The SlotMap pattern (typed keys into arenas) works for the unified entity model.
-  One SlotMap<EntityKey, Entity> with component data inline is the simplest approach.
-  If performance requires it later, components can be split into separate SlotMaps
-  (SoA pattern) keyed by the same EntityKey.
+- `moka` crate for agent damage lookup table caching. Time-based eviction keeps
+  empirical tables current.
+
+- All physics formulas use `dt` parameter, never raw tick counts. This makes
+  multi-resolution switching in V3.2 zero-cost.
 
 ## Adjacent Observations
 
-- **Individual-level simulation at scale is a Rust performance showcase.** If we hit
-  10,000+ entities at 10 ticks/sec, that's a compelling demo of what Rust enables
-  for game simulation that would be painful in other languages.
+- The material-interaction damage pipeline is domain-general. The same code that
+  resolves "iron sword vs leather armor at 30° incidence" resolves "AP shell vs
+  sloped steel plate at 45° incidence." The pipeline doesn't know what era it's in.
 
-- **The three-layer agent architecture (strategy/operations/tactical) is a general
-  pattern that could apply to [redacted]'s AI operating partner.** A domain-specific AI
-  has strategic goals (grow practice, improve patient outcomes), operational execution
-  (scheduling, billing, supply ordering), and tactical responses (handle this specific
-  patient interaction). Same layered reasoning, different domain.
-
-## Open Questions
-
-1. **Settlers as entities**: When a settlement "sends settlers," is that population
-   entities physically walking to a new hex and building a structure? (Assumed: yes.)
-
-2. **Pack animals**: Are pack animals separate entity types (with Person component but
-   combat_skill=0), or should there be an Animal component distinct from Person?
-   V1 can treat them as persons with low stats. Future: distinct Animal component.
-
-3. **Structure ownership transfer**: If all defenders die, does the attacker capture
-   structures or must they be explicitly claimed? (Suggest: structures become unowned
-   when all owner's entities on that hex die. Any player's entities can then occupy.)
-
-4. **Population growth**: Currently driven by food surplus. With individual entities,
-   is growth "new person entity spawns at settlement" or something more biological?
-   V1: spawn new person entity when food surplus sustained. Future: more nuanced.
+- The observation journal + moka cache pattern for agent learning could apply to
+  domain-general. Any system that observes outcomes and updates its decision
+  confidence can use this architecture — the combat agent is one instance.
