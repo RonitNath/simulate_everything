@@ -52,58 +52,63 @@ const V3DrillApp: Component = () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const msg: any = JSON.parse(ev.data);
 
-      if ("v3_init" in msg) {
-        batch(() => {
-          setInitData(msg.v3_init.init);
-          setFrame(null);
-          setStatus(`Init: ${msg.v3_init.init.width}x${msg.v3_init.init.height}`);
-        });
-      } else if ("v3_snapshot" in msg) {
-        setFrame(msg.v3_snapshot.snapshot);
-        setSettled(true);
-      } else if ("v3_snapshot_delta" in msg) {
-        const delta = msg.v3_snapshot_delta.delta;
-        setFrame((prev) => {
-          if (!prev) return null;
-          // Apply delta to produce new snapshot.
-          const entities: SpectatorEntityInfo[] = [...prev.entities];
+      switch (msg.type) {
+        case "v3_init": {
+          batch(() => {
+            setInitData(msg as V3Init);
+            setFrame(null);
+            setStatus(`Init: ${msg.width}x${msg.height}`);
+          });
+          break;
+        }
+        case "v3_snapshot": {
+          setFrame(msg as V3Snapshot);
+          setSettled(true);
+          break;
+        }
+        case "v3_snapshot_delta": {
+          setFrame((prev) => {
+            if (!prev) return null;
+            const entities: SpectatorEntityInfo[] = [...prev.entities];
 
-          // Remove.
-          const removedSet = new Set(delta.entities_removed);
-          const kept = entities.filter((e) => !removedSet.has(e.id));
+            // Remove.
+            const removedSet = new Set(msg.entities_removed);
+            const kept = entities.filter((e) => !removedSet.has(e.id));
 
-          // Update.
-          for (const u of delta.entities_updated) {
-            const e = kept.find((e) => e.id === u.id);
-            if (!e) continue;
-            if (u.x !== undefined) e.x = u.x;
-            if (u.y !== undefined) e.y = u.y;
-            if (u.z !== undefined) e.z = u.z;
-            if (u.hex_q !== undefined) e.hex_q = u.hex_q;
-            if (u.hex_r !== undefined) e.hex_r = u.hex_r;
-            if (u.facing !== undefined) e.facing = u.facing;
-            if (u.blood !== undefined) e.blood = u.blood;
-            if (u.stamina !== undefined) e.stamina = u.stamina;
-            if (u.wounds !== undefined) e.wounds = u.wounds;
-            if (u.attack_phase !== undefined) e.attack_phase = u.attack_phase ?? undefined;
-            if (u.attack_motion !== undefined) e.attack_motion = u.attack_motion ?? undefined;
-            if (u.weapon_angle !== undefined) e.weapon_angle = u.weapon_angle ?? undefined;
-            if (u.attack_progress !== undefined) e.attack_progress = u.attack_progress ?? undefined;
-          }
+            // Update.
+            for (const u of msg.entities_updated) {
+              const e = kept.find((e) => e.id === u.id);
+              if (!e) continue;
+              if (u.x !== undefined) e.x = u.x;
+              if (u.y !== undefined) e.y = u.y;
+              if (u.z !== undefined) e.z = u.z;
+              if (u.hex_q !== undefined) e.hex_q = u.hex_q;
+              if (u.hex_r !== undefined) e.hex_r = u.hex_r;
+              if (u.facing !== undefined) e.facing = u.facing;
+              if (u.blood !== undefined) e.blood = u.blood;
+              if (u.stamina !== undefined) e.stamina = u.stamina;
+              if (u.wounds !== undefined) e.wounds = u.wounds;
+              if (u.attack_phase !== undefined) e.attack_phase = u.attack_phase ?? undefined;
+              if (u.attack_motion !== undefined) e.attack_motion = u.attack_motion ?? undefined;
+              if (u.weapon_angle !== undefined) e.weapon_angle = u.weapon_angle ?? undefined;
+              if (u.attack_progress !== undefined) e.attack_progress = u.attack_progress ?? undefined;
+            }
 
-          // Appeared.
-          kept.push(...delta.entities_appeared);
+            // Appeared.
+            kept.push(...msg.entities_appeared);
 
-          return {
-            ...prev,
-            tick: delta.tick,
-            dt: delta.dt,
-            entities: kept,
-            projectiles: prev.projectiles, // drill doesn't use projectiles yet
-            stacks: prev.stacks,
-          };
-        });
-        setSettled(true);
+            return {
+              ...prev,
+              tick: msg.tick,
+              dt: msg.dt,
+              entities: kept,
+              projectiles: prev.projectiles,
+              stacks: prev.stacks,
+            };
+          });
+          setSettled(true);
+          break;
+        }
       }
     };
 
