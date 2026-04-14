@@ -1,44 +1,66 @@
 # V3 Capability Matrix
 
-Updated: 2026-04-14
+Updated: 2026-04-14 (end-of-day, post Stream B/E/F merges)
 
 Legend:
 - `engine-live` — shared engine/runtime path actively uses it
 - `shared-engine-unused` — implemented in shared engine, but not yet wired into the live tick/RR path
-- `bench-only` — works only via `v3bench` or other harness code
 - `module-only` — primitives/modules/tests exist, but there is no shared execution path using them
 - `placeholder` — type/surface exists, but the values are scaffolded or synthetic
 - `not-landed` — still missing
 
-The `v3-shared-exec` pass moved V3 command application into the shared engine, the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` reuses, the `v3-rr-runtime` pass routed V3 RR through that same path, the `v3-state-surfaces` pass replaced several placeholder protocol/perception fields with engine-derived state, and the `v3-shared-economy` pass moved shared stockpile production/consumption/equipment spawning out of the bench harness. Roads and richer economy systems still remain partial.
+## Original V3 Waves (A1-R5)
 
 | Item | Status | Notes |
 |------|--------|-------|
-| S1 | `engine-live` | Spatial types, hex projection, and index are used by the engine tick. |
-| S2 | `engine-live` | Collision and spatial primitives are live for current movement/projectile handling. |
-| D1 | `engine-live` | Body zones, wounds, bleed, and vitals are live. |
-| W1 | `engine-live` | Weapon/armor/material property model is live. |
-| R1 | `engine-live` | Frontend/renderer scaffold exists and is used. |
-| M1 | `shared-engine-unused` | Core steering primitives exist; live tick uses only a subset. |
-| D2 | `engine-live` | Impact resolution pipeline is live. |
-| W2 | `engine-live` | Melee attack state and resolution are live. |
-| A1 | `engine-live` | Layer types and agent output structure are live. |
-| R2 | `engine-live` | Continuous entity rendering is live. |
-| M2 | `module-only` | Pathfinding/smoothing/formation-slot modules exist but are not integrated into live routing. |
-| W3 | `shared-engine-unused` | Projectile entities and arc physics exist, but the full spec path is still partial. |
-| A2 | `engine-live` | Shared ops layer exists; engine-owned agent/economy phases now apply its outputs in bench, sim, and V3 RR. |
-| E1 | `engine-live` | Entity model, containment, and mapgen are live. |
-| P1 | `engine-live` | Core wire types/snapshot surface exist and now emit derived territory, structures, player aggregates, and task labels. |
-| A3 | `engine-live` | Tactical reasoning now runs through the shared engine-owned phase in bench, sim, and V3 RR. |
-| A4 | `engine-live` | Strategy personalities now feed the shared engine-owned phase in bench, sim, V3 RR, and a non-empty derived strategic view. |
-| A5 | `shared-engine-unused` | Damage tables and combat observations exist; learning loop wiring remains partial. |
-| E2 | `engine-live` | The engine now owns `run_agent_phase`, `tick_with_agents`, and shared per-tick economy updates; V3 RR runs through the same path. |
-| P2 | `engine-live` | RR/replay surface now uses the shared engine command path, but several protocol fields remain placeholder-grade. |
-| R3 | `engine-live` | Projectile/wound/equipment presentation support exists in replay/render flows. |
-| R4 | `engine-live` | Viewport culling exists. |
-| P3 | `placeholder` | Live status surface exists and more spectator fields are engine-derived now, but roads and some deeper economy surfaces remain scaffolded. |
-| P4 | `placeholder` | Review/capture surface exists, but depends on partial runtime integration. |
+| S1 | `engine-live` | Spatial types, hex projection, index. |
+| S2 | `engine-live` | Collision and spatial primitives. |
+| D1 | `engine-live` | Body zones, wounds, bleed, vitals. |
+| W1 | `engine-live` | Weapon/armor/material property model. |
+| R1 | `engine-live` | Standalone wgpu viewer replacing PixiJS (B complete). |
+| M1 | `shared-engine-unused` | Core steering primitives; live tick uses a subset. |
+| D2 | `engine-live` | Impact resolution pipeline. |
+| W2 | `engine-live` | Melee attack state and resolution. |
+| A1 | `engine-live` | Layer types, agent output, cadence dispatch. |
+| R2 | `engine-live` | Entity rendering with compute interpolation + LOD (B3). |
+| M2 | `module-only` | Pathfinding/smoothing/formation-slot modules exist, not in live routing. |
+| W3 | `shared-engine-unused` | Projectile entities and arc physics; full path partial. |
+| A2 | `engine-live` | Operations layer — now injects methods, not task assignments (E). |
+| E1 | `engine-live` | Entity model, containment, mapgen. |
+| P1 | `engine-live` | Wire types, snapshot, territory/player/task surfaces. |
+| A3 | `engine-live` | Tactical reasoning via resolution demand (E6). |
+| A4 | `engine-live` | Strategy personalities — now adjust need weights (E). |
+| A5 | `shared-engine-unused` | Damage tables and observations; learning loop partial. |
+| E2 | `engine-live` | Engine-owned agent phase, shared economy. |
+| P2 | `engine-live` | RR/replay surface. |
+| R3 | `engine-live` | Projectile/wound/equipment presentation. |
+| R4 | `engine-live` | Viewport culling. |
+| P3 | `placeholder` | Live status; roads and deeper economy scaffolded. |
+| P4 | `placeholder` | Review/capture surface. |
 | R5 | `not-landed` | Deferred from V3.0 scope. |
+
+## Concurrent Streams
+
+| Stream | Status | Notes |
+|--------|--------|-------|
+| Phase 0 (protocol crate) | `engine-live` | Shared wire types + msgpack. |
+| A (Verlet body) | `engine-live` | 16-point skeletal model, constraint solver, kinetic chain. |
+| B (wgpu viewer) | `engine-live` | Terrain clipmap, entity rendering, body model, hex overlay, standalone shell, terrain raster streaming. |
+| C (spatial index) | `engine-live` | Fine (10m), coarse (500m), hex mapping with hysteresis. |
+| D (terrain ops) | `engine-live` | Analytic op log, compaction, rasterization cache, viewer streaming. |
+| E (agent behavior) | `engine-live` | Needs, utility scorer, HTN engine, action queues, resolution demand, social state. E7 (validation) in progress. |
+| F (compositional world) | `engine-live` | Physical properties, tool properties, matter stacks, site properties, affordance queries, tag-based economy. |
+
+## Protocol / Frontend
+
+| Surface | Status | Notes |
+|---------|--------|-------|
+| Entity needs/goal/action | `engine-live` | Exposed via SpectatorEntityInfo (E). |
+| Physical/tool/matter/site | `engine-live` | Exposed via SpectatorEntityInfo (F). |
+| Terrain raster init | `engine-live` | Full-resolution height/material via V3Init (D+B). |
+| Terrain patch deltas | `engine-live` | Per-tick dirty patches via V3SnapshotDelta (D+B). |
+| Body model wire | `engine-live` | BodyRenderInfo in deltas (A+B). |
+| Inspector | `engine-live` | Shows needs, goal, action, physical properties. |
 
 Primary references:
 - [docs/plans/v3-sequencing.md](./plans/v3-sequencing.md)

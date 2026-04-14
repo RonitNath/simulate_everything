@@ -224,3 +224,37 @@ For >500 units: `HashMap<Axial, Vec<UnitId>>` spatial hash — O(1) per cell,
 iterate ~19 hexes in radius-2 ring. Standard approach in hex games.
 
 Our game has <100 units typically. Brute force is correct.
+
+---
+
+## Addendum: Integration with V3 Agent Architecture (2026-04-14)
+
+The research above predates Stream E (autonomous entity behavior) and Stream F
+(compositional world model). Here's how these findings integrate:
+
+**Influence maps** → perception/context layer that feeds into the
+`StrategicView` and the utility scorer's local context. Not a decision system
+themselves. The coarse index (Stream C, CoarseIndex at 500m cells) already
+provides the spatial aggregation that influence maps would — per-player
+population and army strength per cell. Additional influence layers (threat
+momentum, resource value, terrain infrastructure density) could augment this.
+
+**Hierarchical planning** → implemented as HTN decomposition (Stream E, E3).
+Methods are data, not code. Domains compose freely. Partial replan via MTR.
+
+**Utility AI** → implemented as hierarchical bucket scoring with geometric
+mean (Stream E, E2). Dave Mark's IAUS pattern with archetype clustering for
+scale. Response curves on need axes.
+
+**Emergent formation** → formations remain explicit via the tactical layer,
+but the trigger for tactical activation is generalized from `stack_near_enemy`
+to `resolution_demand_at()` (stakes × uncertainty × conflict).
+
+**Scale considerations** → V3 targets 100k+ entities. Key patterns adopted:
+archetype clustering (AgentTorch, ~50-200 clusters instead of per-entity
+scoring), decision frequency LOD (not every entity every tick), action queue
+batch resolution for strategic tier fast-forward.
+
+**Neural evolution** → deferred to post-V3. Five insertion points defined.
+The combat observation log from this research (section 2, enemy memory) is
+retained as NN training data. See `docs/plans/future-neural-evolution.md`.
