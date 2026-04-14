@@ -250,7 +250,7 @@ V2 is a ground-up redesign of the game engine. Full design spec: `docs/v2-engine
 | `pathfinding` | Hex A* for movement |
 | `vision` | Visibility computation |
 | `ascii` | ASCII renderer for debugging |
-| `replay` | Fidelity-preserving replay snapshots for units, stockpiles, population, convoys, and final-state reconstruction |
+| `replay` | Fidelity-preserving replay snapshots for units, stockpiles, population, convoys, entities, and final-state reconstruction |
 | `runner` | Synchronous game runner (used by `/api/v2/game`) |
 
 **V2 engine internals:**
