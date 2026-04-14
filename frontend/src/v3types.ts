@@ -249,3 +249,81 @@ export interface V3ReviewBundleSummary {
   agent_versions: string[];
   seed: number;
 }
+
+// ---------------------------------------------------------------------------
+// Delta application — apply V3SnapshotDelta to mutable state
+// ---------------------------------------------------------------------------
+
+/** Mutable game state maintained by the frontend from init + deltas. */
+export interface V3GameState {
+  entities: Map<number, SpectatorEntityInfo>;
+  projectiles: Map<number, ProjectileInfo>;
+  stacks: Map<number, StackInfo>;
+  players: PlayerInfo[];
+  tick: number;
+  dt: number;
+}
+
+/** Initialize game state from a full snapshot. */
+export function initGameState(snapshot: V3Snapshot): V3GameState {
+  const entities = new Map<number, SpectatorEntityInfo>();
+  for (const e of snapshot.entities) entities.set(e.id, e);
+  const projectiles = new Map<number, ProjectileInfo>();
+  for (const p of snapshot.projectiles) projectiles.set(p.id, p);
+  const stacks = new Map<number, StackInfo>();
+  for (const s of snapshot.stacks) stacks.set(s.id, s);
+  return {
+    entities,
+    projectiles,
+    stacks,
+    players: snapshot.players,
+    tick: snapshot.tick,
+    dt: snapshot.dt,
+  };
+}
+
+/** Apply a delta to mutable game state. */
+export function applyDelta(state: V3GameState, delta: V3SnapshotDelta): void {
+  state.tick = delta.tick;
+  state.dt = delta.dt;
+  state.players = delta.players;
+
+  // Entities
+  for (const e of delta.entities_appeared) state.entities.set(e.id, e);
+  for (const id of delta.entities_removed) state.entities.delete(id);
+  for (const u of delta.entities_updated) {
+    const e = state.entities.get(u.id);
+    if (!e) continue;
+    if (u.x !== undefined) e.x = u.x;
+    if (u.y !== undefined) e.y = u.y;
+    if (u.z !== undefined) e.z = u.z;
+    if (u.hex_q !== undefined) e.hex_q = u.hex_q;
+    if (u.hex_r !== undefined) e.hex_r = u.hex_r;
+    if (u.facing !== undefined) e.facing = u.facing;
+    if (u.blood !== undefined) e.blood = u.blood;
+    if (u.stamina !== undefined) e.stamina = u.stamina;
+    if (u.wounds !== undefined) e.wounds = u.wounds;
+    if (u.weapon_type !== undefined) e.weapon_type = u.weapon_type ?? undefined;
+    if (u.armor_type !== undefined) e.armor_type = u.armor_type ?? undefined;
+    if (u.contains_count !== undefined) e.contains_count = u.contains_count;
+    if (u.stack_id !== undefined) e.stack_id = u.stack_id ?? undefined;
+    if (u.current_task !== undefined) e.current_task = u.current_task ?? undefined;
+  }
+
+  // Projectiles
+  for (const p of delta.projectiles_spawned) state.projectiles.set(p.id, p);
+  for (const id of delta.projectiles_removed) state.projectiles.delete(id);
+
+  // Stacks
+  for (const s of delta.stacks_created) state.stacks.set(s.id, s);
+  for (const id of delta.stacks_dissolved) state.stacks.delete(id);
+  for (const u of delta.stacks_updated) {
+    const s = state.stacks.get(u.id);
+    if (!s) continue;
+    if (u.members !== undefined) s.members = u.members;
+    if (u.formation !== undefined) s.formation = u.formation;
+    if (u.center_x !== undefined) s.center_x = u.center_x;
+    if (u.center_y !== undefined) s.center_y = u.center_y;
+    if (u.facing !== undefined) s.facing = u.facing;
+  }
+}
