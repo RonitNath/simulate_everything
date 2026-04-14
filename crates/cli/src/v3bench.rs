@@ -2,12 +2,12 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use simulate_everything_engine::v2::state::EntityKey;
 use simulate_everything_engine::v2::hex::offset_to_axial;
+use simulate_everything_engine::v2::state::EntityKey;
 use simulate_everything_engine::v3::{
     agent::{
-        AgentOutput, EntityTask, EquipmentType, LayeredAgent, OperationalCommand, StrategyLayer,
-        TacticalCommand, validate_operational, validate_tactical,
+        validate_operational, validate_tactical, AgentOutput, EntityTask, EquipmentType,
+        LayeredAgent, OperationalCommand, StrategyLayer, TacticalCommand,
     },
     armor::{self, ArmorConstruction, ArmorProperties, BodyZone, DamageType, MaterialType},
     combat_log::CombatObservation,
@@ -36,8 +36,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use simulate_everything_web::v3_protocol;
@@ -65,13 +66,20 @@ pub fn main(args: &[String]) {
     let profile_mode = args.iter().any(|a| a == "--profile");
     let converge_mode = args.iter().any(|a| a == "--converge");
     let ascii_mode = args.iter().any(|a| a == "--ascii");
+    let personality_report_mode = args.iter().any(|a| a == "--personality-report");
     let top_n: usize = flag_value(args, "--top")
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
 
     let seeds = flag_value(args, "--seeds")
         .map(parse_seed_range)
-        .unwrap_or_else(|| (0..149).collect());
+        .unwrap_or_else(|| {
+            if personality_report_mode {
+                (0..100).collect()
+            } else {
+                (0..149).collect()
+            }
+        });
 
     let max_ticks: u64 = flag_value(args, "--ticks")
         .and_then(|s| s.parse().ok())
@@ -79,7 +87,13 @@ pub fn main(args: &[String]) {
 
     let (w, h) = flag_value(args, "--size")
         .map(parse_size)
-        .unwrap_or((30, 30));
+        .unwrap_or_else(|| {
+            if personality_report_mode {
+                (20, 20)
+            } else {
+                (30, 30)
+            }
+        });
 
     let num_players: u8 = flag_value(args, "--players")
         .and_then(|s| s.parse().ok())
@@ -98,7 +112,9 @@ pub fn main(args: &[String]) {
         .unwrap_or(100);
 
     // Parse matchups.
-    let matchups: Vec<Vec<&str>> = if let Some(m) = flag_value(args, "--matchups") {
+    let matchups: Vec<Vec<&str>> = if personality_report_mode {
+        personality_report_matchups()
+    } else if let Some(m) = flag_value(args, "--matchups") {
         if m == "all" {
             let names = v3_agent_names();
             let mut pairs = Vec::new();
@@ -176,6 +192,29 @@ pub fn main(args: &[String]) {
         return;
     }
 
+    if personality_report_mode {
+        if num_players != 2 {
+            eprintln!("error: --personality-report requires --players 2");
+            std::process::exit(1);
+        }
+        let report_out =
+            flag_value(args, "--report-out").unwrap_or("docs/v3-personality-report.md");
+        let report_data_dir =
+            flag_value(args, "--report-data-dir").unwrap_or("var/v3_personality_report");
+        run_personality_report(
+            &matchups,
+            &seeds,
+            max_ticks,
+            (w, h),
+            num_players,
+            Path::new(report_out),
+            Path::new(report_data_dir),
+            args,
+            &interrupted,
+        );
+        return;
+    }
+
     if converge_mode {
         run_convergence(
             &matchups,
@@ -207,6 +246,17 @@ pub fn main(args: &[String]) {
 
 fn v3_agent_names() -> &'static [&'static str] {
     &["spread", "striker", "turtle", "null"]
+}
+
+fn personality_report_matchups() -> Vec<Vec<&'static str>> {
+    let personalities = ["spread", "striker", "turtle"];
+    let mut matchups = Vec::new();
+    for &left in &personalities {
+        for &right in &personalities {
+            matchups.push(vec![left, right]);
+        }
+    }
+    matchups
 }
 
 fn make_agent(name: &str, player: u8) -> LayeredAgent {
@@ -362,6 +412,69 @@ struct V3MatchupStats {
     total_ticks: u64,
     games_played: u32,
     results: Vec<V3GameResult>,
+}
+
+#[derive(Serialize)]
+struct PersonalityReportData {
+    metadata: PersonalityReportMetadata,
+    matchup_summaries: Vec<MatchupReportSummary>,
+    personality_summaries: Vec<PersonalityReportSummary>,
+}
+
+#[derive(Serialize)]
+struct PersonalityReportMetadata {
+    generated_at_epoch_s: u64,
+    git_head: String,
+    git_dirty: bool,
+    command: String,
+    seeds: String,
+    ticks: u64,
+    size: String,
+    snapshot_interval: u64,
+    games: usize,
+}
+
+#[derive(Serialize)]
+struct MatchupReportSummary {
+    matchup: String,
+    agents: Vec<String>,
+    games: usize,
+    wins: Vec<u32>,
+    draws: u32,
+    win_rates: Vec<f64>,
+    draw_rate: f64,
+    avg_ticks: f64,
+    avg_deaths: f64,
+    avg_final_entities: Vec<f64>,
+    avg_final_soldiers: Vec<f64>,
+    avg_final_territory: Vec<f64>,
+    diagnosis: MatchupDiagnosis,
+}
+
+#[derive(Serialize)]
+struct MatchupDiagnosis {
+    zero_deaths: bool,
+    flat_entities: bool,
+    flat_soldiers: bool,
+    flat_territory: bool,
+    attrition_without_resolution: bool,
+    notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct PersonalityReportSummary {
+    personality: String,
+    games: usize,
+    wins: u32,
+    draws: u32,
+    losses: u32,
+    win_rate: f64,
+    draw_rate: f64,
+    avg_ticks: f64,
+    avg_deaths: f64,
+    avg_final_entities: f64,
+    avg_final_soldiers: f64,
+    avg_final_territory: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -741,6 +854,7 @@ fn parse_formation_name(value: &str) -> FormationType {
 
 const BENCH_FARM_FOOD_PER_TASK: f32 = 5.0;
 const BENCH_WORKSHOP_MATERIAL_PER_TASK: f32 = 2.0;
+const SNAP_INTERVAL: u64 = 100;
 
 impl V3MatchupStats {
     fn new(agents: &[&str]) -> Self {
@@ -919,6 +1033,79 @@ fn run_convergence(
     eprintln!("\nTotal wall time: {:.2?}", total_start.elapsed());
 }
 
+fn run_personality_report(
+    matchups: &[Vec<&str>],
+    seeds: &[u64],
+    max_ticks: u64,
+    (w, h): (usize, usize),
+    num_players: u8,
+    report_out: &Path,
+    report_data_dir: &Path,
+    args: &[String],
+    interrupted: &Arc<AtomicBool>,
+) {
+    let total_start = Instant::now();
+    let mut all_results = Vec::new();
+    let mut matchup_summaries = Vec::new();
+
+    for matchup in matchups {
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let matchup_key = matchup.join("-vs-");
+        eprintln!(
+            "\n--- report {} ({} seeds, {}x{}, max_ticks={}) ---",
+            matchup_key,
+            seeds.len(),
+            w,
+            h,
+            max_ticks,
+        );
+
+        let results: Vec<V3GameResult> = seeds
+            .par_iter()
+            .map(|&seed| run_bench_game(seed, matchup, max_ticks, (w, h), num_players))
+            .collect();
+
+        let mut stats = V3MatchupStats::new(matchup);
+        for result in results {
+            stats.add(result);
+        }
+        eprintln!(
+            "  games={} draws={} avg_ticks={:.1} avg_deaths={:.2}",
+            stats.games_played,
+            stats.draws,
+            average_u64(stats.results.iter().map(|r| r.ticks)),
+            average_usize(stats.results.iter().map(|r| r.total_deaths)),
+        );
+        matchup_summaries.push(build_matchup_report_summary(&stats));
+        all_results.extend(stats.results.into_iter());
+    }
+
+    let metadata = build_personality_report_metadata(
+        args,
+        seeds,
+        max_ticks,
+        (w, h),
+        SNAP_INTERVAL,
+        all_results.len(),
+    );
+    let personality_summaries = build_personality_summaries(&all_results);
+    let report = PersonalityReportData {
+        metadata,
+        matchup_summaries,
+        personality_summaries,
+    };
+
+    persist_personality_report(report_out, report_data_dir, &all_results, &report);
+    eprintln!(
+        "\nPersonality report written in {:.2?}: {}",
+        total_start.elapsed(),
+        report_out.display()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Profile mode
 // ---------------------------------------------------------------------------
@@ -1073,8 +1260,6 @@ fn run_bench_game(
     // Count starting entities for heavy-casualties check.
     let starting_entities: usize = player_entity_counts(&state, num_players).iter().sum();
 
-    let snap_interval: u64 = 100;
-
     while state.tick < max_ticks {
         if is_game_over(&state).is_some() {
             break;
@@ -1104,7 +1289,7 @@ fn run_bench_game(
         total_deaths += tick_result.deaths;
         tick_count += 1;
 
-        if state.tick % snap_interval == 0 || is_game_over(&state).is_some() {
+        if state.tick % SNAP_INTERVAL == 0 || is_game_over(&state).is_some() {
             let snap = take_snapshot(&state, state.tick, num_players);
 
             // Track lead changes by entity count.
@@ -3156,6 +3341,469 @@ fn winner_was_behind_late(winner: u8, snapshots: &[V3Snapshot], after_tick: u64)
 }
 
 // ---------------------------------------------------------------------------
+// Personality report generation
+// ---------------------------------------------------------------------------
+
+fn build_personality_report_metadata(
+    args: &[String],
+    seeds: &[u64],
+    max_ticks: u64,
+    (w, h): (usize, usize),
+    snapshot_interval: u64,
+    games: usize,
+) -> PersonalityReportMetadata {
+    PersonalityReportMetadata {
+        generated_at_epoch_s: unix_now(),
+        git_head: git_head_short(),
+        git_dirty: git_is_dirty(),
+        command: format_cli_command(args),
+        seeds: format_seed_list(seeds),
+        ticks: max_ticks,
+        size: format!("{}x{}", w, h),
+        snapshot_interval,
+        games,
+    }
+}
+
+fn build_matchup_report_summary(stats: &V3MatchupStats) -> MatchupReportSummary {
+    let games = stats.results.len();
+    MatchupReportSummary {
+        matchup: stats.agents.join("-vs-"),
+        agents: stats.agents.clone(),
+        games,
+        wins: stats.wins.clone(),
+        draws: stats.draws,
+        win_rates: stats
+            .wins
+            .iter()
+            .map(|&wins| ratio(wins as usize, games))
+            .collect(),
+        draw_rate: ratio(stats.draws as usize, games),
+        avg_ticks: average_u64(stats.results.iter().map(|r| r.ticks)),
+        avg_deaths: average_usize(stats.results.iter().map(|r| r.total_deaths)),
+        avg_final_entities: average_per_slot(&stats.results, |r| &r.final_entities),
+        avg_final_soldiers: average_per_slot(&stats.results, |r| &r.final_soldiers),
+        avg_final_territory: average_per_slot(&stats.results, |r| &r.final_territory),
+        diagnosis: diagnose_matchup(&stats.results),
+    }
+}
+
+fn build_personality_summaries(results: &[V3GameResult]) -> Vec<PersonalityReportSummary> {
+    #[derive(Default)]
+    struct PersonalityAccumulator {
+        games: usize,
+        wins: u32,
+        draws: u32,
+        losses: u32,
+        ticks: u64,
+        deaths: usize,
+        final_entities: f64,
+        final_soldiers: f64,
+        final_territory: f64,
+    }
+
+    let mut accs: BTreeMap<String, PersonalityAccumulator> = BTreeMap::new();
+    for result in results {
+        for (idx, personality) in result.agents.iter().enumerate() {
+            let acc = accs.entry(personality.clone()).or_default();
+            acc.games += 1;
+            acc.ticks += result.ticks;
+            acc.deaths += result.total_deaths;
+            acc.final_entities += result.final_entities[idx] as f64;
+            acc.final_soldiers += result.final_soldiers[idx] as f64;
+            acc.final_territory += result.final_territory[idx] as f64;
+
+            if result.draw {
+                acc.draws += 1;
+            } else if result.winner_idx == Some(idx as u8) {
+                acc.wins += 1;
+            } else {
+                acc.losses += 1;
+            }
+        }
+    }
+
+    accs.into_iter()
+        .map(|(personality, acc)| PersonalityReportSummary {
+            personality,
+            games: acc.games,
+            wins: acc.wins,
+            draws: acc.draws,
+            losses: acc.losses,
+            win_rate: ratio(acc.wins as usize, acc.games),
+            draw_rate: ratio(acc.draws as usize, acc.games),
+            avg_ticks: ratio_u64(acc.ticks, acc.games),
+            avg_deaths: ratio(acc.deaths, acc.games),
+            avg_final_entities: ratio_f64(acc.final_entities, acc.games),
+            avg_final_soldiers: ratio_f64(acc.final_soldiers, acc.games),
+            avg_final_territory: ratio_f64(acc.final_territory, acc.games),
+        })
+        .collect()
+}
+
+fn diagnose_matchup(results: &[V3GameResult]) -> MatchupDiagnosis {
+    let zero_deaths = results.iter().all(|r| r.total_deaths == 0);
+    let flat_entities = results
+        .iter()
+        .all(|r| series_is_flat(&r.snapshots, |s| &s.entities));
+    let flat_soldiers = results
+        .iter()
+        .all(|r| series_is_flat(&r.snapshots, |s| &s.soldiers));
+    let flat_territory = results
+        .iter()
+        .all(|r| series_is_flat(&r.snapshots, |s| &s.territory));
+    let attrition_without_resolution = results
+        .iter()
+        .any(|r| r.draw && r.total_deaths > 0 && final_counts_changed(r));
+
+    let mut notes = Vec::new();
+    if zero_deaths {
+        notes.push("No combat deaths recorded across sampled games.".to_string());
+    }
+    if flat_entities {
+        notes.push("Entity counts stayed flat across snapshots.".to_string());
+    }
+    if flat_soldiers {
+        notes.push("Soldier counts stayed flat across snapshots.".to_string());
+    }
+    if flat_territory {
+        notes.push("Territory estimates stayed flat across snapshots.".to_string());
+    }
+    if attrition_without_resolution {
+        notes.push("Combat causes attrition but the matchup still times out as draws.".to_string());
+    }
+    if notes.is_empty() {
+        notes.push(
+            "Matchup shows measurable differentiation without obvious stall signals.".to_string(),
+        );
+    }
+
+    MatchupDiagnosis {
+        zero_deaths,
+        flat_entities,
+        flat_soldiers,
+        flat_territory,
+        attrition_without_resolution,
+        notes,
+    }
+}
+
+fn persist_personality_report(
+    report_out: &Path,
+    report_data_dir: &Path,
+    results: &[V3GameResult],
+    report: &PersonalityReportData,
+) {
+    fs::create_dir_all(report_data_dir)
+        .unwrap_or_else(|err| panic!("failed to create {}: {}", report_data_dir.display(), err));
+    if let Some(parent) = report_out.parent() {
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|err| panic!("failed to create {}: {}", parent.display(), err));
+    }
+
+    let games_path = report_data_dir.join("games.jsonl");
+    let mut games_file = fs::File::create(&games_path)
+        .unwrap_or_else(|err| panic!("failed to create {}: {}", games_path.display(), err));
+    for result in results {
+        writeln!(games_file, "{}", serde_json::to_string(result).unwrap()).unwrap();
+    }
+
+    let summary_path = report_data_dir.join("summary.json");
+    fs::write(&summary_path, serde_json::to_vec_pretty(report).unwrap())
+        .unwrap_or_else(|err| panic!("failed to write {}: {}", summary_path.display(), err));
+
+    fs::write(report_out, render_personality_report_markdown(report))
+        .unwrap_or_else(|err| panic!("failed to write {}: {}", report_out.display(), err));
+}
+
+fn render_personality_report_markdown(report: &PersonalityReportData) -> String {
+    let mut out = String::new();
+    out.push_str("# V3 Personality Report\n\n");
+    out.push_str("## Run metadata\n\n");
+    out.push_str(&format!(
+        "- Generated at Unix time `{}` from git `{}`{}\n",
+        report.metadata.generated_at_epoch_s,
+        report.metadata.git_head,
+        if report.metadata.git_dirty {
+            " (`dirty` worktree)"
+        } else {
+            ""
+        }
+    ));
+    out.push_str(&format!(
+        "- Command: `{}`\n- Seeds: `{}`\n- Max ticks: `{}`\n- Map size: `{}`\n- Snapshot interval: `{}` ticks\n- Games: `{}`\n\n",
+        report.metadata.command,
+        report.metadata.seeds,
+        report.metadata.ticks,
+        report.metadata.size,
+        report.metadata.snapshot_interval,
+        report.metadata.games
+    ));
+
+    out.push_str("## Personality summary\n\n");
+    out.push_str("| Personality | Games | Wins | Draws | Losses | Win rate | Draw rate | Avg ticks | Avg deaths | Avg final entities | Avg final soldiers | Avg final territory |\n");
+    out.push_str("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+    for summary in &report.personality_summaries {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {:.1}% | {:.1}% | {:.1} | {:.2} | {:.2} | {:.2} | {:.2} |\n",
+            summary.personality,
+            summary.games,
+            summary.wins,
+            summary.draws,
+            summary.losses,
+            summary.win_rate * 100.0,
+            summary.draw_rate * 100.0,
+            summary.avg_ticks,
+            summary.avg_deaths,
+            summary.avg_final_entities,
+            summary.avg_final_soldiers,
+            summary.avg_final_territory,
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("## Matchup summary\n\n");
+    out.push_str("| Matchup | Games | Wins | Draws | Avg ticks | Avg deaths | Avg final entities | Avg final soldiers | Avg final territory |\n");
+    out.push_str("|---|---:|---|---:|---:|---:|---|---|---|\n");
+    for summary in &report.matchup_summaries {
+        out.push_str(&format!(
+            "| {} | {} | {} / {} | {} | {:.1} | {:.2} | {} / {} | {} / {} | {} / {} |\n",
+            summary.matchup,
+            summary.games,
+            summary.wins.first().copied().unwrap_or(0),
+            summary.wins.get(1).copied().unwrap_or(0),
+            summary.draws,
+            summary.avg_ticks,
+            summary.avg_deaths,
+            fmt_pair(&summary.avg_final_entities),
+            fmt_pair_tail(&summary.avg_final_entities),
+            fmt_pair(&summary.avg_final_soldiers),
+            fmt_pair_tail(&summary.avg_final_soldiers),
+            fmt_pair(&summary.avg_final_territory),
+            fmt_pair_tail(&summary.avg_final_territory),
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("## Findings\n\n");
+    for finding in report_findings(report) {
+        out.push_str(&format!("- {}\n", finding));
+    }
+    out.push('\n');
+
+    out.push_str("## Diagnosis by matchup\n\n");
+    for summary in &report.matchup_summaries {
+        out.push_str(&format!("### {}\n\n", summary.matchup));
+        out.push_str(&format!(
+            "- Flags: zero_deaths=`{}`, flat_entities=`{}`, flat_soldiers=`{}`, flat_territory=`{}`, attrition_without_resolution=`{}`\n",
+            summary.diagnosis.zero_deaths,
+            summary.diagnosis.flat_entities,
+            summary.diagnosis.flat_soldiers,
+            summary.diagnosis.flat_territory,
+            summary.diagnosis.attrition_without_resolution,
+        ));
+        for note in &summary.diagnosis.notes {
+            out.push_str(&format!("- {}\n", note));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+fn report_findings(report: &PersonalityReportData) -> Vec<String> {
+    let mut findings = Vec::new();
+    if let Some(best) = report
+        .personality_summaries
+        .iter()
+        .max_by(|a, b| a.avg_deaths.partial_cmp(&b.avg_deaths).unwrap())
+    {
+        findings.push(format!(
+            "{} produces the highest average deaths across the matrix ({:.2}).",
+            best.personality, best.avg_deaths
+        ));
+    }
+    if let Some(best) = report.personality_summaries.iter().max_by(|a, b| {
+        a.avg_final_soldiers
+            .partial_cmp(&b.avg_final_soldiers)
+            .unwrap()
+    }) {
+        findings.push(format!(
+            "{} ends with the largest average surviving soldier count ({:.2}).",
+            best.personality, best.avg_final_soldiers
+        ));
+    }
+
+    let stalled: Vec<&str> = report
+        .matchup_summaries
+        .iter()
+        .filter(|summary| summary.diagnosis.zero_deaths)
+        .map(|summary| summary.matchup.as_str())
+        .collect();
+    if stalled.is_empty() {
+        findings.push(
+            "No matchup is a complete zero-death stalemate across the sampled seeds.".to_string(),
+        );
+    } else {
+        findings.push(format!(
+            "Zero-death stalemates persist in: {}.",
+            stalled.join(", ")
+        ));
+    }
+
+    findings
+}
+
+fn average_per_slot<F>(results: &[V3GameResult], values: F) -> Vec<f64>
+where
+    F: Fn(&V3GameResult) -> &[usize],
+{
+    if results.is_empty() {
+        return Vec::new();
+    }
+    let width = values(&results[0]).len();
+    let mut totals = vec![0.0; width];
+    for result in results {
+        for (idx, value) in values(result).iter().enumerate() {
+            totals[idx] += *value as f64;
+        }
+    }
+    totals
+        .into_iter()
+        .map(|total| total / results.len() as f64)
+        .collect()
+}
+
+fn series_is_flat<F>(snapshots: &[V3Snapshot], values: F) -> bool
+where
+    F: Fn(&V3Snapshot) -> &[usize],
+{
+    let Some(first) = snapshots.first() else {
+        return true;
+    };
+    let first_values = values(first);
+    snapshots
+        .iter()
+        .all(|snapshot| values(snapshot) == first_values)
+}
+
+fn final_counts_changed(result: &V3GameResult) -> bool {
+    let Some(first) = result.snapshots.first() else {
+        return false;
+    };
+    result.final_entities != first.entities
+        || result.final_soldiers != first.soldiers
+        || result.final_territory != first.territory
+}
+
+fn format_seed_list(seeds: &[u64]) -> String {
+    match (seeds.first(), seeds.last()) {
+        (Some(first), Some(last)) if seeds.len() > 1 => format!("{}-{}", first, last),
+        (Some(first), _) => first.to_string(),
+        _ => "empty".to_string(),
+    }
+}
+
+fn format_cli_command(args: &[String]) -> String {
+    let trimmed: Vec<&str> = args
+        .iter()
+        .map(|s| s.as_str())
+        .skip_while(|arg| arg.contains('/') || arg.ends_with("simulate_everything_cli"))
+        .collect();
+    if trimmed.is_empty() {
+        "simulate_everything_cli v3bench --personality-report".to_string()
+    } else {
+        format!("simulate_everything_cli {}", trimmed.join(" "))
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn git_head_short() -> String {
+    Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn git_is_dirty() -> bool {
+    Command::new("git")
+        .args(["status", "--short"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| !output.stdout.is_empty())
+        .unwrap_or(true)
+}
+
+fn average_u64<I>(iter: I) -> f64
+where
+    I: Iterator<Item = u64>,
+{
+    let mut total = 0u64;
+    let mut count = 0usize;
+    for value in iter {
+        total += value;
+        count += 1;
+    }
+    ratio_u64(total, count)
+}
+
+fn average_usize<I>(iter: I) -> f64
+where
+    I: Iterator<Item = usize>,
+{
+    let mut total = 0usize;
+    let mut count = 0usize;
+    for value in iter {
+        total += value;
+        count += 1;
+    }
+    ratio(total, count)
+}
+
+fn ratio(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
+}
+
+fn ratio_u64(numerator: u64, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
+}
+
+fn ratio_f64(numerator: f64, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator / denominator as f64
+    }
+}
+
+fn fmt_pair(values: &[f64]) -> String {
+    format!("{:.2}", values.first().copied().unwrap_or(0.0))
+}
+
+fn fmt_pair_tail(values: &[f64]) -> String {
+    format!("{:.2}", values.get(1).copied().unwrap_or(0.0))
+}
+
+// ---------------------------------------------------------------------------
 // Output formatting
 // ---------------------------------------------------------------------------
 
@@ -3347,4 +3995,156 @@ fn wilson_ci(successes: u64, total: u64) -> (f64, f64) {
     let center = (p + z2 / (2.0 * n)) / denom;
     let margin = z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt() / denom;
     ((center - margin).max(0.0), (center + margin).min(1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(
+        tick: u64,
+        entities: [usize; 2],
+        soldiers: [usize; 2],
+        territory: [usize; 2],
+    ) -> V3Snapshot {
+        V3Snapshot {
+            tick,
+            entities: entities.into(),
+            soldiers: soldiers.into(),
+            territory: territory.into(),
+            alive: vec![true, true],
+        }
+    }
+
+    fn game_result(
+        matchup: &str,
+        agents: [&str; 2],
+        winner_idx: Option<u8>,
+        total_deaths: usize,
+        final_entities: [usize; 2],
+        final_soldiers: [usize; 2],
+        final_territory: [usize; 2],
+        snapshots: Vec<V3Snapshot>,
+    ) -> V3GameResult {
+        V3GameResult {
+            seed: 0,
+            matchup: matchup.to_string(),
+            agents: agents.into_iter().map(str::to_string).collect(),
+            winner: winner_idx.map(|idx| agents[idx as usize].to_string()),
+            winner_idx,
+            ticks: 2000,
+            draw: winner_idx.is_none(),
+            compute_total_us: vec![0, 0],
+            compute_mean_us: vec![0.0, 0.0],
+            compute_max_us: vec![0, 0],
+            final_entities: final_entities.into(),
+            final_soldiers: final_soldiers.into(),
+            final_territory: final_territory.into(),
+            total_deaths,
+            interest_score: 0.0,
+            interest_tags: Vec::new(),
+            snapshots,
+        }
+    }
+
+    #[test]
+    fn personality_report_matchups_cover_full_matrix_without_null() {
+        let matchups = personality_report_matchups();
+        assert_eq!(matchups.len(), 9);
+        assert!(matchups.contains(&vec!["spread", "spread"]));
+        assert!(matchups.contains(&vec!["spread", "striker"]));
+        assert!(matchups.contains(&vec!["turtle", "striker"]));
+        assert!(!matchups.iter().flatten().any(|name| *name == "null"));
+    }
+
+    #[test]
+    fn diagnose_matchup_flags_stalemate_signals() {
+        let result = game_result(
+            "spread-vs-turtle",
+            ["spread", "turtle"],
+            None,
+            0,
+            [35, 35],
+            [5, 6],
+            [2, 2],
+            vec![
+                snapshot(100, [35, 35], [5, 6], [2, 2]),
+                snapshot(200, [35, 35], [5, 6], [2, 2]),
+            ],
+        );
+
+        let diagnosis = diagnose_matchup(&[result]);
+        assert!(diagnosis.zero_deaths);
+        assert!(diagnosis.flat_entities);
+        assert!(diagnosis.flat_soldiers);
+        assert!(diagnosis.flat_territory);
+        assert!(!diagnosis.attrition_without_resolution);
+    }
+
+    #[test]
+    fn diagnose_matchup_flags_attrition_without_resolution() {
+        let result = game_result(
+            "spread-vs-striker",
+            ["spread", "striker"],
+            None,
+            8,
+            [31, 29],
+            [1, 9],
+            [2, 4],
+            vec![
+                snapshot(100, [35, 35], [5, 15], [2, 4]),
+                snapshot(2000, [31, 29], [1, 9], [2, 4]),
+            ],
+        );
+
+        let diagnosis = diagnose_matchup(&[result]);
+        assert!(!diagnosis.zero_deaths);
+        assert!(diagnosis.attrition_without_resolution);
+    }
+
+    #[test]
+    fn personality_summary_aggregates_results_by_agent_slot() {
+        let results = vec![
+            game_result(
+                "spread-vs-striker",
+                ["spread", "striker"],
+                Some(0),
+                4,
+                [30, 20],
+                [8, 4],
+                [3, 2],
+                vec![snapshot(100, [35, 35], [5, 15], [2, 4])],
+            ),
+            game_result(
+                "striker-vs-spread",
+                ["striker", "spread"],
+                None,
+                6,
+                [28, 32],
+                [6, 3],
+                [4, 1],
+                vec![snapshot(100, [35, 35], [15, 5], [4, 2])],
+            ),
+        ];
+
+        let summaries = build_personality_summaries(&results);
+        let spread = summaries
+            .iter()
+            .find(|s| s.personality == "spread")
+            .unwrap();
+        let striker = summaries
+            .iter()
+            .find(|s| s.personality == "striker")
+            .unwrap();
+
+        assert_eq!(spread.games, 2);
+        assert_eq!(spread.wins, 1);
+        assert_eq!(spread.draws, 1);
+        assert!((spread.avg_final_entities - 31.0).abs() < 0.001);
+
+        assert_eq!(striker.games, 2);
+        assert_eq!(striker.losses, 1);
+        assert_eq!(striker.draws, 1);
+        assert!((striker.avg_deaths - 5.0).abs() < 0.001);
+    }
 }
