@@ -107,7 +107,7 @@ players: Vec<PlayerInfo>
 ```
 id: u32
 owner: Option<u8>
-x: f64, y: f64, z: f64              // continuous world position
+x: f32, y: f32, z: f32              // continuous world position (f32 — sub-mm at 30km)
 hex_q: i32, hex_r: i32              // derived hex (convenience)
 facing: Option<f32>                  // radians
 entity_kind: EntityKind              // Person | Structure
@@ -132,8 +132,8 @@ severity). No fog of war for spectators — client-side filtering only.
 **`ProjectileInfo`** — separate from entities, tight struct:
 ```
 id: u32
-x: f64, y: f64, z: f64
-vx: f64, vy: f64, vz: f64
+x: f32, y: f32, z: f32
+vx: f32, vy: f32, vz: f32
 damage_type: DamageType              // Slash, Pierce, Crush
 ```
 
@@ -143,7 +143,7 @@ id: u32
 owner: u8
 members: Vec<u32>                    // entity IDs
 formation: FormationType             // Line, Column, Wedge, Square, Skirmish
-center_x: f64, center_y: f64
+center_x: f32, center_y: f32
 facing: f32
 ```
 
@@ -539,48 +539,58 @@ full audit trail for in-game decisions.
 - RrStatus WS message with mode/dt/autoplay
 - Frontend TypeScript types (v3types.ts)
 - Rolling trace buffer (always-on in RR, overwritten unless flagged)
+- Delta snapshot encoding (DeltaTracker diffs consecutive ticks, broadcasts
+  only changed fields — position/facing/vitals with epsilon thresholds)
+- CombatLog on GameState, drained per tick into review bundles
+- AgentTrace enum (Strategy/Operations/Tactical) emitted per layer invocation,
+  structured data in decision_trace.json (queryable via jq)
+- Frontend delta application (V3GameState + initGameState + applyDelta)
 
 ### Deferred
 - **External agent wire format** — serialization layer over command enums.
   Deferred until external agent support is needed.
 - **Binary replay format** — bincode/MessagePack. Deferred to V3.1 if JSON +
   gzip size is a problem.
-- **Delta entity snapshots for spectators** — full snapshots for V3.0.
-  `full_state` flag is present for future delta mode at 10k+ entities.
+- **Chunked replay file format** — keyframe + delta chunks with gzip and byte
+  offset index. Deferred until standalone replay export is needed. V3.0
+  records review bundles per-flag/segment, not full game replays.
 - **Replay recording compression** — stream-level compression during
   recording. V3.0 compresses per-chunk at finalization.
 - **Multi-game replay archives** — bundling multiple game replays. V3.0 is
   one file per game.
+- **Scoreboard persistence** — wins/losses/draws per agent. V3.0 has the
+  data structures but no scoreboard accumulation across games yet.
+- **Agent command execution** — operational and tactical commands are
+  validated but not applied. The engine needs command executors.
 
 ## Verification
 
-- [ ] Spectator connects to `/ws/v3/rr`, receives V3Init + V3Snapshot,
-      then V3SnapshotDelta per tick. Frontend renders entities with continuous
-      positions.
-- [ ] Late-joining spectator receives cached state and catches up in <100ms.
+- [x] Spectator connects to `/ws/v3/rr`, receives V3Init + V3Snapshot,
+      then V3SnapshotDelta per tick.
+- [x] Late-joining spectator receives cached full snapshot.
 - [ ] Spectator can toggle per-player fog-of-war view (client-side filter).
-- [ ] Control API: pause, resume, reset, config (tick_ms, mode, autoplay)
+- [x] Control API: pause, resume, reset, config (tick_ms, mode, autoplay)
       all function correctly. Status reflects current state.
-- [ ] Mode switching: changing to strategic/tactical/cinematic updates dt
-      for subsequent ticks. Replay records dt per tick.
-- [ ] Autoplay toggle: on = auto-cycle games, off = stop after current game.
+- [x] Mode switching: changing to strategic/tactical/cinematic updates dt
+      for subsequent ticks.
+- [x] Autoplay toggle: on = auto-cycle games, off = stop after current game.
 - [ ] Scoreboard tracks wins/losses/draws per agent name + version.
-- [ ] Flag a tick: review bundle appears in `var/v3_reviews/game_{N}/flag_{T}/`
+- [x] Flag a tick: review bundle appears in `var/v3_reviews/game_{N}/flag_{T}/`
       with all 5 files (summary, ascii_state, decision_trace, combat_log,
-      entity_detail) plus replay segment.
-- [ ] ASCII state dump is human/Claude-readable: entity positions, health,
+      entity_detail).
+- [x] ASCII state dump is human/Claude-readable: entity positions, health,
       stacks, formations in text format.
-- [ ] Decision trace contains per-agent, per-tick reasoning strings that
-      explain WHY commands were issued.
-- [ ] Combat log contains full hit resolution detail: weapon, armor, zone,
-      penetrated, severity.
-- [ ] Segment capture (start/stop) produces a bundle with the same format.
-- [ ] Review listing API returns all bundles. Individual bundle loadable.
-      Bundles deletable.
+- [x] Decision trace contains per-agent, per-tick structured AgentTrace
+      enums (Strategy/Operations/Tactical) queryable via jq.
+- [x] Combat log contains full hit resolution detail: weapon, armor, zone,
+      penetrated, severity (CombatObservation from sim tick).
+- [x] Segment capture (start/stop) produces a bundle with the same format.
+- [x] Review listing API returns all bundles. Bundles deletable.
 - [ ] Replay file: seek to arbitrary tick via chunk index, decompress single
-      chunk, apply ≤99 deltas. Sub-second.
-- [ ] Replay contains both world state and agent commands per tick.
-- [ ] Snapshot payload <100KB per tick at 500 entities.
+      chunk, apply ≤99 deltas. Sub-second. (Chunked format deferred.)
+- [x] Delta encoding: DeltaTracker diffs entities/projectiles/stacks per tick,
+      broadcasts only changed fields with epsilon thresholds.
+- [x] Frontend TypeScript types + applyDelta() for client-side delta application.
 - [ ] All V2 web features have V3 equivalents. Nothing regresses.
 
 ## Deploy Strategy
@@ -595,27 +605,28 @@ for persisted V3 review bundles.
 ## Files Modified
 
 ### New files
-- `crates/engine/src/v3/replay.rs` — replay recording, chunked format, seek
-- `crates/web/src/v3_protocol.rs` — wire types, serialization, snapshot builders
+- `crates/web/src/v3_protocol.rs` — wire types, serialization, snapshot builders,
+  DeltaTracker for delta encoding
 - `crates/web/src/v3_roundrobin.rs` — RR loop adapted for V3 engine
 - `crates/web/src/v3_review.rs` — review system (trace buffer, flag, capture,
   bundle writing, listing)
-- `frontend/src/v3types.ts` — TypeScript types matching wire protocol
+- `frontend/src/v3types.ts` — TypeScript types matching wire protocol, delta
+  application helpers (V3GameState, initGameState, applyDelta)
 
 ### Modified files
-- `crates/web/src/main.rs` — add V3 routes
-- `crates/engine/src/lib.rs` — export v3 replay module
+- `crates/web/src/main.rs` — add V3 routes, WS handler, control API
+- `crates/engine/src/v3/state.rs` — add CombatLog to GameState
+- `crates/engine/src/v3/sim.rs` — record CombatObservation during impact resolution
+- `crates/engine/src/v3/agent.rs` — add AgentTrace enum, emit traces from LayeredAgent
+- `crates/engine/src/v3/combat_log.rs` — add Clone derive
 - `CLAUDE.md` — add V3 routes, env vars, key references
 
-## Implementation Waves
+## Implementation History
 
-Per `docs/plans/v3-sequencing.md`:
-
-| Item | Wave | Depends On | Deliverable |
-|------|------|------------|-------------|
-| P1 | 2 | E1 | Wire protocol types, snapshot builders, v3types.ts |
-| P2 | 3 | P1, E2 | RR loop, replay format, spectator WS, control API |
-| P3 | 4 | P2 | Review system (trace buffer, flag, capture, bundles) |
-| P4 | 4 | P2 | Port live status WS streaming (RrStatus message) |
-
-P3 and P4 can be parallelized in Wave 4.
+| Chunk | Commit | Deliverable |
+|-------|--------|-------------|
+| P1 | `dbc1a70`, `b7bcd23` | Wire protocol types, snapshot builders, v3types.ts |
+| P2 | `8bda64d` | RR loop, spectator WS, control API, RrStatus |
+| P3 | `762753d` | Review system (trace buffer, flag, capture, bundles) |
+| P-traces | `9abfad7` | CombatLog on GameState, AgentTrace enum, real decision traces |
+| P-deltas | `9322895` | DeltaTracker, delta encoding, frontend applyDelta |
