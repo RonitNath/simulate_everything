@@ -10,7 +10,7 @@ Legend:
 - `placeholder` — type/surface exists, but the values are scaffolded or synthetic
 - `not-landed` — still missing
 
-The `v3-shared-exec` pass moved V3 command application into the shared engine and made `v3bench` consume it. That changes the baseline for `A*`/`E2`, but it does not yet make the shared sim tick or RR loop execute those commands.
+The `v3-shared-exec` pass moved V3 command application into the shared engine, and the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` now reuses. That improves the baseline for `A*`/`E2`, but V3 RR still does not execute the shared path and several protocol/perception/economy surfaces remain partial.
 
 | Item | Status | Notes |
 |------|--------|-------|
@@ -26,13 +26,13 @@ The `v3-shared-exec` pass moved V3 command application into the shared engine an
 | R2 | `engine-live` | Continuous entity rendering is live. |
 | M2 | `module-only` | Pathfinding/smoothing/formation-slot modules exist but are not integrated into live routing. |
 | W3 | `shared-engine-unused` | Projectile entities and arc physics exist, but the full spec path is still partial. |
-| A2 | `shared-engine-unused` | Shared ops layer exists; command application is now engine-owned, but live tick/RR do not execute it yet. |
+| A2 | `engine-live` | Shared ops layer exists; engine-owned agent phase now applies its outputs and bench reuses that path. |
 | E1 | `engine-live` | Entity model, containment, and mapgen are live. |
 | P1 | `engine-live` | Core wire types/snapshot surface exist. |
-| A3 | `shared-engine-unused` | Tactical reasoning exists; shared executor now applies core tactical mutations, but live runtime does not yet drive it. |
-| A4 | `shared-engine-unused` | Strategy personalities exist, but their outputs are not yet executed by sim tick/RR. |
+| A3 | `engine-live` | Tactical reasoning exists and now runs through the engine-owned agent phase, though RR still bypasses it. |
+| A4 | `engine-live` | Strategy personalities now feed the engine-owned agent phase, but RR/live integration is still incomplete. |
 | A5 | `shared-engine-unused` | Damage tables and combat observations exist; learning loop wiring remains partial. |
-| E2 | `shared-engine-unused` | Shared command executor now exists, but sim tick still has an agent-command TODO. |
+| E2 | `engine-live` | The engine now owns `run_agent_phase` and `tick_with_agents`; RR is still on the old path. |
 | P2 | `placeholder` | RR/replay surface exists, but RR still validates and drops V3 commands. |
 | R3 | `engine-live` | Projectile/wound/equipment presentation support exists in replay/render flows. |
 | R4 | `engine-live` | Viewport culling exists. |

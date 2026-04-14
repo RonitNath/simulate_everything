@@ -25,7 +25,7 @@ The main failure mode was:
 3. sequencing/docs mark it complete
 4. the missing integration remains in TODO or harness-only code
 
-The `v3-shared-exec` pass improves that baseline by moving V3 command application into the shared engine and making `v3bench` consume it, but it does not yet wire the shared sim tick or RR loop to execute those commands.
+The `v3-shared-exec` pass improved that baseline by moving V3 command application into the shared engine, and the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` now reuses. The remaining major runtime gap is V3 RR/live execution, which still validates commands and drops them.
 
 ## Top Findings
 
@@ -49,15 +49,14 @@ What is genuinely solid in the shared engine:
 - review/logging substrate
 
 What remains incomplete at runtime:
-- sim tick execution of agent outputs
 - V3 RR execution through the shared engine path
 - full movement/pathfinding/formation integration
 - non-placeholder perception/protocol/economy surfaces
 
 ## Recommended Next Order
 
-1. Wire `crates/engine/src/v3/sim.rs` to call the shared V3 command executor.
-2. Route V3 RR/live execution through that same engine-owned path.
-3. Collapse bench-only economy adapters into shared engine systems.
-4. Replace placeholder perception/protocol fields with engine-derived data.
+1. Route V3 RR/live execution through the engine-owned agent phase.
+2. Collapse bench-only economy adapters into shared engine systems.
+3. Replace placeholder perception/protocol fields with engine-derived data.
+4. Finish movement/pathfinding/formation integration in the shared runtime.
 5. Finish the remaining movement and combat-parity integration once parallel swordplay work settles.

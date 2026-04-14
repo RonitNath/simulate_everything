@@ -8,10 +8,10 @@ Source spec: `docs/specs/v3-entity-unification-2026-04-13.md` (revision 2)
 
 V3 is substantial, but it is not fully integrated end-to-end in the shared engine/runtime.
 
-Current baseline after the `v3-shared-exec` pass:
+Current baseline after the `v3-shared-exec` and `v3-sim-tick` passes:
 - shared V3 command application now lives in the engine and is reused by `v3bench`
-- `v3bench` is no longer the primary owner of V3 command mutation logic
-- the shared sim tick still does not execute agent commands
+- the engine now owns a shared agent phase (`run_agent_phase` / `tick_with_agents`) instead of leaving sim integration as a TODO
+- `v3bench` now reuses the engine-owned agent phase before layering its temporary bench-only economy adapter
 - the V3 RR loop still validates commands and drops them
 - protocol/perception/economy coverage still contains placeholders and module-only landings
 
@@ -34,7 +34,6 @@ Additional deliverables outside the original sequencing continue to evolve indep
 
 ## Open Integration Work
 
-- Wire the shared command executor into `crates/engine/src/v3/sim.rs`
 - Route V3 RR/live execution through the same engine-owned command path
 - Replace placeholder perception/protocol fields with engine-derived state
 - Finish movement/pathfinding/formation integration in the live tick
