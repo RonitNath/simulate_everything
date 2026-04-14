@@ -429,6 +429,7 @@ fn zoo_spawn_soldier(
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
+                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant {
