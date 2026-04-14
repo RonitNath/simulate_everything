@@ -13,7 +13,7 @@ export type LodTier = "close" | "mid" | "far";
 
 export function getLodTier(zoom: number): LodTier {
   const hexPx = HEX_SIZE * zoom;
-  if (hexPx > 80) return "close";
+  if (hexPx >= 60) return "close";
   if (hexPx >= 20) return "mid";
   return "far";
 }
