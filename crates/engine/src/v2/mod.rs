@@ -8,6 +8,7 @@ pub mod gamelog;
 pub mod hex;
 pub mod mapgen;
 pub mod observation;
+pub mod operations;
 pub mod pathfinding;
 pub mod replay;
 pub mod runner;
