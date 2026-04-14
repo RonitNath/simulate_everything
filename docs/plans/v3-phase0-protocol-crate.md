@@ -1,6 +1,6 @@
 # Phase 0: Protocol Crate Extraction
 
-Status: **ready for implementation**
+Status: **done**
 Prerequisite for: Streams A, B, C
 Linear: reference IA issue if one exists
 
@@ -92,9 +92,9 @@ cargo check -p simulate-everything-protocol --target wasm32-unknown-unknown
 
 ## Verification
 
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo check -p simulate-everything-protocol --target wasm32-unknown-unknown` passes
-- [ ] `cargo test --workspace` passes (all existing tests)
-- [ ] WS sends msgpack by default; `?format=json` sends JSON
-- [ ] Existing PixiJS frontend works with `?format=json`
-- [ ] Round-trip test: encode → decode for all message types
+- [x] `cargo check --workspace` passes
+- [x] `cargo check -p simulate-everything-protocol --target wasm32-unknown-unknown` passes
+- [x] `cargo test --workspace` passes (484 tests, 0 failures)
+- [x] WS sends msgpack by default; `?format=json` sends JSON
+- [ ] Existing PixiJS frontend works with `?format=json` (needs deploy + browser test)
+- [x] Round-trip test: encode → decode for all message types (4 tests in protocol crate)

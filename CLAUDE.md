@@ -15,6 +15,7 @@ New agents must be added to the appropriate pool(s).
 ## Workspace layout
 
 ```
+crates/protocol/ — shared wire types (V3 init/snapshot/delta) + msgpack encoding
 crates/engine/   — game rules, state, agents, mapgen, replay, scoreboard (V1 + V2)
 crates/web/      — Axum server: routes, WebSocket handlers, lobby, round-robin loop
 crates/cli/      — CLI runner (sim + bench harness)
@@ -50,7 +51,8 @@ docs/            — detailed documentation
 | V3 entity model + state | `crates/engine/src/v3/state.rs` |
 | V3 sim tick | `crates/engine/src/v3/sim.rs` |
 | V3 agent architecture | `crates/engine/src/v3/agent.rs` |
-| V3 WS protocol types | `crates/web/src/v3_protocol.rs` |
+| V3 wire types + msgpack | `crates/protocol/` |
+| V3 WS builders + delta tracker | `crates/web/src/v3_protocol.rs` |
 | V3 RR loop | `crates/web/src/v3_roundrobin.rs` |
 | V3 review system | `crates/web/src/v3_review.rs` |
 | V3 frontend types | `frontend/src/v3types.ts` |
