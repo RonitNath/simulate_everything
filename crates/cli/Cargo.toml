@@ -13,6 +13,7 @@ path = "src/bin/v2_scaling_bench.rs"
 
 [dependencies]
 simulate-everything-engine = { path = "../engine" }
+simulate-everything-web = { path = "../web" }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

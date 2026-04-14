@@ -27,9 +27,12 @@ use simulate_everything_engine::v3::{
     weapon::{self, AttackState, WeaponProperties},
 };
 use std::fs;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+use simulate_everything_web::v3_protocol;
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -41,7 +44,8 @@ pub fn main(args: &[String]) {
         let arena_config = flag_value(args, "--arena-config")
             .map(load_arena_config)
             .unwrap_or_else(|| ArenaConfigFile::for_mode(arena_mode));
-        run_arena(&arena_config);
+        let replay_path = flag_value(args, "--replay");
+        run_arena(&arena_config, replay_path);
         return;
     }
 
@@ -1066,7 +1070,7 @@ fn run_bench_game(
 // Arena: config-driven scenarios
 // ---------------------------------------------------------------------------
 
-fn run_arena(config: &ArenaConfigFile) {
+fn run_arena(config: &ArenaConfigFile, replay_path: Option<&str>) {
     let scenario = config.resolve();
     eprintln!("{}", scenario.title);
     eprintln!(
@@ -1111,6 +1115,25 @@ fn run_arena(config: &ArenaConfigFile) {
         make_agent(&scenario.side_a.agent, 0),
         make_agent(&scenario.side_b.agent, 1),
     ];
+
+    // Replay writer
+    let mut replay_file = replay_path.map(|path| {
+        let mut f = std::fs::File::create(path).expect("Failed to create replay file");
+        let agent_names = vec![
+            scenario.side_a.agent.clone(),
+            scenario.side_b.agent.clone(),
+        ];
+        let agent_versions = vec!["v3-arena".to_string(); 2];
+        let init = v3_protocol::build_init(&state, &agent_names, &agent_versions, 0);
+        let init_msg = v3_protocol::V3ServerToSpectator::Init {
+            game_number: 0,
+            init,
+        };
+        writeln!(f, "{}", serde_json::to_string(&init_msg).unwrap()).unwrap();
+        eprintln!("  [replay] Writing to {}", path);
+        f
+    });
+    let mut delta_tracker = v3_protocol::DeltaTracker::new();
 
     for t in 0..scenario.max_ticks {
         let summary_a = summarize_arena_side(&state, &side_a.members);
@@ -1166,6 +1189,20 @@ fn run_arena(config: &ArenaConfigFile) {
         }
 
         let result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+
+        // Write replay frame
+        if let Some(ref mut f) = replay_file {
+            if t == 0 {
+                let snap = v3_protocol::build_snapshot(&state, 1.0);
+                let msg = v3_protocol::V3ServerToSpectator::Snapshot { snapshot: snap };
+                writeln!(f, "{}", serde_json::to_string(&msg).unwrap()).unwrap();
+            } else {
+                let delta = delta_tracker.build_delta(&state, 1.0);
+                let msg = v3_protocol::V3ServerToSpectator::SnapshotDelta { delta };
+                writeln!(f, "{}", serde_json::to_string(&msg).unwrap()).unwrap();
+            }
+        }
+
         if result.impacts > 0 {
             eprintln!("  [combat] {} impacts this tick", result.impacts);
         }
