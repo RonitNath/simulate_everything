@@ -18,6 +18,7 @@ use simulate_everything_engine::v3::{
     hex::hex_to_world,
     lifecycle::{contain, spawn_entity, uncontain},
     mapgen,
+    martial::{self, AttackMotion, BlockManeuver},
     movement::Mobile,
     operations::{NullOperationsLayer, SharedOperationsLayer},
     projectile,
@@ -50,6 +51,11 @@ use simulate_everything_web::v3_protocol;
 pub fn main(args: &[String]) {
     if args.iter().any(|a| a == "--mechanics") {
         run_mechanics_suite(args);
+        return;
+    }
+
+    if args.iter().any(|a| a == "--swordplay-drill") {
+        run_swordplay_drill(args);
         return;
     }
 
@@ -662,6 +668,14 @@ struct ArenaMechanicVariant {
     post_setup: ArenaPostSetup,
 }
 
+#[derive(Debug, Clone)]
+struct ArenaAggregate {
+    mean_advantaged_score: f64,
+    success_rate: f64,
+    draw_rate: f64,
+    sample: ArenaArtifact,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ArenaPostSetup {
     side_a_z_offset: f32,
@@ -1179,6 +1193,369 @@ fn run_profile_game(
 // ---------------------------------------------------------------------------
 // ASCII mode
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+struct SwordplayDrillFrame {
+    step: usize,
+    attack_motion: AttackMotion,
+    block_maneuver: BlockManeuver,
+    attacker_skill: f32,
+    defender_skill: f32,
+    blocked: bool,
+    attack_force: f32,
+    stamina_cost: f32,
+    note: String,
+    ascii: String,
+}
+
+#[derive(Debug, Clone)]
+struct SwordplayDrillStep {
+    motion: AttackMotion,
+    block_maneuver: BlockManeuver,
+    attacker_skill: f32,
+    defender_skill: f32,
+    note: &'static str,
+}
+
+fn run_swordplay_drill(args: &[String]) {
+    let ascii_mode = args.iter().any(|a| a == "--ascii");
+    let artifacts_dir = flag_value(args, "--artifacts-dir").map(PathBuf::from);
+    let replay_path = flag_value(args, "--replay").map(PathBuf::from);
+    let emit_ascii = ascii_mode || artifacts_dir.is_none();
+    let (attacker, defender) = mechanics_entity_keys();
+    let sword = weapon::iron_sword();
+    let attacker_pos = Vec3::new(2.0, 1.0, 0.0);
+    let defender_pos = Vec3::new(3.2, 1.0, 0.0);
+    let defender_facing = std::f32::consts::PI;
+
+    let steps = vec![
+        SwordplayDrillStep {
+            motion: AttackMotion::Overhead,
+            block_maneuver: BlockManeuver::HighGuard,
+            attacker_skill: 0.9,
+            defender_skill: 0.9,
+            note: "lower defender uses an upper block",
+        },
+        SwordplayDrillStep {
+            motion: AttackMotion::Overhead,
+            block_maneuver: BlockManeuver::LowGuard,
+            attacker_skill: 0.9,
+            defender_skill: 0.05,
+            note: "late low guard loses the overhead line",
+        },
+        SwordplayDrillStep {
+            motion: AttackMotion::Forehand,
+            block_maneuver: BlockManeuver::OutsideParry,
+            attacker_skill: 0.7,
+            defender_skill: 0.8,
+            note: "standard outside parry against a forehand cut",
+        },
+        SwordplayDrillStep {
+            motion: AttackMotion::Backhand,
+            block_maneuver: BlockManeuver::InsideParry,
+            attacker_skill: 0.8,
+            defender_skill: 0.8,
+            note: "inside parry catches the return backhand",
+        },
+        SwordplayDrillStep {
+            motion: AttackMotion::Thrust,
+            block_maneuver: BlockManeuver::LowGuard,
+            attacker_skill: 0.95,
+            defender_skill: 0.95,
+            note: "low guard closes the line on a thrust",
+        },
+    ];
+
+    let mut frames = Vec::new();
+    for (idx, step) in steps.iter().enumerate() {
+        let attack_state =
+            AttackState::for_melee(defender, attacker, step.motion, step.attacker_skill);
+        let impact = weapon::resolve_melee(
+            &sword,
+            attacker,
+            attacker_pos,
+            0.0,
+            defender_pos,
+            0.0,
+            &attack_state,
+            None,
+            idx as u64 + 1,
+        )
+        .expect("drill attacks are in range");
+        let vitals = Vitals::new();
+        let defender_state = DefenderState {
+            entity_id: defender,
+            facing: defender_facing,
+            vitals: &vitals,
+            block: Some(BlockCapability {
+                arc: std::f32::consts::PI,
+                efficiency: sword.block_efficiency,
+                maneuver: step.block_maneuver,
+                read_skill: step.defender_skill,
+            }),
+            armor_at_zone: [None, None, None, None, None],
+        };
+        let result = damage::resolve_impact(&impact, &defender_state);
+        let (blocked, stamina_cost) = match result {
+            ImpactResult::Blocked { stamina_cost, .. } => (true, stamina_cost),
+            _ => (false, 0.0),
+        };
+
+        frames.push(SwordplayDrillFrame {
+            step: idx + 1,
+            attack_motion: step.motion,
+            block_maneuver: step.block_maneuver,
+            attacker_skill: step.attacker_skill,
+            defender_skill: step.defender_skill,
+            blocked,
+            attack_force: impact.kinetic_energy,
+            stamina_cost,
+            note: step.note.to_string(),
+            ascii: render_swordplay_ascii(idx + 1, step.motion, step.block_maneuver, blocked),
+        });
+    }
+
+    let auto_replay_path = artifacts_dir
+        .as_ref()
+        .map(|dir| dir.join("swordplay_drill").join("replay.jsonl"));
+
+    if let Some(dir) = artifacts_dir.as_ref() {
+        let out_dir = dir.join("swordplay_drill");
+        let _ = fs::create_dir_all(&out_dir);
+        let _ = fs::write(
+            out_dir.join("frames.json"),
+            serde_json::to_vec_pretty(&frames).unwrap(),
+        );
+    }
+
+    if let Some(path) = replay_path.as_ref().or(auto_replay_path.as_ref()) {
+        write_swordplay_drill_replay(path, &steps, &frames);
+    }
+
+    if emit_ascii {
+        for frame in &frames {
+            println!("{}", frame.ascii);
+            println!(
+                "step={} attack={} block={} blocked={} atk_skill={:.2} def_skill={:.2} force={:.2} stamina_cost={:.2} note={}",
+                frame.step,
+                frame.attack_motion.short_name(),
+                frame.block_maneuver.short_name(),
+                frame.blocked,
+                frame.attacker_skill,
+                frame.defender_skill,
+                frame.attack_force,
+                frame.stamina_cost,
+                frame.note
+            );
+            println!();
+        }
+    } else {
+        println!("{}", serde_json::to_string_pretty(&frames).unwrap());
+    }
+}
+
+fn render_swordplay_ascii(
+    step: usize,
+    motion: AttackMotion,
+    block: BlockManeuver,
+    blocked: bool,
+) -> String {
+    let attack_icon = match motion {
+        AttackMotion::Generic => '?',
+        AttackMotion::Overhead => '^',
+        AttackMotion::Forehand => '>',
+        AttackMotion::Backhand => '<',
+        AttackMotion::Thrust => '-',
+    };
+    let block_icon = match block {
+        BlockManeuver::Generic => '?',
+        BlockManeuver::HighGuard => 'H',
+        BlockManeuver::InsideParry => 'I',
+        BlockManeuver::OutsideParry => 'O',
+        BlockManeuver::LowGuard => 'L',
+    };
+    let result_icon = if blocked { '#' } else { '!' };
+
+    format!("Step {step}\n........\n..A{attack_icon}{result_icon}D{block_icon}.\n........")
+}
+
+fn write_swordplay_drill_replay(
+    path: &Path,
+    steps: &[SwordplayDrillStep],
+    frames: &[SwordplayDrillFrame],
+) {
+    let mut state = swordplay_drill_replay_state();
+    let mut file = std::fs::File::create(path).expect("failed to create swordplay replay file");
+    let agent_names = vec![
+        "sword-drill-attacker".to_string(),
+        "sword-drill-defender".to_string(),
+    ];
+    let agent_versions = vec!["v3-sword-drill".to_string(), "v3-sword-drill".to_string()];
+    let init = v3_protocol::build_init(&state, &agent_names, &agent_versions, 0);
+    let init_msg = v3_protocol::V3ServerToSpectator::Init {
+        game_number: 0,
+        init,
+    };
+    writeln!(file, "{}", serde_json::to_string(&init_msg).unwrap()).unwrap();
+
+    let mut delta_tracker = v3_protocol::DeltaTracker::new();
+    let snapshot = v3_protocol::build_snapshot(&state, 1.0);
+    let snapshot_msg = v3_protocol::V3ServerToSpectator::Snapshot { snapshot };
+    writeln!(file, "{}", serde_json::to_string(&snapshot_msg).unwrap()).unwrap();
+    let _ = delta_tracker.build_delta(&state, 1.0);
+
+    for (idx, (step, frame)) in steps.iter().zip(frames).enumerate() {
+        apply_swordplay_step_to_replay(&mut state, step, frame, idx as u64 + 1);
+        let delta = delta_tracker.build_delta(&state, 1.0);
+        let msg = v3_protocol::V3ServerToSpectator::SnapshotDelta { delta };
+        writeln!(file, "{}", serde_json::to_string(&msg).unwrap()).unwrap();
+    }
+}
+
+fn swordplay_drill_replay_state() -> GameState {
+    let hf = Heightfield::new(8, 4, 0.0, GeoMaterial::Soil);
+    let mut state = GameState::new(8, 4, 2, hf);
+    let attacker_pos = hex_to_world(offset_to_axial(1, 2));
+    let defender_pos = hex_to_world(offset_to_axial(1, 4));
+    let attacker = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .pos(attacker_pos)
+            .owner(0)
+            .person(Person {
+                role: Role::Soldier,
+                combat_skill: 0.9,
+            })
+            .mobile(Mobile::new(2.0, 10.0))
+            .combatant(Combatant::new())
+            .vitals()
+            .equipment(Equipment::empty()),
+    );
+    let defender = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .pos(defender_pos)
+            .owner(1)
+            .person(Person {
+                role: Role::Soldier,
+                combat_skill: 0.9,
+            })
+            .mobile(Mobile::new(2.0, 10.0))
+            .combatant(Combatant::new())
+            .vitals()
+            .equipment(Equipment::empty()),
+    );
+
+    let sword_a = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .owner(0)
+            .weapon_props(weapon::iron_sword()),
+    );
+    contain(&mut state, attacker, sword_a);
+    state.entities[attacker].equipment.as_mut().unwrap().weapon = Some(sword_a);
+
+    let sword_b = spawn_entity(
+        &mut state,
+        EntityBuilder::new()
+            .owner(1)
+            .weapon_props(weapon::iron_sword()),
+    );
+    contain(&mut state, defender, sword_b);
+    state.entities[defender].equipment.as_mut().unwrap().weapon = Some(sword_b);
+
+    state.entities[attacker].combatant.as_mut().unwrap().target = Some(defender);
+    state.entities[attacker].combatant.as_mut().unwrap().facing = 0.0;
+    state.entities[defender].combatant.as_mut().unwrap().target = Some(attacker);
+    state.entities[defender].combatant.as_mut().unwrap().facing = std::f32::consts::PI;
+    state
+}
+
+fn apply_swordplay_step_to_replay(
+    state: &mut GameState,
+    step: &SwordplayDrillStep,
+    frame: &SwordplayDrillFrame,
+    tick: u64,
+) {
+    let mut people = state
+        .entities
+        .keys()
+        .filter(|&key| state.entities[key].person.is_some());
+    let attacker = people.next().expect("attacker exists");
+    let defender = people.next().expect("defender exists");
+    let attacker_weapon = state.entities[attacker]
+        .equipment
+        .as_ref()
+        .and_then(|eq| eq.weapon)
+        .expect("attacker weapon exists");
+
+    state.tick = tick;
+    state.entities[attacker]
+        .person
+        .as_mut()
+        .unwrap()
+        .combat_skill = step.attacker_skill;
+    state.entities[defender]
+        .person
+        .as_mut()
+        .unwrap()
+        .combat_skill = step.defender_skill;
+    state.entities[attacker].combatant.as_mut().unwrap().facing = match step.motion {
+        AttackMotion::Overhead => 0.0,
+        AttackMotion::Forehand => 0.18,
+        AttackMotion::Backhand => -0.18,
+        AttackMotion::Thrust => 0.0,
+        AttackMotion::Generic => 0.0,
+    };
+    state.entities[defender].combatant.as_mut().unwrap().facing = std::f32::consts::PI;
+    state.entities[attacker].combatant.as_mut().unwrap().attack = Some(AttackState::for_melee(
+        defender,
+        attacker_weapon,
+        step.motion,
+        step.attacker_skill,
+    ));
+    state.entities[defender]
+        .combatant
+        .as_mut()
+        .unwrap()
+        .cooldown = None;
+    state.entities[attacker]
+        .combatant
+        .as_mut()
+        .unwrap()
+        .cooldown = None;
+
+    let defender_vitals = state.entities[defender].vitals.as_mut().unwrap();
+    defender_vitals.stamina = (1.0 - frame.stamina_cost * 0.6).clamp(0.2, 1.0);
+    if !frame.blocked {
+        defender_vitals.blood = (defender_vitals.blood - 0.18).max(0.35);
+        state.entities[defender]
+            .wounds
+            .as_mut()
+            .unwrap()
+            .push(Wound {
+                zone: swordplay_motion_zone(step.motion),
+                severity: Severity::Laceration,
+                bleed_rate: 0.005,
+                damage_type: if step.motion == AttackMotion::Thrust {
+                    DamageType::Pierce
+                } else {
+                    DamageType::Slash
+                },
+                attacker_id: attacker,
+                created_at: tick,
+            });
+    }
+}
+
+fn swordplay_motion_zone(motion: AttackMotion) -> BodyZone {
+    match motion {
+        AttackMotion::Generic | AttackMotion::Thrust => BodyZone::Torso,
+        AttackMotion::Overhead => BodyZone::Head,
+        AttackMotion::Forehand => BodyZone::RightArm,
+        AttackMotion::Backhand => BodyZone::LeftArm,
+    }
+}
 
 fn run_ascii_game(
     seed: u64,
@@ -1726,6 +2103,10 @@ fn run_mechanics_suite(args: &[String]) {
     let strict = args.iter().any(|a| a == "--strict");
     let artifacts_dir = flag_value(args, "--artifacts-dir").map(PathBuf::from);
     let filter = flag_value(args, "--mechanics-filter");
+    let trials = flag_value(args, "--trials")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(24)
+        .max(1);
 
     let mut scenarios = Vec::new();
 
@@ -1748,16 +2129,22 @@ fn run_mechanics_suite(args: &[String]) {
         scenarios.push(mechanics_low_stamina_increases_cooldown());
     }
     if mechanics_enabled(filter, "arena.high_ground") {
-        scenarios.push(mechanics_arena_high_ground(artifacts_dir.as_deref()));
+        scenarios.push(mechanics_arena_high_ground(
+            artifacts_dir.as_deref(),
+            trials,
+        ));
     }
     if mechanics_enabled(filter, "arena.armor") {
-        scenarios.push(mechanics_arena_armor(artifacts_dir.as_deref()));
+        scenarios.push(mechanics_arena_armor(artifacts_dir.as_deref(), trials));
     }
     if mechanics_enabled(filter, "arena.injured") {
-        scenarios.push(mechanics_arena_injured(artifacts_dir.as_deref()));
+        scenarios.push(mechanics_arena_injured(artifacts_dir.as_deref(), trials));
     }
     if mechanics_enabled(filter, "arena.training_melee") {
-        scenarios.push(mechanics_arena_training_melee(artifacts_dir.as_deref()));
+        scenarios.push(mechanics_arena_training_melee(
+            artifacts_dir.as_deref(),
+            trials,
+        ));
     }
 
     let failed = scenarios.iter().filter(|s| !s.meets_intended).count();
@@ -1769,9 +2156,9 @@ fn run_mechanics_suite(args: &[String]) {
         failed,
         scenarios,
         implementation_gaps: vec![
-            "Melee combat does not currently consume `combat_skill`; the training variable is present on `Person` but does not change sword-vs-sword arena outcomes.".to_string(),
             "Arena ranged combat is not yet wired end-to-end. Bows exist and projectile math exists, but arena attacks still resolve through the melee path only.".to_string(),
             "Live movement benchmarks cannot yet validate slope, surface, or encumbrance because `sim::compute_steering_and_move` hardcodes those factors to `1.0`.".to_string(),
+            "Terrain-driven high-ground advantage is still incomplete in full arena play because movement speed and positioning do not yet consume slope or dedicated arena terrain generation.".to_string(),
         ],
     };
 
@@ -1798,6 +2185,8 @@ fn mechanics_high_ground_block_cost() -> MechanicsScenarioResult {
         block: Some(BlockCapability {
             arc: std::f32::consts::PI,
             efficiency: 0.3,
+            maneuver: BlockManeuver::HighGuard,
+            read_skill: 1.0,
         }),
         armor_at_zone: [None, None, None, None, None],
     };
@@ -1807,6 +2196,7 @@ fn mechanics_high_ground_block_cost() -> MechanicsScenarioResult {
         sharpness: 0.8,
         cross_section: 0.5,
         damage_type: DamageType::Slash,
+        attack_motion: AttackMotion::Overhead,
         attack_direction: std::f32::consts::PI,
         attacker_id: attacker,
         height_diff: 0.0,
@@ -1818,11 +2208,11 @@ fn mechanics_high_ground_block_cost() -> MechanicsScenarioResult {
     };
 
     let flat_cost = match damage::resolve_impact(&flat, &defender_state) {
-        ImpactResult::Blocked { stamina_cost } => stamina_cost,
+        ImpactResult::Blocked { stamina_cost, .. } => stamina_cost,
         other => panic!("expected blocked result for flat impact, got {:?}", other),
     };
     let high_cost = match damage::resolve_impact(&high, &defender_state) {
-        ImpactResult::Blocked { stamina_cost } => stamina_cost,
+        ImpactResult::Blocked { stamina_cost, .. } => stamina_cost,
         other => panic!("expected blocked result for high impact, got {:?}", other),
     };
 
@@ -1875,6 +2265,7 @@ fn mechanics_high_ground_head_bias() -> MechanicsScenarioResult {
             sharpness: 0.8,
             cross_section: 0.5,
             damage_type: DamageType::Slash,
+            attack_motion: AttackMotion::Overhead,
             attack_direction: 0.0,
             attacker_id: attacker,
             height_diff: 2.0,
@@ -2067,7 +2458,10 @@ fn mechanics_low_stamina_increases_cooldown() -> MechanicsScenarioResult {
     }
 }
 
-fn mechanics_arena_high_ground(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+fn mechanics_arena_high_ground(
+    artifacts_dir: Option<&Path>,
+    trials: usize,
+) -> MechanicsScenarioResult {
     let base = mechanics_base_arena("arena.high_ground", 1);
     paired_arena_result(
         "arena.high_ground",
@@ -2093,11 +2487,12 @@ fn mechanics_arena_high_ground(artifacts_dir: Option<&Path>) -> MechanicsScenari
         },
         artifacts_dir,
         ArenaExpectation::AdvantagedWins,
+        trials,
         vec!["Current V3 uses `pos.z` as the live melee height-difference source, so this benchmark is already meaningful even though terrain slope is not yet fed into movement speed.".to_string()],
     )
 }
 
-fn mechanics_arena_armor(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+fn mechanics_arena_armor(artifacts_dir: Option<&Path>, trials: usize) -> MechanicsScenarioResult {
     let mut armored_a = mechanics_base_arena("arena.armor", 1);
     armored_a.side_a.armor_preset = ArenaArmorPreset::BronzeBreastplate;
     armored_a.side_a.armor_ratio = 1.0;
@@ -2124,11 +2519,12 @@ fn mechanics_arena_armor(artifacts_dir: Option<&Path>) -> MechanicsScenarioResul
         },
         artifacts_dir,
         ArenaExpectation::AdvantagedWins,
+        trials,
         vec!["This validates end-to-end armor effects through the live damage pipeline, not just the theoretical damage table.".to_string()],
     )
 }
 
-fn mechanics_arena_injured(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+fn mechanics_arena_injured(artifacts_dir: Option<&Path>, trials: usize) -> MechanicsScenarioResult {
     let attacker = mechanics_entity_keys().0;
     let injury = Wound {
         zone: BodyZone::Legs,
@@ -2167,11 +2563,15 @@ fn mechanics_arena_injured(artifacts_dir: Option<&Path>) -> MechanicsScenarioRes
         },
         artifacts_dir,
         ArenaExpectation::AdvantagedLoses,
+        trials,
         vec!["This exercises live bleed, stamina recovery, and leg-wound movement penalties together.".to_string()],
     )
 }
 
-fn mechanics_arena_training_melee(artifacts_dir: Option<&Path>) -> MechanicsScenarioResult {
+fn mechanics_arena_training_melee(
+    artifacts_dir: Option<&Path>,
+    trials: usize,
+) -> MechanicsScenarioResult {
     paired_arena_result(
         "arena.training_melee",
         "Mirrored melee arena duel with only combat_skill swapped.",
@@ -2197,10 +2597,11 @@ fn mechanics_arena_training_melee(artifacts_dir: Option<&Path>) -> MechanicsScen
             },
         },
         artifacts_dir,
-        ArenaExpectation::SpecGap,
+        ArenaExpectation::AdvantagedWins,
+        trials,
         vec![
-            "This currently exposes a spec-to-implementation gap: `combat_skill` exists on entities, but sword-vs-sword combat does not yet consume it.".to_string(),
-            "Keep this benchmark in the suite anyway so parameter work on training has a ready validation target once melee starts using skill.".to_string(),
+            "Sword training now changes move selection, windup, and reactive blocking rather than sitting idle on `Person`.".to_string(),
+            "Use `--trials N` here for stable tuning; single-duel results are intentionally replaced by aggregated win-rate and score outputs.".to_string(),
         ],
     )
 }
@@ -2213,42 +2614,55 @@ fn paired_arena_result(
     variant_b: ArenaMechanicVariant,
     artifacts_dir: Option<&Path>,
     expectation: ArenaExpectation,
+    trials: usize,
     notes: Vec<String>,
 ) -> MechanicsScenarioResult {
-    let capture = artifacts_dir.is_some();
-    let artifact_a = simulate_arena_variant(&variant_a, capture);
-    let artifact_b = simulate_arena_variant(&variant_b, capture);
-    let score_a = arena_strength(artifact_a.side_a) - arena_strength(artifact_a.side_b);
-    let score_b = arena_strength(artifact_b.side_b) - arena_strength(artifact_b.side_a);
+    let aggregate_a = aggregate_arena_trials(&variant_a, 0, expectation, trials);
+    let aggregate_b = aggregate_arena_trials(&variant_b, 1, expectation, trials);
+    let score_a = aggregate_a.mean_advantaged_score;
+    let score_b = aggregate_b.mean_advantaged_score;
     let avg_score = (score_a + score_b) / 2.0;
     let meets = match expectation {
-        ArenaExpectation::AdvantagedWins => score_a > 0.0 && score_b > 0.0,
-        ArenaExpectation::AdvantagedLoses => score_a < 0.0 && score_b < 0.0,
+        ArenaExpectation::AdvantagedWins => {
+            score_a > 0.0
+                && score_b > 0.0
+                && aggregate_a.success_rate > 0.5
+                && aggregate_b.success_rate > 0.5
+        }
+        ArenaExpectation::AdvantagedLoses => {
+            score_a < 0.0
+                && score_b < 0.0
+                && aggregate_a.success_rate > 0.5
+                && aggregate_b.success_rate > 0.5
+        }
         ArenaExpectation::SpecGap => false,
     };
 
     let mut artifact_paths = Vec::new();
     if let Some(dir) = artifacts_dir {
-        if let Ok(path) = write_arena_artifact(dir, id, &variant_a.id, &artifact_a) {
+        if let Ok(path) = write_arena_artifact(dir, id, &variant_a.id, &aggregate_a.sample) {
             artifact_paths.push(path.display().to_string());
         }
-        if let Ok(path) = write_arena_artifact(dir, id, &variant_b.id, &artifact_b) {
+        if let Ok(path) = write_arena_artifact(dir, id, &variant_b.id, &aggregate_b.sample) {
             artifact_paths.push(path.display().to_string());
         }
     }
 
     let mut metrics = BTreeMap::new();
+    metrics.insert("trials".to_string(), trials as f64);
     metrics.insert("variant_a_advantaged_score".to_string(), score_a);
     metrics.insert("variant_b_advantaged_score".to_string(), score_b);
     metrics.insert("avg_advantaged_score".to_string(), avg_score);
     metrics.insert(
-        "variant_a_winner".to_string(),
-        artifact_a.winner.map(|w| w as f64).unwrap_or(-1.0),
+        "variant_a_success_rate".to_string(),
+        aggregate_a.success_rate,
     );
     metrics.insert(
-        "variant_b_winner".to_string(),
-        artifact_b.winner.map(|w| w as f64).unwrap_or(-1.0),
+        "variant_b_success_rate".to_string(),
+        aggregate_b.success_rate,
     );
+    metrics.insert("variant_a_draw_rate".to_string(), aggregate_a.draw_rate);
+    metrics.insert("variant_b_draw_rate".to_string(), aggregate_b.draw_rate);
 
     MechanicsScenarioResult {
         id: id.to_string(),
@@ -2256,8 +2670,12 @@ fn paired_arena_result(
         description: description.to_string(),
         intended_effect: intended_effect.to_string(),
         observed_effect: format!(
-            "Mirrored advantaged-side scores are {:.2} and {:.2}; winners are {:?} and {:?}.",
-            score_a, score_b, artifact_a.winner, artifact_b.winner
+            "Across {} trials per mirror, advantaged-side mean scores are {:.2} and {:.2}; success rates are {:.1}% and {:.1}%.",
+            trials,
+            score_a,
+            score_b,
+            aggregate_a.success_rate * 100.0,
+            aggregate_b.success_rate * 100.0,
         ),
         meets_intended: meets,
         metrics,
@@ -2266,14 +2684,101 @@ fn paired_arena_result(
     }
 }
 
-fn simulate_arena_variant(variant: &ArenaMechanicVariant, capture_timeline: bool) -> ArenaArtifact {
+fn aggregate_arena_trials(
+    variant: &ArenaMechanicVariant,
+    advantaged_owner: u8,
+    expectation: ArenaExpectation,
+    trials: usize,
+) -> ArenaAggregate {
+    let results: Vec<ArenaArtifact> = (0..trials.max(1))
+        .into_par_iter()
+        .map(|trial| {
+            let mirror_geometry = trial % 2 == 1;
+            let run_variant = if mirror_geometry {
+                mirrored_geometry_variant(variant)
+            } else {
+                variant.clone()
+            };
+            simulate_arena_variant(
+                &run_variant,
+                false,
+                arena_trial_seed(&variant.id, trial as u64),
+            )
+        })
+        .collect();
+    let sample = simulate_arena_variant(variant, true, arena_trial_seed(&variant.id, 0));
+
+    let mut total_score = 0.0;
+    let mut successes = 0usize;
+    let mut draws = 0usize;
+    for result in &results {
+        let advantaged_score = if advantaged_owner == 0 {
+            arena_strength(result.side_a) - arena_strength(result.side_b)
+        } else {
+            arena_strength(result.side_b) - arena_strength(result.side_a)
+        };
+        total_score += advantaged_score;
+        match result.winner {
+            Some(winner) => {
+                if arena_winner_matches_expectation(winner, advantaged_owner, expectation) {
+                    successes += 1;
+                }
+            }
+            None => draws += 1,
+        }
+    }
+
+    let denom = results.len().max(1) as f64;
+    ArenaAggregate {
+        mean_advantaged_score: total_score / denom,
+        success_rate: successes as f64 / denom,
+        draw_rate: draws as f64 / denom,
+        sample,
+    }
+}
+
+fn arena_winner_matches_expectation(
+    winner: u8,
+    advantaged_owner: u8,
+    expectation: ArenaExpectation,
+) -> bool {
+    match expectation {
+        ArenaExpectation::AdvantagedWins => winner == advantaged_owner,
+        ArenaExpectation::AdvantagedLoses => winner != advantaged_owner,
+        ArenaExpectation::SpecGap => false,
+    }
+}
+
+fn mirrored_geometry_variant(variant: &ArenaMechanicVariant) -> ArenaMechanicVariant {
+    let mut mirrored = variant.clone();
+    std::mem::swap(
+        &mut mirrored.scenario.side_a.center,
+        &mut mirrored.scenario.side_b.center,
+    );
+    mirrored
+}
+
+fn arena_trial_seed(id: &str, trial: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    trial.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn simulate_arena_variant(
+    variant: &ArenaMechanicVariant,
+    capture_timeline: bool,
+    seed: u64,
+) -> ArenaArtifact {
     let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
     let mut state = GameState::new(20, 20, 2, hf);
     let mut economy = EconomyState {
         food: vec![0.0; state.num_players as usize],
         material: vec![0.0; state.num_players as usize],
     };
-    let mut rng = StdRng::seed_from_u64(0xA63E_0F11);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let side_a = spawn_arena_side(
         &mut state,
@@ -3016,12 +3521,34 @@ fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &Ag
         }
         match cmd {
             TacticalCommand::Attack { attacker, target } => {
+                let Some(attacker_view) = state.entities.get(*attacker) else {
+                    continue;
+                };
+                let skill = attacker_view
+                    .person
+                    .as_ref()
+                    .map(|person| person.combat_skill)
+                    .unwrap_or(0.5);
+                let attacker_pos = attacker_view.pos.unwrap_or(Vec3::ZERO);
+                let Some(target_pos) = state.entities.get(*target).and_then(|e| e.pos) else {
+                    continue;
+                };
+
                 if let Some(entity) = state.entities.get_mut(*attacker) {
                     if let Some(combatant) = &mut entity.combatant {
                         if combatant.attack.is_none() && combatant.cooldown.is_none() {
                             if let Some(eq) = &entity.equipment {
                                 if let Some(weapon_key) = eq.weapon {
-                                    combatant.attack = Some(AttackState::new(*target, weapon_key));
+                                    let motion = martial::select_attack_motion(
+                                        skill,
+                                        state.tick,
+                                        *attacker,
+                                        *target,
+                                        attacker_pos.z - target_pos.z,
+                                    );
+                                    combatant.attack = Some(AttackState::for_melee(
+                                        *target, weapon_key, motion, skill,
+                                    ));
                                 }
                             }
                         }

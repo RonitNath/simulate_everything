@@ -7,6 +7,7 @@ use super::equipment::zone_index;
 use super::hex::world_to_hex;
 use super::index::update_hex_membership;
 use super::lifecycle::{self, cleanup_dead, cleanup_inert_projectiles};
+use super::martial;
 use super::movement::{self, Mobile};
 use super::projectile::{self, ProjectileTick};
 use super::spatial::Vec3;
@@ -357,17 +358,26 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
                             None
                         }
                     });
+                let attack_state = state
+                    .entities
+                    .get(attacker_key)
+                    .and_then(|e| e.combatant.as_ref())
+                    .and_then(|c| c.attack.as_ref())
+                    .cloned();
 
-                if let Some(impact) = weapon::resolve_melee(
-                    &weapon_props,
-                    attacker_key,
-                    attacker_pos,
-                    attacker_radius,
-                    target_pos,
-                    target_radius,
-                    stagger.as_ref(),
-                    state.tick,
-                ) {
+                if let Some(impact) = attack_state.as_ref().and_then(|attack| {
+                    weapon::resolve_melee(
+                        &weapon_props,
+                        attacker_key,
+                        attacker_pos,
+                        attacker_radius,
+                        target_pos,
+                        target_radius,
+                        attack,
+                        stagger.as_ref(),
+                        state.tick,
+                    )
+                }) {
                     impacts.push(PendingImpact {
                         target: target_key,
                         impact,
@@ -532,7 +542,7 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
         let target_key = pending.target;
 
         // Build defender state from entity
-        let (facing, vitals_snapshot, block, armor_zones) = {
+        let (facing, vitals_snapshot, defender_skill, block, armor_zones) = {
             let entity = match state.entities.get(target_key) {
                 Some(e) => e,
                 None => continue,
@@ -544,17 +554,39 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
                 Some(v) => v.clone(),
                 None => continue, // no vitals = can't take damage
             };
+            let defender_skill = entity
+                .person
+                .as_ref()
+                .map(|p| p.combat_skill)
+                .unwrap_or(0.0);
 
             // Block capability from equipment
             let block = entity
                 .equipment
                 .as_ref()
-                .and_then(|eq| eq.shield)
-                .and_then(|shield_key| state.entities.get(shield_key))
-                .and_then(|shield| shield.weapon_props.as_ref())
+                .and_then(|eq| {
+                    eq.shield
+                        .and_then(|shield_key| state.entities.get(shield_key))
+                        .and_then(|shield| shield.weapon_props.as_ref())
+                        .or_else(|| {
+                            eq.weapon
+                                .and_then(|weapon_key| state.entities.get(weapon_key))
+                                .and_then(|weapon_entity| weapon_entity.weapon_props.as_ref())
+                        })
+                })
+                .filter(|weapon| weapon.block_arc > 0.0)
                 .map(|w| BlockCapability {
                     arc: w.block_arc,
                     efficiency: w.block_efficiency,
+                    maneuver: martial::select_block_maneuver(
+                        defender_skill,
+                        pending.impact.attack_motion,
+                        pending.impact.height_diff,
+                        pending.impact.tick,
+                        target_key,
+                        pending.impact.attacker_id,
+                    ),
+                    read_skill: defender_skill,
                 });
 
             // Per-zone armor lookup
@@ -569,7 +601,7 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
                 }
             }
 
-            (facing, vitals, block, armor_zones)
+            (facing, vitals, defender_skill, block, armor_zones)
         };
 
         // Build DefenderState with references to owned data
@@ -609,6 +641,7 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
 
         let (
             blocked,
+            block_maneuver,
             block_stamina,
             penetrated,
             pen_depth,
@@ -619,9 +652,13 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
             stagger,
             hit_zone,
         ) = match &result {
-            ImpactResult::Blocked { stamina_cost } => {
+            ImpactResult::Blocked {
+                stamina_cost,
+                maneuver,
+            } => {
                 (
                     true,
+                    Some(*maneuver),
                     *stamina_cost,
                     false,
                     0.0,
@@ -633,8 +670,12 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
                     super::armor::BodyZone::Torso,
                 ) // zone unknown for blocks
             }
-            ImpactResult::Deflected { transmitted_force } => (
+            ImpactResult::Deflected {
+                transmitted_force,
+                block_maneuver,
+            } => (
                 false,
+                *block_maneuver,
                 0.0,
                 false,
                 0.0,
@@ -648,8 +689,10 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
             ImpactResult::Wounded {
                 wound,
                 transmitted_force,
+                block_maneuver,
             } => (
                 false,
+                *block_maneuver,
                 0.0,
                 true,
                 1.0,
@@ -691,7 +734,9 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
             hit_zone,
             angle_of_incidence: 0.0, // computed inside resolve_impact, not exposed
             impact_force: impact.kinetic_energy,
+            attack_motion: impact.attack_motion,
             blocked,
+            block_maneuver,
             block_stamina_cost: block_stamina,
             penetrated,
             penetration_depth: pen_depth,
@@ -703,6 +748,7 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
             distance: 0.0, // available from PendingImpact context in future
             height_diff: impact.height_diff,
             attacker_skill,
+            defender_skill,
             defender_stamina: vitals_snapshot.stamina,
             defender_facing_offset: (impact.attack_direction - facing).abs(),
         });

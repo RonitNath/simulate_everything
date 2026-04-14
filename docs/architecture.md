@@ -151,8 +151,10 @@ When `--personality-report` is set, `v3bench` defaults to seeds `0-99`, ticks `2
 |------|---------|-------------|
 | `--mechanics` | — | Run the deterministic V3 mechanics suite instead of matchups or a single arena |
 | `--mechanics-filter SUBSTR` | — | Only run mechanics scenarios whose id contains the substring |
+| `--trials N` | `24` | Run mirrored arena mechanics over `N` deterministic trials per side for stable aggregate results |
 | `--artifacts-dir DIR` | — | Write per-scenario arena artifacts for review |
 | `--strict` | — | Exit non-zero if any mechanics scenario fails its intended-effect check |
+| `--swordplay-drill` | — | Run the deterministic solo sword drill that cycles named attack and block maneuvers |
 
 **Arena flags:**
 | Flag | Default | Description |
@@ -160,7 +162,7 @@ When `--personality-report` is set, `v3bench` defaults to seeds `0-99`, ticks `2
 | `--arena` | — | Run the V3 arena harness instead of the full bench flow |
 | `--arena-config PATH` | — | Load a TOML arena scenario file with per-side agent/loadout/formation settings |
 | `--arena-mode mutual\|null-vs-striker` | `null-vs-striker` | Legacy fallback when `--arena-config` is omitted |
-| `--replay PATH` | — | Write arena replay JSONL (`v3_init` + `v3_snapshot`/`v3_snapshot_delta`) for `/v3/replay` |
+| `--replay PATH` | — | Write replay JSONL (`v3_init` + `v3_snapshot`/`v3_snapshot_delta`) for arena runs or the swordplay drill so it can be loaded in `/v3/replay` |
 
 **Mechanics example:**
 ```bash
@@ -171,8 +173,15 @@ arena matchups so parameter tuning can validate observed effect sizes, not just
 single-run winners.
 
 Current suite coverage separates validated behavior from current gaps:
-- validated now: wound penalties, stamina effects, cooldown scaling, projectile aim leading, direct height effects in the damage pipeline, injured-vs-fresh arena outcomes
-- not yet validated end-to-end: terrain-driven movement effects, ranged arena combat, melee training advantage
+- validated now: wound penalties, stamina effects, cooldown scaling, projectile aim leading, direct height effects in the damage pipeline, injured-vs-fresh arena outcomes, melee training advantage
+- not yet validated end-to-end: terrain-driven movement effects, ranged arena combat, terrain-generated high-ground positioning
+
+**Sword drill example:**
+```bash
+simulate_everything_cli v3bench --swordplay-drill --ascii --artifacts-dir /tmp/v3-swordplay
+```
+The drill writes `frames.json` plus `replay.jsonl` under `swordplay_drill/` so the
+same deterministic sequence can be reviewed in ASCII or loaded into `/v3/replay`.
 
 **Arena config example:**
 ```toml
