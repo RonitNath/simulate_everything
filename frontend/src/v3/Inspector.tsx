@@ -183,12 +183,40 @@ const Inspector: Component<InspectorProps> = (props) => {
                 </div>
               </Show>
 
-              <Show when={e.current_task}>
+              <Show when={e.current_goal || e.current_action || e.needs}>
                 <div class={css.v3InspectorSection}>
-                  <div class={css.v3InspectorRow}>
-                    <span class={css.v3InspectorLabel}>Task</span>
-                    <span>{e.current_task}</span>
-                  </div>
+                  <Show when={e.current_goal}>
+                    <div class={css.v3InspectorRow}>
+                      <span class={css.v3InspectorLabel}>Goal</span>
+                      <span>{e.current_goal}</span>
+                    </div>
+                  </Show>
+                  <Show when={e.current_action}>
+                    <div class={css.v3InspectorRow}>
+                      <span class={css.v3InspectorLabel}>Action</span>
+                      <span>{e.current_action}</span>
+                    </div>
+                  </Show>
+                  <Show when={e.decision_reason}>
+                    <div class={css.v3InspectorRow}>
+                      <span class={css.v3InspectorLabel}>Why</span>
+                      <span>{e.decision_reason}</span>
+                    </div>
+                  </Show>
+                  <Show when={e.action_queue_preview && e.action_queue_preview.length > 0}>
+                    <div class={css.v3InspectorRow}>
+                      <span class={css.v3InspectorLabel}>Queue</span>
+                      <span>{e.action_queue_preview!.join(" → ")}</span>
+                    </div>
+                  </Show>
+                  <Show when={e.needs}>
+                    <div class={css.v3InspectorRow}>
+                      <span class={css.v3InspectorLabel}>Needs</span>
+                      <span>
+                        H {e.needs!.hunger.toFixed(2)} | S {e.needs!.safety.toFixed(2)} | D {e.needs!.duty.toFixed(2)}
+                      </span>
+                    </div>
+                  </Show>
                 </div>
               </Show>
             </div>

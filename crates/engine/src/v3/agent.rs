@@ -311,12 +311,16 @@ impl LayeredAgent {
     /// Run the agent for one tick. Returns all commands to be validated and executed.
     pub fn tick(&mut self, state: &GameState) -> AgentOutput {
         let tick = state.tick;
-        let mut output = AgentOutput::default();
+        let mut output = AgentOutput {
+            player: self.player,
+            ..AgentOutput::default()
+        };
 
         // Strategy layer — runs at strategy cadence.
         if tick.is_multiple_of(self.strategy_cadence) {
             let view = super::perception::build_strategic_view(state, self.player);
             self.active_directives = self.strategy.plan(&view);
+            output.directives = self.active_directives.clone();
             output.strategy_ran = true;
 
             // Emit strategy trace.
@@ -418,9 +422,11 @@ impl LayeredAgent {
 /// Output of a single agent tick.
 #[derive(Debug, Default)]
 pub struct AgentOutput {
+    pub player: u8,
     pub strategy_ran: bool,
     pub operations_ran: bool,
     pub tactical_stacks: usize,
+    pub directives: Vec<StrategicDirective>,
     pub operational_commands: Vec<OperationalCommand>,
     pub tactical_commands: Vec<TacticalCommand>,
     pub traces: Vec<AgentTrace>,
@@ -566,7 +572,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new()),

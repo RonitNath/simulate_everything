@@ -123,7 +123,11 @@ structure_type: Option<StructureType>
 build_progress: Option<f32>          // 0.0-1.0 for incomplete structures
 contains_count: usize                // population/garrison count
 stack_id: Option<u32>                // stack membership
-current_task: Option<String>         // human-readable task label
+needs: Option<EntityNeedsInfo>       // hunger/safety/duty/rest/social/shelter
+current_goal: Option<String>         // human-readable goal label
+current_action: Option<String>       // human-readable action label
+action_queue_preview: Vec<String>    // bounded preview of upcoming actions
+decision_reason: Option<String>      // last goal-selection rationale
 ```
 
 Spectators see all entities with the visible-enemy wound tier (zone + 2-bit

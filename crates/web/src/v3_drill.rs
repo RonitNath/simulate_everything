@@ -331,7 +331,6 @@ fn create_drill_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
-                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant::new())
@@ -364,7 +363,6 @@ fn create_drill_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
-                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant {
@@ -410,7 +408,6 @@ fn zoo_spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, facing: f32) -
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
-                task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant {

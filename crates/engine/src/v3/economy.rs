@@ -1,71 +1,19 @@
-use super::agent::{EntityTask, EquipmentType};
+use super::agent::EquipmentType;
 use super::armor::MaterialType;
 use super::equipment::{self, Equipment};
 use super::lifecycle::{contain, spawn_entity};
 use super::spatial::Vec3;
 use super::state::{
     EntityBuilder, GameState, Resource, ResourceType, Role, Structure, StructureType,
-    TaskAssignment,
 };
 use super::weapon;
 use crate::v2::state::EntityKey;
 
-const FARM_OUTPUT_PER_TASK: f32 = 1.0;
-const WORKSHOP_MATERIAL_PER_TASK: f32 = 0.5;
 const FOOD_UPKEEP_PER_PERSON: f32 = 0.15;
 const STARVATION_STAMINA_DRAIN: f32 = 0.05;
 
 pub fn tick_economy(state: &mut GameState, dt: f32) {
-    produce_resources(state, dt);
     consume_food(state, dt);
-}
-
-pub fn produce_resources(state: &mut GameState, dt: f32) {
-    let mut food_deltas = vec![0.0f32; state.num_players as usize];
-    let mut material_deltas = vec![0.0f32; state.num_players as usize];
-
-    for entity in state.entities.values() {
-        let Some(owner) = entity.owner else {
-            continue;
-        };
-        let Some(person) = entity.person.as_ref() else {
-            continue;
-        };
-        let Some(task) = person.task.as_ref() else {
-            continue;
-        };
-        if entity.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(false) {
-            continue;
-        }
-
-        match task {
-            TaskAssignment::Farm { site } => {
-                if valid_structure(state, *site, owner, StructureType::Farm) {
-                    food_deltas[owner as usize] += FARM_OUTPUT_PER_TASK * dt;
-                }
-            }
-            TaskAssignment::Workshop { site } => {
-                if valid_structure(state, *site, owner, StructureType::Workshop) {
-                    material_deltas[owner as usize] += WORKSHOP_MATERIAL_PER_TASK * dt;
-                }
-            }
-            TaskAssignment::Patrol
-            | TaskAssignment::Garrison
-            | TaskAssignment::Train
-            | TaskAssignment::Idle => {}
-        }
-    }
-
-    for owner in 0..state.num_players {
-        let food = food_deltas[owner as usize];
-        if food > 0.0 {
-            add_player_stockpile(state, owner, ResourceType::Food, food);
-        }
-        let material = material_deltas[owner as usize];
-        if material > 0.0 {
-            add_player_stockpile(state, owner, ResourceType::Material, material);
-        }
-    }
 }
 
 pub fn consume_food(state: &mut GameState, dt: f32) {
@@ -229,19 +177,6 @@ pub fn bootstrap_shared_economy_layout(state: &mut GameState) {
     }
 }
 
-pub fn task_assignment_for(task: &EntityTask) -> TaskAssignment {
-    match task {
-        EntityTask::Farm { field } => TaskAssignment::Farm { site: *field },
-        EntityTask::Build { site } | EntityTask::Craft { workshop: site, .. } => {
-            TaskAssignment::Workshop { site: *site }
-        }
-        EntityTask::Patrol { .. } => TaskAssignment::Patrol,
-        EntityTask::Garrison { .. } => TaskAssignment::Garrison,
-        EntityTask::Train => TaskAssignment::Train,
-        EntityTask::Idle => TaskAssignment::Idle,
-    }
-}
-
 pub fn player_stockpile_amount(state: &GameState, owner: u8, resource_type: ResourceType) -> f32 {
     state
         .entities
@@ -259,7 +194,7 @@ pub fn player_stockpile_amount(state: &GameState, owner: u8, resource_type: Reso
         .sum()
 }
 
-fn add_player_stockpile(
+pub fn add_player_stockpile(
     state: &mut GameState,
     owner: u8,
     resource_type: ResourceType,
@@ -278,7 +213,7 @@ fn add_player_stockpile(
     }
 }
 
-fn consume_player_stockpile(
+pub fn consume_player_stockpile(
     state: &mut GameState,
     owner: u8,
     resource_type: ResourceType,
@@ -720,7 +655,6 @@ mod tests {
         state: &mut GameState,
         owner: u8,
         role: Role,
-        task: Option<TaskAssignment>,
         pos: Vec3,
     ) -> EntityKey {
         spawn_entity(
@@ -731,7 +665,6 @@ mod tests {
                 .person(Person {
                     role,
                     combat_skill: 0.2,
-                    task,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .vitals(),
@@ -771,57 +704,18 @@ mod tests {
     }
 
     #[test]
-    fn farmer_task_produces_food() {
+    fn stockpile_adds_food() {
         let mut state = test_state();
-        let village = spawn_structure(&mut state, 0, StructureType::Village, Vec3::ZERO);
-        let farm = spawn_structure(
-            &mut state,
-            0,
-            StructureType::Farm,
-            Vec3::new(10.0, 0.0, 0.0),
-        );
-        let _farmer = spawn_person(
-            &mut state,
-            0,
-            Role::Farmer,
-            Some(TaskAssignment::Farm { site: farm }),
-            Vec3::new(8.0, 0.0, 0.0),
-        );
-
-        let food = spawn_entity(
-            &mut state,
-            EntityBuilder::new().owner(0).resource(Resource {
-                resource_type: ResourceType::Food,
-                amount: 0.0,
-            }),
-        );
-        contain(&mut state, village, food);
-
-        produce_resources(&mut state, 2.0);
-
+        let _village = spawn_structure(&mut state, 0, StructureType::Village, Vec3::ZERO);
+        add_player_stockpile(&mut state, 0, ResourceType::Food, 2.0);
         assert!(player_stockpile_amount(&state, 0, ResourceType::Food) >= 2.0);
     }
 
     #[test]
-    fn workshop_task_produces_material() {
+    fn stockpile_adds_material() {
         let mut state = test_state();
         let _village = spawn_structure(&mut state, 0, StructureType::Village, Vec3::ZERO);
-        let workshop = spawn_structure(
-            &mut state,
-            0,
-            StructureType::Workshop,
-            Vec3::new(10.0, 0.0, 0.0),
-        );
-        let _worker = spawn_person(
-            &mut state,
-            0,
-            Role::Worker,
-            Some(TaskAssignment::Workshop { site: workshop }),
-            Vec3::new(8.0, 0.0, 0.0),
-        );
-
-        produce_resources(&mut state, 2.0);
-
+        add_player_stockpile(&mut state, 0, ResourceType::Material, 1.0);
         assert!(player_stockpile_amount(&state, 0, ResourceType::Material) >= 1.0);
     }
 
@@ -837,13 +731,7 @@ mod tests {
             }),
         );
         contain(&mut state, village, food);
-        let _person = spawn_person(
-            &mut state,
-            0,
-            Role::Idle,
-            Some(TaskAssignment::Idle),
-            Vec3::ZERO,
-        );
+        let _person = spawn_person(&mut state, 0, Role::Idle, Vec3::ZERO);
 
         consume_food(&mut state, 2.0);
 
@@ -855,13 +743,7 @@ mod tests {
         let mut state = test_state();
         let village = spawn_structure(&mut state, 0, StructureType::Village, Vec3::ZERO);
         let _food = ensure_stockpile_resource(&mut state, 0, ResourceType::Food).unwrap();
-        let person = spawn_person(
-            &mut state,
-            0,
-            Role::Idle,
-            Some(TaskAssignment::Idle),
-            Vec3::ZERO,
-        );
+        let person = spawn_person(&mut state, 0, Role::Idle, Vec3::ZERO);
         contain(&mut state, village, person);
         let blood_before = state.entities[person].vitals.as_ref().unwrap().blood;
 
@@ -898,7 +780,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.4,
-                    task: Some(TaskAssignment::Train),
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

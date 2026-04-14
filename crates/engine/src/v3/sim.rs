@@ -1,20 +1,26 @@
 use smallvec::SmallVec;
 
 use super::agent::{AgentOutput, LayeredAgent};
+use super::action_queue::{Action, CurrentAction};
 use super::body_physics;
 use super::combat_log::CombatObservation;
 use super::commands::{CommandApplySummary, apply_agent_output};
 use super::damage::{self, BlockCapability, DefenderState, Impact, ImpactResult};
 use super::economy;
+use super::htn;
 use super::index::update_hex_membership;
 use super::lifecycle::{self, cleanup_dead, cleanup_inert_projectiles};
 use super::martial;
 use super::movement::{self, Mobile};
+use super::needs::{NeedDecayRates, apply_decay};
 use super::projectile::{self, ProjectileTick};
+use super::resolution::{enemy_nearby, resolution_demand_at};
 use super::spatial::{Vec2, Vec3, terrain_height_at, terrain_material_at, terrain_slope_at};
-use super::state::GameState;
+use super::state::{DecisionRecord, GameState, Role, StructureType};
 use super::steering;
+use super::utility::{Goal, UtilityScorer};
 use super::weapon::{self, AttackTick};
+use super::{economy::add_player_stockpile, economy::consume_player_stockpile};
 use crate::v2::state::EntityKey;
 
 // ---------------------------------------------------------------------------
@@ -94,27 +100,30 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     // --- Phase 2: Economy ---
     economy::tick_economy(state, dt_f32);
 
-    // --- Phase 3: Movement ---
+    // --- Phase 3: Autonomous behavior ---
+    tick_behaviors(state, dt_f32);
+
+    // --- Phase 4: Movement ---
     compute_steering_and_move(state, dt_f32);
 
-    // --- Phase 3.5: Body physics ---
+    // --- Phase 4.5: Body physics ---
     body_physics::tick_body_physics(state, dt_f32);
 
-    // --- Phase 4: Melee combat ---
+    // --- Phase 5: Melee combat ---
     let melee_impacts = resolve_melee_attacks(state);
 
-    // --- Phase 5: Projectile advancement ---
+    // --- Phase 6: Projectile advancement ---
     let projectile_impacts = advance_projectiles(state);
     result.impacts = melee_impacts.len() + projectile_impacts.len();
 
-    // --- Phase 6: Impact resolution ---
+    // --- Phase 7: Impact resolution ---
     apply_all_impacts(state, &melee_impacts);
     apply_all_impacts(state, &projectile_impacts);
 
-    // --- Phase 7: Vitals ---
+    // --- Phase 8: Vitals ---
     tick_vitals(state, dt_f32);
 
-    // --- Phase 8: Cleanup ---
+    // --- Phase 9: Cleanup ---
     // Count newly dead before cleanup strips their mobile/combatant
     result.deaths = state
         .entities
@@ -127,7 +136,7 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     cleanup_dead(state);
     cleanup_inert_projectiles(state);
 
-    // --- Phase 9: Elimination ---
+    // --- Phase 10: Elimination ---
     result.eliminated = lifecycle::check_elimination(state);
 
     // --- Advance time ---
@@ -135,6 +144,372 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     state.tick += 1;
 
     result
+}
+
+pub fn batch_resolve_entities(
+    state: &mut GameState,
+    entity_keys: &[EntityKey],
+    dt: f32,
+    time_budget: f32,
+) {
+    let mut elapsed = 0.0f32;
+    while elapsed < time_budget {
+        let before = state.tick;
+        for &entity_key in entity_keys {
+            tick_entity_behavior(state, entity_key, dt, true);
+        }
+        if state.tick == before {
+            elapsed += dt.max(1.0);
+        } else {
+            elapsed += dt.max(1.0);
+        }
+    }
+}
+
+fn tick_behaviors(state: &mut GameState, dt: f32) {
+    let entity_keys: Vec<EntityKey> = state
+        .entities
+        .iter()
+        .filter_map(|(key, entity)| entity.person.as_ref().map(|_| key))
+        .collect();
+    for entity_key in entity_keys {
+        tick_entity_behavior(state, entity_key, dt, false);
+    }
+}
+
+fn tick_entity_behavior(state: &mut GameState, entity_key: EntityKey, dt: f32, batch_mode: bool) {
+    let Some(entity_snapshot) = state.entities.get(entity_key).cloned() else {
+        return;
+    };
+    let Some(person) = entity_snapshot.person.as_ref() else {
+        return;
+    };
+    if entity_snapshot
+        .vitals
+        .as_ref()
+        .map(|vitals| vitals.is_dead())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let owner = entity_snapshot.owner.unwrap_or(0);
+    let pos = entity_snapshot.pos.unwrap_or(Vec3::ZERO);
+    let enemy_close = enemy_nearby(state, entity_key, 90.0);
+    let resolution = resolution_demand_at(state, entity_snapshot.hex.unwrap_or_else(|| super::hex::world_to_hex(pos)));
+    let weights = state
+        .faction_need_weights
+        .get(owner as usize)
+        .copied()
+        .unwrap_or_default();
+    let waypoints_empty = state
+        .entities
+        .get(entity_key)
+        .and_then(|entity| entity.mobile.as_ref())
+        .map(|mobile| mobile.waypoints.is_empty())
+        .unwrap_or(true);
+
+    let mut should_replan = false;
+    if let Some(behavior) = state
+        .entities
+        .get_mut(entity_key)
+        .and_then(|entity| entity.behavior.as_mut())
+    {
+        let ticks_elapsed = state.tick.saturating_sub(behavior.last_decision_tick).max(1);
+        apply_decay(&mut behavior.needs, NeedDecayRates::default(), ticks_elapsed, dt);
+        if enemy_close {
+            behavior.needs.safety = behavior.needs.safety.max(0.7);
+        }
+        if waypoints_empty {
+            behavior.needs.duty = (behavior.needs.duty + 0.02).clamp(0.0, 1.0);
+        }
+        should_replan = state.tick >= behavior.next_decision_tick || behavior.action_queue.is_empty();
+    }
+
+    if should_replan {
+        let needs = state
+            .entities
+            .get(entity_key)
+            .and_then(|entity| entity.behavior.as_ref())
+            .map(|behavior| behavior.needs)
+            .unwrap_or_default();
+        let choice = UtilityScorer::choose_goal(state, entity_key, needs, weights, resolution, enemy_close);
+        let plan = htn::decompose_goal(state, entity_key, choice.goal);
+        if let Some(behavior) = state
+            .entities
+            .get_mut(entity_key)
+            .and_then(|entity| entity.behavior.as_mut())
+        {
+            behavior.current_goal = Some(choice.goal);
+            behavior.decision_reason = Some(choice.reason.clone());
+            behavior.action_queue.clear();
+            behavior.action_queue.queued.extend(plan.actions);
+            behavior.mtr = plan.traversal;
+            if behavior.decision_history.len() == 4 {
+                behavior.decision_history.remove(0);
+            }
+            behavior.decision_history.push(DecisionRecord {
+                tick: state.tick,
+                goal: choice.goal,
+                reason: choice.reason,
+            });
+            behavior.last_decision_tick = state.tick;
+            behavior.next_decision_tick = state.tick
+                + decision_interval(choice.goal, enemy_close, resolution, person.role);
+        }
+    }
+
+    promote_next_action(state, entity_key);
+    advance_current_action(state, entity_key, dt, batch_mode);
+}
+
+fn decision_interval(goal: Goal, enemy_close: bool, resolution: f32, role: Role) -> u64 {
+    if enemy_close || matches!(goal, Goal::Fight | Goal::Flee) || resolution > 0.45 {
+        return 1;
+    }
+    if matches!(goal, Goal::Work | Goal::Build | Goal::Eat) {
+        return 20;
+    }
+    if role == Role::Soldier {
+        return 30;
+    }
+    60
+}
+
+fn promote_next_action(state: &mut GameState, entity_key: EntityKey) {
+    if let Some(queue) = state
+        .entities
+        .get_mut(entity_key)
+        .and_then(|entity| entity.behavior.as_mut())
+        .map(|behavior| &mut behavior.action_queue)
+        && queue.current.is_none()
+        && let Some(action) = queue.queued.pop_front()
+    {
+        queue.current = Some(CurrentAction {
+            action,
+            progress: 0.0,
+        });
+    }
+}
+
+fn advance_current_action(state: &mut GameState, entity_key: EntityKey, dt: f32, batch_mode: bool) {
+    let current = state
+        .entities
+        .get(entity_key)
+        .and_then(|entity| entity.behavior.as_ref())
+        .and_then(|behavior| behavior.action_queue.current.as_ref())
+        .cloned();
+    let Some(current) = current else {
+        return;
+    };
+
+    let complete = match current.action.clone() {
+        Action::MoveTo { target } => advance_move_action(state, entity_key, target, batch_mode),
+        Action::WorkAt { target, duration } => {
+            advance_timed_action(state, entity_key, dt, duration, |state, entity_key| {
+                apply_work_effect(state, entity_key, target);
+            })
+        }
+        Action::ConsumeStockpile => {
+            apply_consume_effect(state, entity_key);
+            true
+        }
+        Action::AttackTarget { target } => advance_attack_action(state, entity_key, target),
+        Action::FleeFrom { threat, distance } => advance_flee_action(state, entity_key, threat, distance, batch_mode),
+        Action::Rest { duration } => {
+            advance_timed_action(state, entity_key, dt, duration, |state, entity_key| {
+                if let Some(behavior) = state
+                    .entities
+                    .get_mut(entity_key)
+                    .and_then(|entity| entity.behavior.as_mut())
+                {
+                    behavior.needs.rest = 0.05;
+                }
+                if let Some(vitals) = state
+                    .entities
+                    .get_mut(entity_key)
+                    .and_then(|entity| entity.vitals.as_mut())
+                {
+                    vitals.stamina = (vitals.stamina + 0.2).clamp(0.0, 1.0);
+                }
+            })
+        }
+        Action::SocializeAt { target, duration } => {
+            let counterpart_id = state.entities.get(target).map(|entity| entity.id);
+            advance_timed_action(state, entity_key, dt, duration, |state, entity_key| {
+                if let Some(behavior) = state
+                    .entities
+                    .get_mut(entity_key)
+                    .and_then(|entity| entity.behavior.as_mut())
+                {
+                    behavior.needs.social = 0.05;
+                    if let Some(target_id) = counterpart_id {
+                        behavior
+                            .social
+                            .remember(state.tick, target_id, "shared settlement time");
+                    }
+                }
+            })
+        }
+        Action::Wait { duration } => advance_timed_action(state, entity_key, dt, duration, |_state, _entity_key| {}),
+    };
+
+    if complete
+        && let Some(queue) = state
+            .entities
+            .get_mut(entity_key)
+            .and_then(|entity| entity.behavior.as_mut())
+            .map(|behavior| &mut behavior.action_queue)
+    {
+        queue.current = None;
+    }
+}
+
+fn advance_move_action(state: &mut GameState, entity_key: EntityKey, target: Vec3, batch_mode: bool) -> bool {
+    if batch_mode {
+        if let Some(entity) = state.entities.get_mut(entity_key) {
+            entity.pos = Some(target);
+            entity.hex = Some(super::hex::world_to_hex(target));
+            if let Some(mobile) = entity.mobile.as_mut() {
+                mobile.waypoints.clear();
+            }
+        }
+        return true;
+    }
+    let Some(entity) = state.entities.get_mut(entity_key) else {
+        return true;
+    };
+    let Some(pos) = entity.pos else {
+        return true;
+    };
+    if let Some(mobile) = entity.mobile.as_mut() {
+        mobile.waypoints = vec![target];
+    }
+    (target.x - pos.x).powi(2) + (target.y - pos.y).powi(2) <= 16.0
+}
+
+fn advance_timed_action(
+    state: &mut GameState,
+    entity_key: EntityKey,
+    dt: f32,
+    duration: f32,
+    on_complete: impl FnOnce(&mut GameState, EntityKey),
+) -> bool {
+    let mut done = false;
+    if let Some(current) = state
+        .entities
+        .get_mut(entity_key)
+        .and_then(|entity| entity.behavior.as_mut())
+        .and_then(|behavior| behavior.action_queue.current.as_mut())
+    {
+        current.progress += dt.max(0.05);
+        done = current.progress >= duration;
+    }
+    if done {
+        on_complete(state, entity_key);
+    }
+    done
+}
+
+fn apply_work_effect(state: &mut GameState, entity_key: EntityKey, target: EntityKey) {
+    let owner = state.entities.get(entity_key).and_then(|entity| entity.owner);
+    let Some(owner) = owner else {
+        return;
+    };
+    let structure_type = state
+        .entities
+        .get(target)
+        .and_then(|entity| entity.structure.as_ref())
+        .map(|structure| structure.structure_type);
+    match structure_type {
+        Some(StructureType::Farm) => add_player_stockpile(state, owner, super::state::ResourceType::Food, 1.5),
+        Some(StructureType::Workshop) => {
+            add_player_stockpile(state, owner, super::state::ResourceType::Material, 0.75)
+        }
+        Some(StructureType::Village | StructureType::City | StructureType::Wall | StructureType::Tower | StructureType::Depot) | None => {}
+    }
+    if let Some(behavior) = state
+        .entities
+        .get_mut(entity_key)
+        .and_then(|entity| entity.behavior.as_mut())
+    {
+        behavior.needs.duty = 0.05;
+        behavior.needs.hunger = (behavior.needs.hunger + 0.06).clamp(0.0, 1.0);
+    }
+}
+
+fn apply_consume_effect(state: &mut GameState, entity_key: EntityKey) {
+    let Some(owner) = state.entities.get(entity_key).and_then(|entity| entity.owner) else {
+        return;
+    };
+    if economy::player_stockpile_amount(state, owner, super::state::ResourceType::Food) > 0.0 {
+        consume_player_stockpile(state, owner, super::state::ResourceType::Food, 1.0);
+        if let Some(behavior) = state
+            .entities
+            .get_mut(entity_key)
+            .and_then(|entity| entity.behavior.as_mut())
+        {
+            behavior.needs.hunger = 0.05;
+        }
+    }
+}
+
+fn advance_attack_action(state: &mut GameState, entity_key: EntityKey, target: EntityKey) -> bool {
+    let target_pos = state.entities.get(target).and_then(|entity| entity.pos);
+    let Some(target_pos) = target_pos else {
+        return true;
+    };
+    if let Some(entity) = state.entities.get_mut(entity_key) {
+        if let Some(mobile) = entity.mobile.as_mut()
+            && let Some(pos) = entity.pos
+            && (target_pos.x - pos.x).powi(2) + (target_pos.y - pos.y).powi(2) > 9.0
+        {
+            mobile.waypoints = vec![target_pos];
+            return false;
+        }
+        if let Some(combatant) = entity.combatant.as_mut() {
+            combatant.target = Some(target);
+        }
+    }
+    super::commands::apply_tactical_command(
+        state,
+        &super::agent::TacticalCommand::Attack {
+            attacker: entity_key,
+            target,
+        },
+    );
+    true
+}
+
+fn advance_flee_action(
+    state: &mut GameState,
+    entity_key: EntityKey,
+    threat: EntityKey,
+    distance: f32,
+    batch_mode: bool,
+) -> bool {
+    let Some(entity_pos) = state.entities.get(entity_key).and_then(|entity| entity.pos) else {
+        return true;
+    };
+    let Some(threat_pos) = state.entities.get(threat).and_then(|entity| entity.pos) else {
+        return true;
+    };
+    let dir = (entity_pos - threat_pos).normalize();
+    let target = Vec3::new(
+        entity_pos.x + dir.x * distance,
+        entity_pos.y + dir.y * distance,
+        entity_pos.z,
+    );
+    let done = advance_move_action(state, entity_key, target, batch_mode);
+    if done
+        && let Some(behavior) = state
+            .entities
+            .get_mut(entity_key)
+            .and_then(|entity| entity.behavior.as_mut())
+    {
+        behavior.needs.safety = 0.2;
+    }
+    done
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,7 +1539,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1190,7 +1564,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1243,7 +1616,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1267,7 +1639,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

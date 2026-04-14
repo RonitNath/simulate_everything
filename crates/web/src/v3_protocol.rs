@@ -5,15 +5,16 @@ use simulate_everything_engine::v3::{
     body_model::BodyPointId,
     derived::{derive_hex_control, derive_hex_structures, derive_player_stats, stockpile_level},
     spatial::{Vec2, Vec3, terrain_height_at, terrain_material_at, terrain_raster_bounds},
-    state::{GameState, TaskAssignment},
+    state::GameState,
     terrain_ops::TERRAIN_PATCH_CELL_SIZE,
     wound::Severity,
 };
 
 // Re-export all wire types from the protocol crate.
 pub use simulate_everything_protocol::{
-    BodyPointWire, BodyRenderInfo, BodyZone, CapsuleWire, DiscWire, EntityKind, EntityUpdate,
-    PlayerInfo, ProjectileInfo, Role, SpectatorEntityInfo, StackInfo, StackUpdate, TerrainPatch,
+    BodyPointWire, BodyRenderInfo, BodyZone, CapsuleWire, DamageType, DiscWire, EntityKind,
+    EntityNeedsInfo, EntityUpdate, FormationType, HexDelta, PlayerInfo, ProjectileInfo,
+    ResourceType, Role, SpectatorEntityInfo, StackInfo, StackUpdate, StructureType, TerrainPatch,
     TerrainRasterInit, TimeMode, V3Init, V3RrStatus, V3ServerToSpectator, V3Snapshot,
     V3SnapshotDelta, WoundSeverity,
 };
@@ -360,7 +361,33 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             .iter()
             .find(|s| s.members.contains(&_key))
             .map(|s| s.id.0);
-        let current_task = derive_current_task(entity);
+        let needs = entity.behavior.as_ref().map(|behavior| EntityNeedsInfo {
+            hunger: behavior.needs.hunger,
+            safety: behavior.needs.safety,
+            duty: behavior.needs.duty,
+            rest: behavior.needs.rest,
+            social: behavior.needs.social,
+            shelter: behavior.needs.shelter,
+        });
+        let current_goal = entity
+            .behavior
+            .as_ref()
+            .and_then(|behavior| behavior.current_goal)
+            .map(|goal| goal.label().to_string());
+        let current_action = entity
+            .behavior
+            .as_ref()
+            .and_then(|behavior| behavior.action_queue.current.as_ref())
+            .map(|current| current.action.label());
+        let action_queue_preview = entity
+            .behavior
+            .as_ref()
+            .map(|behavior| behavior.action_queue.preview(4))
+            .unwrap_or_default();
+        let decision_reason = entity
+            .behavior
+            .as_ref()
+            .and_then(|behavior| behavior.decision_reason.clone());
 
         // Swordplay visual state — derive from combatant attack/cooldown.
         let (attack_phase, attack_motion, weapon_angle, attack_progress) =
@@ -432,7 +459,11 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             build_progress,
             contains_count: entity.contains.len(),
             stack_id,
-            current_task,
+            needs,
+            current_goal,
+            current_action,
+            action_queue_preview,
+            decision_reason,
             attack_phase,
             attack_motion,
             weapon_angle,
@@ -527,70 +558,6 @@ fn build_player_list(state: &GameState) -> Vec<PlayerInfo> {
             score: player.population + player.territory,
         })
         .collect()
-}
-
-fn derive_current_task(entity: &simulate_everything_engine::v3::state::Entity) -> Option<String> {
-    if entity
-        .combatant
-        .as_ref()
-        .and_then(|combatant| combatant.attack.as_ref())
-        .is_some()
-    {
-        return Some("Attack".to_string());
-    }
-    if entity
-        .combatant
-        .as_ref()
-        .and_then(|combatant| combatant.cooldown.as_ref())
-        .is_some()
-    {
-        return Some("Recover".to_string());
-    }
-    if let Some(task) = entity
-        .person
-        .as_ref()
-        .and_then(|person| person.task.as_ref())
-    {
-        return Some(
-            match task {
-                TaskAssignment::Farm { .. } => "Farm",
-                TaskAssignment::Workshop { .. } => "Work",
-                TaskAssignment::Patrol => "Patrol",
-                TaskAssignment::Garrison => "Garrison",
-                TaskAssignment::Train => "Train",
-                TaskAssignment::Idle => "Idle",
-            }
-            .to_string(),
-        );
-    }
-
-    if entity
-        .mobile
-        .as_ref()
-        .map(|mobile| !mobile.waypoints.is_empty())
-        .unwrap_or(false)
-    {
-        return Some(
-            match entity.person.as_ref().map(|person| person.role) {
-                Some(Role::Soldier) => "Move",
-                Some(Role::Farmer) => "Travel",
-                Some(Role::Worker | Role::Builder) => "Work",
-                Some(Role::Idle) => "Move",
-                None => "Move",
-            }
-            .to_string(),
-        );
-    }
-
-    entity.person.as_ref().map(|person| {
-        match person.role {
-            Role::Farmer => "Farm",
-            Role::Worker | Role::Builder => "Work",
-            Role::Soldier => "Hold",
-            Role::Idle => "Idle",
-        }
-        .to_string()
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +779,11 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
         armor_type: None,
         contains_count: None,
         stack_id: None,
-        current_task: None,
+        needs: None,
+        current_goal: None,
+        current_action: None,
+        action_queue_preview: None,
+        decision_reason: None,
         attack_phase: None,
         attack_motion: None,
         weapon_angle: None,
@@ -885,8 +856,28 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
         changed = true;
     }
 
-    if cur.current_task != prev.current_task {
-        update.current_task = Some(cur.current_task.clone());
+    if cur.needs != prev.needs {
+        update.needs = Some(cur.needs.clone());
+        changed = true;
+    }
+
+    if cur.current_goal != prev.current_goal {
+        update.current_goal = Some(cur.current_goal.clone());
+        changed = true;
+    }
+
+    if cur.current_action != prev.current_action {
+        update.current_action = Some(cur.current_action.clone());
+        changed = true;
+    }
+
+    if cur.action_queue_preview != prev.action_queue_preview {
+        update.action_queue_preview = Some(cur.action_queue_preview.clone());
+        changed = true;
+    }
+
+    if cur.decision_reason != prev.decision_reason {
+        update.decision_reason = Some(cur.decision_reason.clone());
         changed = true;
     }
 
@@ -1057,11 +1048,11 @@ mod tests {
             "player aggregates should include derived stockpile levels"
         );
         let entity_id = state.entities[mover].id;
-        let task = snapshot
+        let action = snapshot
             .entities
             .iter()
             .find(|entity| entity.id == entity_id)
-            .and_then(|entity| entity.current_task.as_deref());
-        assert_eq!(task, Some("Move"));
+            .and_then(|entity| entity.current_action.as_deref());
+        assert_eq!(action, Some("MoveTo"));
     }
 }

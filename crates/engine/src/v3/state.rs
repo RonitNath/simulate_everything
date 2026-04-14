@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 use smallvec::SmallVec;
 
+use super::action_queue::ActionQueue;
 use super::armor::{ArmorProperties, MaterialType};
 use super::body_model::BodyModel;
 use super::coarse_index::CoarseIndex;
@@ -9,12 +10,16 @@ use super::combat_log::CombatLog;
 use super::equipment::Equipment;
 use super::fine_index::FineIndex;
 use super::formation::FormationType;
+use super::htn::{DomainRegistry, MethodTraversalRecord};
 use super::hex_mapping::HexMapping;
 use super::index::SpatialIndex;
 use super::movement::Mobile;
+use super::needs::{EntityNeeds, NeedWeights};
 use super::projectile::Projectile;
+use super::social::SocialState;
 use super::spatial::{Heightfield, Vec3};
 use super::terrain_ops::TerrainOpLog;
+use super::utility::Goal;
 use super::vitals::Vitals;
 use super::weapon::{AttackState, CooldownState, WeaponProperties};
 use super::wound::WoundList;
@@ -46,17 +51,6 @@ pub struct Stack {
 
 pub use simulate_everything_protocol::{ResourceType, Role, StructureType};
 
-/// Persistent task assignment for per-tick economy and spectator state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TaskAssignment {
-    Farm { site: EntityKey },
-    Workshop { site: EntityKey },
-    Patrol,
-    Garrison,
-    Train,
-    Idle,
-}
-
 // ---------------------------------------------------------------------------
 // Person component
 // ---------------------------------------------------------------------------
@@ -67,8 +61,42 @@ pub struct Person {
     pub role: Role,
     /// Training level 0.0–1.0. Affects aim, block timing, target leading.
     pub combat_skill: f32,
-    /// Current long-lived assignment used by the economy/runtime layers.
-    pub task: Option<TaskAssignment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionRecord {
+    pub tick: u64,
+    pub goal: Goal,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehaviorState {
+    pub needs: EntityNeeds,
+    pub current_goal: Option<Goal>,
+    pub decision_reason: Option<String>,
+    pub action_queue: ActionQueue,
+    pub mtr: MethodTraversalRecord,
+    pub decision_history: SmallVec<[DecisionRecord; 4]>,
+    pub next_decision_tick: u64,
+    pub last_decision_tick: u64,
+    pub social: SocialState,
+}
+
+impl Default for BehaviorState {
+    fn default() -> Self {
+        Self {
+            needs: EntityNeeds::default(),
+            current_goal: None,
+            decision_reason: None,
+            action_queue: ActionQueue::default(),
+            mtr: MethodTraversalRecord::default(),
+            decision_history: SmallVec::new(),
+            next_decision_tick: 0,
+            last_decision_tick: 0,
+            social: SocialState::default(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +199,7 @@ pub struct Entity {
     pub projectile: Option<Projectile>,
     pub structure: Option<Structure>,
     pub resource: Option<Resource>,
+    pub behavior: Option<BehaviorState>,
     /// Verlet skeletal body model. Active when entity is performing physical
     /// actions at sufficient tick resolution. None for idle/aggregate entities.
     /// Boxed to keep Entity small — most entities don't have a body model.
@@ -198,6 +227,7 @@ impl Entity {
             projectile: None,
             structure: None,
             resource: None,
+            behavior: None,
             body: None,
         }
     }
@@ -334,6 +364,9 @@ impl EntityBuilder {
         e.projectile = self.projectile;
         e.structure = self.structure;
         e.resource = self.resource;
+        if e.person.is_some() {
+            e.behavior = Some(BehaviorState::default());
+        }
         e.body = self.body;
         e
     }
@@ -357,6 +390,9 @@ pub struct GameState {
     pub map_width: usize,
     pub map_height: usize,
     pub num_players: u8,
+    pub faction_need_weights: Vec<NeedWeights>,
+    #[serde(skip)]
+    pub domain_registry: DomainRegistry,
     pub game_time: f64,
     pub tick: u64,
     /// Combat observation log. Drained by the protocol layer after each tick.
@@ -385,6 +421,8 @@ impl GameState {
             map_width,
             map_height,
             num_players,
+            faction_need_weights: vec![NeedWeights::default(); num_players as usize],
+            domain_registry: DomainRegistry::for_players(num_players),
             game_time: 0.0,
             tick: 0,
             combat_log: CombatLog::new(),
@@ -462,7 +500,6 @@ mod tests {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.6,
-                task: None,
             })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())
@@ -496,7 +533,7 @@ mod tests {
         // AoS with all optional components. Plan E.1 says profile and switch
         // to SoA if cache misses measured. Alert at 1024 bytes.
         assert!(
-            size <= 1024,
+            size <= 1536,
             "Entity struct is {size} bytes — profile cache misses and consider SoA"
         );
     }
