@@ -1208,6 +1208,11 @@ async fn api_v3_drill_reset(State(state): State<Arc<AppState>>) -> impl IntoResp
     Json(serde_json::json!({ "ok": true }))
 }
 
+async fn api_v3_drill_zoo(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v3_drill.zoo().await;
+    Json(serde_json::json!({ "ok": true }))
+}
+
 async fn ws_v3_drill(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -1407,6 +1412,7 @@ async fn main() {
         .route("/api/v3/drill/status", get(api_v3_drill_status))
         .route("/api/v3/drill/ascii", get(api_v3_drill_ascii))
         .route("/api/v3/drill/reset", axum::routing::post(api_v3_drill_reset))
+        .route("/api/v3/drill/zoo", axum::routing::post(api_v3_drill_zoo))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 
