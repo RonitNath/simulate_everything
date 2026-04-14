@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 use simulate_everything_engine::v3::{
     armor::{BodyZone, DamageType},
@@ -636,4 +638,296 @@ fn build_player_list(state: &GameState) -> Vec<PlayerInfo> {
             }
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Delta tracker — compares consecutive snapshots to produce deltas
+// ---------------------------------------------------------------------------
+
+/// Tracks previous tick's state to compute deltas for spectator streaming.
+pub struct DeltaTracker {
+    prev_entities: HashMap<u32, SpectatorEntityInfo>,
+    prev_projectiles: HashMap<u32, ProjectileInfo>,
+    prev_stacks: HashMap<u32, StackInfo>,
+}
+
+impl DeltaTracker {
+    pub fn new() -> Self {
+        Self {
+            prev_entities: HashMap::new(),
+            prev_projectiles: HashMap::new(),
+            prev_stacks: HashMap::new(),
+        }
+    }
+
+    /// Reset tracker state (e.g., on new game).
+    pub fn reset(&mut self) {
+        self.prev_entities.clear();
+        self.prev_projectiles.clear();
+        self.prev_stacks.clear();
+    }
+
+    /// Build a delta from the current game state compared to the previous tick.
+    /// Updates internal state for the next comparison.
+    pub fn build_delta(&mut self, state: &GameState, dt: f32) -> V3SnapshotDelta {
+        let cur_entities = build_entity_list(state);
+        let cur_projectiles = build_projectile_list(state);
+        let cur_stacks = build_stack_list(state);
+        let players = build_player_list(state);
+
+        // --- Entities ---
+        let cur_entity_map: HashMap<u32, &SpectatorEntityInfo> =
+            cur_entities.iter().map(|e| (e.id, e)).collect();
+        let cur_entity_ids: std::collections::HashSet<u32> =
+            cur_entities.iter().map(|e| e.id).collect();
+        let prev_entity_ids: std::collections::HashSet<u32> =
+            self.prev_entities.keys().copied().collect();
+
+        // Appeared: in current but not in previous.
+        let entities_appeared: Vec<SpectatorEntityInfo> = cur_entities
+            .iter()
+            .filter(|e| !prev_entity_ids.contains(&e.id))
+            .cloned()
+            .collect();
+
+        // Removed: in previous but not in current.
+        let entities_removed: Vec<u32> = prev_entity_ids
+            .difference(&cur_entity_ids)
+            .copied()
+            .collect();
+
+        // Updated: in both, with changed fields.
+        let mut entities_updated: Vec<EntityUpdate> = Vec::new();
+        for e in &cur_entities {
+            if let Some(prev) = self.prev_entities.get(&e.id) {
+                if let Some(update) = diff_entity(prev, e) {
+                    entities_updated.push(update);
+                }
+            }
+        }
+
+        // --- Projectiles ---
+        let cur_proj_map: HashMap<u32, &ProjectileInfo> =
+            cur_projectiles.iter().map(|p| (p.id, p)).collect();
+        let cur_proj_ids: std::collections::HashSet<u32> =
+            cur_projectiles.iter().map(|p| p.id).collect();
+        let prev_proj_ids: std::collections::HashSet<u32> =
+            self.prev_projectiles.keys().copied().collect();
+
+        let projectiles_spawned: Vec<ProjectileInfo> = cur_projectiles
+            .iter()
+            .filter(|p| !prev_proj_ids.contains(&p.id))
+            .cloned()
+            .collect();
+        let projectiles_removed: Vec<u32> = prev_proj_ids
+            .difference(&cur_proj_ids)
+            .copied()
+            .collect();
+
+        // --- Stacks ---
+        let cur_stack_ids: std::collections::HashSet<u32> =
+            cur_stacks.iter().map(|s| s.id).collect();
+        let prev_stack_ids: std::collections::HashSet<u32> =
+            self.prev_stacks.keys().copied().collect();
+
+        let stacks_created: Vec<StackInfo> = cur_stacks
+            .iter()
+            .filter(|s| !prev_stack_ids.contains(&s.id))
+            .cloned()
+            .collect();
+        let stacks_dissolved: Vec<u32> = prev_stack_ids
+            .difference(&cur_stack_ids)
+            .copied()
+            .collect();
+
+        let mut stacks_updated: Vec<StackUpdate> = Vec::new();
+        for s in &cur_stacks {
+            if let Some(prev) = self.prev_stacks.get(&s.id) {
+                if let Some(update) = diff_stack(prev, s) {
+                    stacks_updated.push(update);
+                }
+            }
+        }
+
+        // Update previous state for next tick.
+        self.prev_entities = cur_entities.into_iter().map(|e| (e.id, e)).collect();
+        self.prev_projectiles = cur_projectiles.into_iter().map(|p| (p.id, p)).collect();
+        self.prev_stacks = cur_stacks.into_iter().map(|s| (s.id, s)).collect();
+
+        V3SnapshotDelta {
+            tick: state.tick,
+            dt,
+            full_state: false,
+            entities_appeared,
+            entities_updated,
+            entities_removed,
+            projectiles_spawned,
+            projectiles_removed,
+            stacks_created,
+            stacks_updated,
+            stacks_dissolved,
+            hex_changes: Vec::new(), // Hex ownership not yet tracked.
+            players,
+        }
+    }
+
+    /// Seed the tracker from a full snapshot (e.g., after game init).
+    pub fn seed_from_snapshot(&mut self, snapshot: &V3Snapshot) {
+        self.prev_entities = snapshot
+            .entities
+            .iter()
+            .map(|e| (e.id, e.clone()))
+            .collect();
+        self.prev_projectiles = snapshot
+            .projectiles
+            .iter()
+            .map(|p| (p.id, p.clone()))
+            .collect();
+        self.prev_stacks = snapshot
+            .stacks
+            .iter()
+            .map(|s| (s.id, s.clone()))
+            .collect();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entity diffing
+// ---------------------------------------------------------------------------
+
+/// Position change threshold — skip update if entity moved less than this.
+const POS_EPSILON: f32 = 0.01;
+/// Facing change threshold (radians).
+const FACING_EPSILON: f32 = 0.01;
+/// Blood/stamina change threshold.
+const VITAL_EPSILON: f32 = 0.001;
+
+/// Compare two entity snapshots and return an EntityUpdate with only changed fields.
+/// Returns None if nothing changed.
+fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<EntityUpdate> {
+    let mut update = EntityUpdate {
+        id: cur.id,
+        x: None,
+        y: None,
+        z: None,
+        hex_q: None,
+        hex_r: None,
+        facing: None,
+        blood: None,
+        stamina: None,
+        wounds: None,
+        weapon_type: None,
+        armor_type: None,
+        contains_count: None,
+        stack_id: None,
+        current_task: None,
+    };
+    let mut changed = false;
+
+    if (cur.x - prev.x).abs() > POS_EPSILON
+        || (cur.y - prev.y).abs() > POS_EPSILON
+        || (cur.z - prev.z).abs() > POS_EPSILON
+    {
+        update.x = Some(cur.x);
+        update.y = Some(cur.y);
+        update.z = Some(cur.z);
+        changed = true;
+    }
+
+    if cur.hex_q != prev.hex_q || cur.hex_r != prev.hex_r {
+        update.hex_q = Some(cur.hex_q);
+        update.hex_r = Some(cur.hex_r);
+        changed = true;
+    }
+
+    if let (Some(cf), Some(pf)) = (cur.facing, prev.facing) {
+        if (cf - pf).abs() > FACING_EPSILON {
+            update.facing = Some(cf);
+            changed = true;
+        }
+    } else if cur.facing != prev.facing {
+        update.facing = cur.facing;
+        changed = true;
+    }
+
+    if let (Some(cb), Some(pb)) = (cur.blood, prev.blood) {
+        if (cb - pb).abs() > VITAL_EPSILON {
+            update.blood = Some(cb);
+            changed = true;
+        }
+    }
+
+    if let (Some(cs), Some(ps)) = (cur.stamina, prev.stamina) {
+        if (cs - ps).abs() > VITAL_EPSILON {
+            update.stamina = Some(cs);
+            changed = true;
+        }
+    }
+
+    if cur.wounds != prev.wounds {
+        update.wounds = Some(cur.wounds.clone());
+        changed = true;
+    }
+
+    if cur.weapon_type != prev.weapon_type {
+        update.weapon_type = cur.weapon_type.clone();
+        changed = true;
+    }
+
+    if cur.armor_type != prev.armor_type {
+        update.armor_type = cur.armor_type.clone();
+        changed = true;
+    }
+
+    if cur.contains_count != prev.contains_count {
+        update.contains_count = Some(cur.contains_count);
+        changed = true;
+    }
+
+    if cur.stack_id != prev.stack_id {
+        update.stack_id = Some(cur.stack_id);
+        changed = true;
+    }
+
+    if cur.current_task != prev.current_task {
+        update.current_task = Some(cur.current_task.clone());
+        changed = true;
+    }
+
+    if changed { Some(update) } else { None }
+}
+
+/// Compare two stack snapshots and return a StackUpdate with only changed fields.
+fn diff_stack(prev: &StackInfo, cur: &StackInfo) -> Option<StackUpdate> {
+    let mut update = StackUpdate {
+        id: cur.id,
+        members: None,
+        formation: None,
+        center_x: None,
+        center_y: None,
+        facing: None,
+    };
+    let mut changed = false;
+
+    if cur.members != prev.members {
+        update.members = Some(cur.members.clone());
+        changed = true;
+    }
+    if cur.formation != prev.formation {
+        update.formation = Some(cur.formation);
+        changed = true;
+    }
+    if (cur.center_x - prev.center_x).abs() > POS_EPSILON
+        || (cur.center_y - prev.center_y).abs() > POS_EPSILON
+    {
+        update.center_x = Some(cur.center_x);
+        update.center_y = Some(cur.center_y);
+        changed = true;
+    }
+    if (cur.facing - prev.facing).abs() > FACING_EPSILON {
+        update.facing = Some(cur.facing);
+        changed = true;
+    }
+
+    if changed { Some(update) } else { None }
 }

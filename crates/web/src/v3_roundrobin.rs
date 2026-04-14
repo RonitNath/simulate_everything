@@ -317,10 +317,12 @@ impl V3RoundRobin {
             })
             .await;
 
-            // Broadcast initial full snapshot.
+            // Broadcast initial full snapshot + seed delta tracker.
             let mode = *self.mode.lock().await;
             let dt = mode.dt();
             let full_snapshot = v3_protocol::build_snapshot(&state, dt);
+            let mut delta_tracker = v3_protocol::DeltaTracker::new();
+            delta_tracker.seed_from_snapshot(&full_snapshot);
             self.broadcast(V3ServerToSpectator::Snapshot {
                 snapshot: full_snapshot,
             })
@@ -413,12 +415,21 @@ impl V3RoundRobin {
                     review.collect_ready_flags().await;
                 }
 
-                // Broadcast full snapshot each tick (V3.0 — no delta encoding yet).
-                let snapshot = v3_protocol::build_snapshot(&state, dt);
-                self.broadcast(V3ServerToSpectator::Snapshot {
-                    snapshot,
+                // Broadcast delta to spectators (only changed fields).
+                let delta = delta_tracker.build_delta(&state, dt);
+                self.broadcast(V3ServerToSpectator::SnapshotDelta {
+                    delta,
                 })
                 .await;
+
+                // Cache a full snapshot for late-joining spectators.
+                let full = v3_protocol::build_snapshot(&state, dt);
+                {
+                    let mut snap = self.snapshot.lock().await;
+                    snap.latest_snapshot = Some(V3ServerToSpectator::Snapshot {
+                        snapshot: full,
+                    });
+                }
                 self.broadcast_rr_status().await;
 
                 // Throttle to target tick rate.
