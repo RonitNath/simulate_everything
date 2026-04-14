@@ -36,16 +36,19 @@ use winit::window::{Window, WindowId};
 
 #[wasm_bindgen(start)]
 pub fn start() {
+    console_error_panic_hook::set_once();
     wasm_logger::init(wasm_logger::Config::default());
     log::info!("simulate_everything viewer starting");
 
     let event_loop = EventLoop::new().expect("Failed to create event loop");
-    let mut app = ViewerApp {
+    let app = ViewerApp {
         state: Rc::new(RefCell::new(None)),
         window: None,
         init_started: false,
     };
-    event_loop.run_app(&mut app).expect("Event loop failed");
+
+    use winit::platform::web::EventLoopExtWebSys;
+    event_loop.spawn_app(app);
 }
 
 struct ViewerApp {

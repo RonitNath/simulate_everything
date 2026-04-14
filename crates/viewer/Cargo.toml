@@ -38,4 +38,5 @@ js-sys = "0.3"
 rmp-serde = "1"
 log = "0.4"
 wasm-logger = "0.2"
+console_error_panic_hook = "0.1"
 bytemuck = { version = "1", features = ["derive"] }
