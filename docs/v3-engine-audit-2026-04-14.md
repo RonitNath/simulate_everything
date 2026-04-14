@@ -25,13 +25,13 @@ The main failure mode was:
 3. sequencing/docs mark it complete
 4. the missing integration remains in TODO or harness-only code
 
-The `v3-shared-exec` pass improved that baseline by moving V3 command application into the shared engine, and the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` now reuses. The remaining major runtime gap is V3 RR/live execution, which still validates commands and drops them.
+The `v3-shared-exec` pass improved that baseline by moving V3 command application into the shared engine, the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` reuses, and the `v3-rr-runtime` pass routed V3 RR through that same path. The next major runtime gaps are the placeholder protocol/perception/economy surfaces and the still-partial movement/pathfinding integration.
 
 ## Top Findings
 
 1. Sequencing overstated completion. The previous `docs/plans/v3-sequencing.md` claimed V3.0 implementation complete even though shared-engine command execution, live RR execution, and several protocol/perception fields were still incomplete.
 
-2. Agent command execution was harness-owned. Before this pass, `v3bench` owned the primary implementation of operational/tactical command mutation while the shared sim tick still had an explicit TODO and V3 RR validated commands then dropped them.
+2. Agent command execution was harness-owned. Before the integration passes, `v3bench` owned the primary implementation of operational/tactical command mutation while the shared sim tick still had an explicit TODO and V3 RR validated commands then dropped them.
 
 3. Movement/pathfinding/formation landed mostly as primitives. The live sim uses only a subset of the promised movement stack. Pathfinding, smoothing, terrain-derived speed factors, and formation-slot placement remain only partially integrated.
 
@@ -49,14 +49,14 @@ What is genuinely solid in the shared engine:
 - review/logging substrate
 
 What remains incomplete at runtime:
-- V3 RR execution through the shared engine path
 - full movement/pathfinding/formation integration
 - non-placeholder perception/protocol/economy surfaces
+- damage-table learning and the remaining bench-only economy adapters
 
 ## Recommended Next Order
 
-1. Route V3 RR/live execution through the engine-owned agent phase.
-2. Collapse bench-only economy adapters into shared engine systems.
-3. Replace placeholder perception/protocol fields with engine-derived data.
-4. Finish movement/pathfinding/formation integration in the shared runtime.
+1. Collapse bench-only economy adapters into shared engine systems.
+2. Replace placeholder perception/protocol fields with engine-derived data.
+3. Finish movement/pathfinding/formation integration in the shared runtime.
+4. Wire combat observations back into the damage-table learning loop.
 5. Finish the remaining movement and combat-parity integration once parallel swordplay work settles.

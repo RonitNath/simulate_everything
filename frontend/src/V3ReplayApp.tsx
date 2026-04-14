@@ -14,7 +14,6 @@ import type {
   V3ServerToSpectator,
   V3Snapshot,
   V3SnapshotDelta,
-  SpectatorEntityInfo,
 } from "./v3types";
 import type { BiomeName } from "./v2types";
 import V3HexCanvas from "./v3/HexCanvas";
@@ -22,6 +21,7 @@ import Inspector from "./v3/Inspector";
 import LayerToggles, { type V3RenderLayer } from "./v3/LayerToggles";
 import PlaybackControls from "./v3/PlaybackControls";
 import ScoreBar from "./v3/ScoreBar";
+import { applySnapshotDelta } from "./v3/applySnapshotDelta";
 import { pixelToHex, type HexRegion, worldToCanvas, HEX_SIZE } from "./v3/render/grid";
 import * as css from "./styles/v3.css";
 
@@ -112,56 +112,6 @@ const V3ReplayApp: Component = () => {
     return { heights, biomes };
   });
 
-  function applyDelta(base: V3Snapshot, delta: V3SnapshotDelta): V3Snapshot {
-    const entityMap = new Map<number, SpectatorEntityInfo>();
-    for (const e of base.entities) entityMap.set(e.id, e);
-    for (const id of delta.entities_removed) entityMap.delete(id);
-    for (const e of delta.entities_appeared) entityMap.set(e.id, e);
-    for (const u of delta.entities_updated) {
-      const existing = entityMap.get(u.id);
-      if (!existing) continue;
-      entityMap.set(u.id, { ...existing, ...u } as SpectatorEntityInfo);
-    }
-
-    const stackMap = new Map(base.stacks.map((s) => [s.id, s]));
-    for (const id of delta.stacks_dissolved) stackMap.delete(id);
-    for (const s of delta.stacks_created) stackMap.set(s.id, s);
-    for (const u of delta.stacks_updated) {
-      const existing = stackMap.get(u.id);
-      if (!existing) continue;
-      stackMap.set(u.id, { ...existing, ...u });
-    }
-
-    return {
-      tick: delta.tick,
-      dt: delta.dt,
-      full_state: delta.full_state,
-      entities: Array.from(entityMap.values()),
-      projectiles: [
-        ...base.projectiles.filter((p) => !delta.projectiles_removed.includes(p.id)),
-        ...delta.projectiles_spawned,
-      ],
-      stacks: Array.from(stackMap.values()),
-      hex_ownership: delta.hex_changes.length > 0
-        ? applyHexChanges(base.hex_ownership, delta.hex_changes)
-        : base.hex_ownership,
-      hex_roads: base.hex_roads,
-      hex_structures: base.hex_structures,
-      players: delta.players,
-    };
-  }
-
-  function applyHexChanges(
-    ownership: (number | null)[],
-    changes: V3SnapshotDelta["hex_changes"],
-  ): (number | null)[] {
-    const next = [...ownership];
-    for (const change of changes) {
-      if (change.owner !== undefined) next[change.index] = change.owner;
-    }
-    return next;
-  }
-
   async function parseReplayText(text: string, label: string) {
     const lines = text
       .split(/\r?\n/)
@@ -184,7 +134,7 @@ const V3ReplayApp: Component = () => {
         case "v3_snapshot_delta": {
           const base = replayFrames[replayFrames.length - 1];
           if (!base) throw new Error("replay delta appeared before first snapshot");
-          replayFrames.push(applyDelta(base, msg));
+          replayFrames.push(applySnapshotDelta(base, msg));
           break;
         }
         case "v3_game_end":

@@ -5,9 +5,7 @@ use tokio::sync::{Mutex, Notify, broadcast};
 use tracing::info;
 
 use simulate_everything_engine::v3::{
-    agent::{
-        AgentTrace, LayeredAgent, validate_operational, validate_tactical,
-    },
+    agent::{AgentTrace, LayeredAgent},
     damage_table::DamageEstimateTable,
     mapgen,
     operations::SharedOperationsLayer,
@@ -17,9 +15,7 @@ use simulate_everything_engine::v3::{
     tactical::SharedTacticalLayer,
 };
 
-use crate::v3_protocol::{
-    self, TimeMode, V3RrStatus, V3ServerToSpectator,
-};
+use crate::v3_protocol::{self, TimeMode, V3RrStatus, V3ServerToSpectator};
 use crate::v3_review::{self, FlagResponse, V3ReviewRecorder, V3ReviewSummary};
 
 // ---------------------------------------------------------------------------
@@ -184,7 +180,9 @@ impl V3RoundRobin {
 
     pub async fn broadcast_rr_status(&self) {
         let status = self.build_rr_status().await;
-        let _ = self.spectator_tx.send(V3ServerToSpectator::RrStatus(status));
+        let _ = self
+            .spectator_tx
+            .send(V3ServerToSpectator::RrStatus(status));
     }
 
     pub async fn broadcast_config(
@@ -288,8 +286,7 @@ impl V3RoundRobin {
             let mut state = mapgen::generate(MAP_WIDTH, MAP_HEIGHT, NUM_PLAYERS, seed);
 
             // Create agents — alternate between personality types.
-            let (mut agents, agent_names, agent_versions) =
-                create_agents(NUM_PLAYERS, game_number);
+            let (mut agents, agent_names, agent_versions) = create_agents(NUM_PLAYERS, game_number);
 
             info!(
                 "V3 RR game #{}: {} (seed={})",
@@ -305,17 +302,9 @@ impl V3RoundRobin {
             }
 
             // Broadcast init.
-            let init = v3_protocol::build_init(
-                &state,
-                &agent_names,
-                &agent_versions,
-                game_number,
-            );
-            self.broadcast(V3ServerToSpectator::Init {
-                init,
-                game_number,
-            })
-            .await;
+            let init = v3_protocol::build_init(&state, &agent_names, &agent_versions, game_number);
+            self.broadcast(V3ServerToSpectator::Init { init, game_number })
+                .await;
 
             // Broadcast initial full snapshot + seed delta tracker.
             let mode = *self.mode.lock().await;
@@ -346,39 +335,8 @@ impl V3RoundRobin {
                 let mode = *self.mode.lock().await;
                 let dt = mode.dt();
 
-                // Agent polling — every tick, agents decide internally
-                // whether to run each layer based on cadence.
-                let mut all_traces: Vec<(String, Vec<AgentTrace>)> = Vec::new();
-                for (i, agent) in agents.iter_mut().enumerate() {
-                    let output = agent.tick(&state);
-
-                    // Collect agent traces for review system.
-                    if !output.traces.is_empty() {
-                        all_traces.push((
-                            agent_names[i].clone(),
-                            output.traces,
-                        ));
-                    }
-
-                    // Apply validated operational commands.
-                    for cmd in &output.operational_commands {
-                        if validate_operational(cmd, &state) {
-                            // Commands validated but not yet applied —
-                            // engine needs command executors.
-                        }
-                    }
-
-                    // Apply validated tactical commands.
-                    for cmd in &output.tactical_commands {
-                        if validate_tactical(cmd, &state) {
-                            // Same stub — tactical commands applied
-                            // by sim tick when engine supports it.
-                        }
-                    }
-                }
-
-                // Advance simulation.
-                let tick_result = sim::tick(&mut state, dt as f64);
+                let (all_traces, tick_result) =
+                    run_rr_tick(&mut state, &mut agents, &agent_names, dt as f64);
                 self.current_tick.store(state.tick, Ordering::Relaxed);
 
                 // Drain combat observations from the engine.
@@ -391,10 +349,7 @@ impl V3RoundRobin {
                             state.entities.values().any(|e| {
                                 e.owner == Some(p)
                                     && e.person.is_some()
-                                    && e.vitals
-                                        .as_ref()
-                                        .map(|v| v.blood > 0.0)
-                                        .unwrap_or(true)
+                                    && e.vitals.as_ref().map(|v| v.blood > 0.0).unwrap_or(true)
                             })
                         })
                         .count();
@@ -406,29 +361,20 @@ impl V3RoundRobin {
                 // Record tick for review system with real traces + combat log.
                 {
                     let mut review = self.review.lock().await;
-                    review.record_tick(
-                        &state,
-                        dt,
-                        combat_observations,
-                        all_traces,
-                    );
+                    review.record_tick(&state, dt, combat_observations, all_traces);
                     review.collect_ready_flags().await;
                 }
 
                 // Broadcast delta to spectators (only changed fields).
                 let delta = delta_tracker.build_delta(&state, dt);
-                self.broadcast(V3ServerToSpectator::SnapshotDelta {
-                    delta,
-                })
-                .await;
+                self.broadcast(V3ServerToSpectator::SnapshotDelta { delta })
+                    .await;
 
                 // Cache a full snapshot for late-joining spectators.
                 let full = v3_protocol::build_snapshot(&state, dt);
                 {
                     let mut snap = self.snapshot.lock().await;
-                    snap.latest_snapshot = Some(V3ServerToSpectator::Snapshot {
-                        snapshot: full,
-                    });
+                    snap.latest_snapshot = Some(V3ServerToSpectator::Snapshot { snapshot: full });
                 }
                 self.broadcast_rr_status().await;
 
@@ -446,10 +392,7 @@ impl V3RoundRobin {
                     state.entities.values().any(|e| {
                         e.owner == Some(p)
                             && e.person.is_some()
-                            && e.vitals
-                                .as_ref()
-                                .map(|v| v.blood > 0.0)
-                                .unwrap_or(true)
+                            && e.vitals.as_ref().map(|v| v.blood > 0.0).unwrap_or(true)
                     })
                 });
                 let scores: Vec<u32> = (0..state.num_players)
@@ -489,10 +432,7 @@ impl V3RoundRobin {
 
             if !aborted {
                 // Inter-game delay.
-                tokio::time::sleep(tokio::time::Duration::from_millis(
-                    INTER_GAME_DELAY_MS,
-                ))
-                .await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(INTER_GAME_DELAY_MS)).await;
 
                 // If autoplay is off, wait for resume signal.
                 if !self.get_autoplay() {
@@ -546,4 +486,228 @@ fn create_agents(
     }
 
     (agents, names, versions)
+}
+
+fn run_rr_tick(
+    state: &mut GameState,
+    agents: &mut [LayeredAgent],
+    agent_names: &[String],
+    dt: f64,
+) -> (Vec<(String, Vec<AgentTrace>)>, sim::TickResult) {
+    let phase = sim::run_agent_phase(state, agents);
+    let traces = phase
+        .outputs
+        .into_iter()
+        .zip(agent_names.iter().cloned())
+        .filter_map(|(output, name)| (!output.traces.is_empty()).then_some((name, output.traces)))
+        .collect();
+    let tick_result = sim::tick(state, dt);
+    (traces, tick_result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simulate_everything_engine::v2::state::EntityKey;
+    use simulate_everything_engine::v3::{
+        agent::{
+            OperationalCommand, OperationsLayer, StrategicDirective, StrategyLayer,
+            TacticalCommand, TacticalLayer,
+        },
+        formation::FormationType,
+        mapgen,
+        perception::StrategicView,
+        spatial::Vec3,
+        state::{GameState, Stack},
+    };
+
+    struct NoopStrategy;
+
+    impl StrategyLayer for NoopStrategy {
+        fn plan(&mut self, _view: &StrategicView) -> Vec<StrategicDirective> {
+            Vec::new()
+        }
+    }
+
+    struct RouteOperations {
+        stack: simulate_everything_engine::v3::state::StackId,
+        destination: Vec3,
+    }
+
+    impl OperationsLayer for RouteOperations {
+        fn execute(
+            &mut self,
+            _state: &GameState,
+            _directives: &[StrategicDirective],
+            _player: u8,
+        ) -> Vec<OperationalCommand> {
+            vec![OperationalCommand::RouteStack {
+                stack: self.stack,
+                waypoints: vec![self.destination],
+            }]
+        }
+    }
+
+    struct NoopTactical;
+
+    impl TacticalLayer for NoopTactical {
+        fn decide(
+            &mut self,
+            _state: &GameState,
+            _stack: &Stack,
+            _player: u8,
+        ) -> Vec<TacticalCommand> {
+            Vec::new()
+        }
+    }
+
+    struct TraceAttackTactical {
+        attacker: EntityKey,
+        target: EntityKey,
+    }
+
+    impl TacticalLayer for TraceAttackTactical {
+        fn decide(
+            &mut self,
+            _state: &GameState,
+            _stack: &Stack,
+            _player: u8,
+        ) -> Vec<TacticalCommand> {
+            vec![TacticalCommand::Attack {
+                attacker: self.attacker,
+                target: self.target,
+            }]
+        }
+    }
+
+    #[test]
+    fn rr_tick_applies_tactical_commands_and_keeps_traces() {
+        let mut state = mapgen::generate(15, 15, 2, 42);
+
+        let attacker = state
+            .entities
+            .iter()
+            .find_map(|(key, entity)| {
+                (entity.owner == Some(0)
+                    && entity.person.is_some()
+                    && entity.mobile.is_some()
+                    && entity.combatant.is_some())
+                .then_some(key)
+            })
+            .expect("player 0 should own a combat-capable entity");
+        let target = state
+            .entities
+            .iter()
+            .find_map(|(key, entity)| {
+                (entity.owner == Some(1)
+                    && entity.person.is_some()
+                    && entity.mobile.is_some()
+                    && entity.combatant.is_some())
+                .then_some(key)
+            })
+            .expect("player 1 should own a combat-capable entity");
+        let attacker_pos = state.entities[attacker].pos.unwrap();
+        state.entities[target].pos = Some(Vec3::new(
+            attacker_pos.x + 1.0,
+            attacker_pos.y,
+            attacker_pos.z,
+        ));
+        let stack_id = state.alloc_stack_id();
+        let mut members = state
+            .stacks
+            .first()
+            .map(|stack| stack.members.clone())
+            .unwrap_or_default();
+        members.clear();
+        members.push(attacker);
+        state.stacks.push(Stack {
+            id: stack_id,
+            owner: 0,
+            members,
+            formation: FormationType::Line,
+            leader: attacker,
+        });
+
+        let mut agents = vec![LayeredAgent::new(
+            Box::new(NoopStrategy),
+            Box::new(RouteOperations {
+                stack: stack_id,
+                destination: attacker_pos,
+            }),
+            Box::new(TraceAttackTactical { attacker, target }),
+            0,
+            1,
+            1,
+        )];
+        let agent_names = vec!["test_agent".to_string()];
+
+        let (traces, tick_result) = run_rr_tick(&mut state, &mut agents, &agent_names, 1.0);
+
+        assert_eq!(tick_result.eliminated.len(), 0);
+        assert_eq!(state.tick, 1);
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].0, "test_agent");
+        assert!(!traces[0].1.is_empty());
+        assert!(
+            state.entities[attacker]
+                .combatant
+                .as_ref()
+                .and_then(|combatant| combatant.attack.as_ref())
+                .is_some(),
+            "rr tick should still apply tactical attack state"
+        );
+    }
+
+    #[test]
+    fn rr_tick_applies_route_commands_before_movement() {
+        let mut state = mapgen::generate(15, 15, 2, 42);
+        let mover = state
+            .entities
+            .iter()
+            .find_map(|(key, entity)| {
+                (entity.owner == Some(0)
+                    && entity.mobile.is_some()
+                    && entity.pos.is_some()
+                    && entity.person.is_some())
+                .then_some(key)
+            })
+            .expect("player 0 should have a mobile entity");
+        let initial_pos = state.entities[mover].pos.unwrap();
+        let stack_id = state.alloc_stack_id();
+        let mut members = state
+            .stacks
+            .first()
+            .map(|stack| stack.members.clone())
+            .unwrap_or_default();
+        members.clear();
+        members.push(mover);
+        state.stacks.push(Stack {
+            id: stack_id,
+            owner: 0,
+            members,
+            formation: FormationType::Line,
+            leader: mover,
+        });
+
+        let mut agents = vec![LayeredAgent::new(
+            Box::new(NoopStrategy),
+            Box::new(RouteOperations {
+                stack: stack_id,
+                destination: Vec3::new(initial_pos.x + 100.0, initial_pos.y, initial_pos.z),
+            }),
+            Box::new(NoopTactical),
+            0,
+            1,
+            1,
+        )];
+        let agent_names = vec!["test_agent".to_string()];
+
+        let (_traces, _tick_result) = run_rr_tick(&mut state, &mut agents, &agent_names, 1.0);
+
+        let final_pos = state.entities[mover].pos.unwrap();
+        assert!(
+            final_pos.x > initial_pos.x,
+            "entity should move after route command is applied before movement"
+        );
+    }
 }

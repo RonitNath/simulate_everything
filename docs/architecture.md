@@ -443,6 +443,41 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 - The RR loop maintains a full current snapshot for reconnect catchup even though live traffic is delta-based.
 - RR also keeps a rolling server-side review buffer (600 ticks by default) plus lightweight diagnostic logs for the active game. Review capture supports one-shot point flags and one active start/stop segment capture per game. Saved review bundles record `kind`, `start_tick`, `stop_tick`, `flagged_ticks`, `range_start`, `range_end`, and `complete`; unfinished segment captures are persisted as partial bundles if the game resets or ends before stop.
 
+## V3 Runtime
+
+### V3 Web Routes
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `GET /v3/rr` | HTTP | V3 round-robin spectator page |
+| `GET /v3/replay` | HTTP | V3 replay viewer page |
+| `GET /ws/v3/rr` | WebSocket | V3 RR spectator stream |
+| `POST /api/v3/rr/config` | HTTP | Set tick speed / mode / autoplay |
+| `POST /api/v3/rr/pause` | HTTP | Pause the V3 RR loop |
+| `POST /api/v3/rr/resume` | HTTP | Resume the V3 RR loop |
+| `POST /api/v3/rr/reset` | HTTP | Reset the current V3 RR game |
+| `GET /api/v3/rr/status` | HTTP | Current RR state including tick, mode, and review capture range |
+| `POST /api/v3/rr/flags` | HTTP | Flag a V3 RR tick for review capture |
+| `POST /api/v3/rr/capture/start` | HTTP | Start a V3 review segment capture |
+| `POST /api/v3/rr/capture/stop` | HTTP | Stop and persist the active V3 review segment |
+| `GET /api/v3/rr/reviews` | HTTP | List saved V3 review bundles |
+| `DELETE /api/v3/rr/reviews/{id}` | HTTP | Delete one saved V3 review bundle |
+| `GET /api/v3/replay/files` | HTTP | List replay JSONL files available to the V3 replay viewer |
+| `GET /api/v3/replay/file?path=...` | HTTP | Load one replay JSONL file |
+
+### V3 Round-Robin
+
+Implemented in `crates/web/src/v3_roundrobin.rs` (`V3RoundRobin`).
+
+- 2-player games on 30×30 hex maps.
+- Seeds increment from 1000 each game.
+- Max 5000 ticks per game before timeout.
+- Spectators receive `v3_init`, `v3_snapshot` / `v3_snapshot_delta`, `v3_game_end`, `v3_config`, and `v3_rr_status`.
+- Late joiners receive the cached `v3_init`, latest full snapshot, and current RR status before live deltas.
+- Review capture is integrated into RR via `V3ReviewRecorder`, including point flags and start/stop segment capture.
+- RR now uses the same engine-owned V3 agent phase as the shared sim/bench path: `sim::run_agent_phase(...)` applies agent outputs before `sim::tick(...)`.
+- Live `/v3/rr` and `/v3/replay` both merge stack create/update/dissolve deltas through the same frontend helper, so stack state stays visually consistent between live and replay views.
+
 ### V2 Agents
 
 **Trait** (`crates/engine/src/v2/agent.rs`):
