@@ -46,7 +46,7 @@ scripts/                           Small repo maintenance helpers
 - `cargo run -p simulate-everything-web`
 - `cargo run -p simulate-everything-cli -- bench --agents pressure,swarm`
 - `cargo run -p simulate-everything-replay -- --seeds 42`
-- `cd frontend && npm run build`
+- `cd frontend && bun run build`
 
 ## Naming Rules
 

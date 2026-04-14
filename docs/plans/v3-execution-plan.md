@@ -163,7 +163,7 @@ partially implemented but never built or tested.
 
 Build the frontend:
 ```bash
-cd frontend && npm run build
+cd frontend && bun run build
 ```
 
 Then verify the service is running:
@@ -176,7 +176,7 @@ If running, restart to pick up the new frontend build:
 sudo systemctl restart simulate_everything
 ```
 
-Open http://192.168.0.99:3333/v2/rr in a browser and verify:
+Open http://localhost:3333/v2/rr in a browser and verify:
 - Play/pause/step controls work correctly
 - Play advances at server tick speed, not jumping to live
 - Skip-to-end goes to live following mode
@@ -221,7 +221,7 @@ HTTP calls (initial load, after flag, after capture, after delete).
 
 ```bash
 cargo test -p simulate-everything-web
-cd frontend && npm run build
+cd frontend && bun run build
 ```
 
 Then restart the service and verify in browser:
@@ -294,10 +294,10 @@ storage. HexBoard.tsx has the pixel conversion math — port it. Key formulas:
 ### Verification
 
 ```bash
-cd frontend && npm install && npm run build
+cd frontend && bun install && bun run build
 ```
 
-Open http://192.168.0.99:3333/v2/rr in browser:
+Open http://localhost:3333/v2/rr in browser:
 - Hex grid renders with terrain colors
 - Territory ownership visible
 - Units visible as colored markers
@@ -664,7 +664,7 @@ TypeScript deserialization.
 
 ```bash
 cargo test -p simulate-everything-web
-cd frontend && npm run build
+cd frontend && bun run build
 ```
 
 Restart service, open browser, verify the V2 RR game renders correctly with
@@ -909,7 +909,7 @@ entity types.
 
 ```bash
 cargo test -p simulate-everything-web
-cd frontend && npm run build
+cd frontend && bun run build
 ```
 
 Restart service, open browser at /v2/rr:
@@ -999,7 +999,7 @@ unit/convoy/settlement types. Render all entity types with unified sprites.
 ### Verification
 
 ```bash
-cd frontend && npm run build
+cd frontend && bun run build
 ```
 
 Open browser:
@@ -1051,7 +1051,7 @@ smooth visual movement. Eliminates the hex-to-hex teleporting effect.
 ### Verification
 
 ```bash
-cd frontend && npm run build
+cd frontend && bun run build
 ```
 
 Open browser:

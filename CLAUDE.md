@@ -63,6 +63,13 @@ docs/            — detailed documentation
 | `SIMEV_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Directory for persisted flagged V2 RR review bundles |
 | `RUST_LOG` | `info` | Tracing filter (e.g. `simulate_everything_engine::v2=debug`) |
 
+## Frontend
+
+Use `bun`, not `npm`, for all frontend JS/TS tooling:
+```bash
+cd frontend && bun install && bun run build
+```
+
 ## Commits and docs hygiene
 
 **Commit your work.** Before ending a session or after completing a logical unit of work, stage and commit. Use conventional-ish messages: `feat(engine): add pressure agent`, `fix(web): port conflict on restart`. Reference what changed, not what you did.

@@ -41,8 +41,8 @@ Build the frontend:
 
 ```bash
 cd frontend
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 Run the web app:

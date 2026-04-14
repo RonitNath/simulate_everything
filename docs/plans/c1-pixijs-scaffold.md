@@ -66,6 +66,6 @@ interface HexCanvasProps {
 
 ## Verification
 ```bash
-cd frontend && npm install && npm run build
+cd frontend && bun install && bun run build
 ```
 Then visual check at the V2 RR page in browser

@@ -64,7 +64,7 @@ In V2App.tsx, add a button in the speed controls `<div>` (around line 415):
 #### C. Build + test
 After all frontend changes:
 ```bash
-cd frontend && npm run build
+cd frontend && bun run build
 ```
 Then test in browser at `http://localhost:3333/v2`:
 - Play/pause/step controls work correctly
@@ -108,7 +108,7 @@ This may be related to:
 cargo run --bin simulate_everything
 
 # Rebuild frontend after changes
-cd frontend && npm run build
+cd frontend && bun run build
 
 # V2 RR is at http://localhost:3333/v2
 # ASCII debug: curl "http://localhost:3333/api/v2/ascii?seed=1000&width=30&height=30&ticks=300&at=240"
