@@ -3,6 +3,7 @@ use slotmap::SlotMap;
 use smallvec::SmallVec;
 
 use super::armor::{ArmorProperties, MaterialType};
+use super::combat_log::CombatLog;
 use super::equipment::Equipment;
 use super::formation::FormationType;
 use super::index::SpatialIndex;
@@ -341,6 +342,9 @@ pub struct GameState {
     pub num_players: u8,
     pub game_time: f64,
     pub tick: u64,
+    /// Combat observation log. Drained by the protocol layer after each tick.
+    #[serde(skip)]
+    pub combat_log: CombatLog,
     next_id: u32,
     next_stack_id: u32,
 }
@@ -362,6 +366,7 @@ impl GameState {
             num_players,
             game_time: 0.0,
             tick: 0,
+            combat_log: CombatLog::new(),
             next_id: 1,
             next_stack_id: 1,
         }

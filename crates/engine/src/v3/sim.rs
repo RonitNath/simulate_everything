@@ -1,5 +1,7 @@
 use smallvec::SmallVec;
 
+use super::armor::ArmorProperties;
+use super::combat_log::CombatObservation;
 use super::damage::{self, BlockCapability, DefenderState, Impact, ImpactResult};
 use super::equipment::zone_index;
 use super::hex::world_to_hex;
@@ -563,6 +565,83 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
         };
 
         let result = damage::resolve_impact(&pending.impact, &defender);
+
+        // Record combat observation.
+        let impact = &pending.impact;
+        let attacker_skill = state
+            .entities
+            .get(impact.attacker_id)
+            .and_then(|e| e.person.as_ref())
+            .map(|p| p.combat_skill)
+            .unwrap_or(0.0);
+        let attacker_weapon = state
+            .entities
+            .get(impact.attacker_id)
+            .and_then(|e| e.equipment.as_ref())
+            .and_then(|eq| eq.weapon)
+            .and_then(|wk| state.entities.get(wk))
+            .and_then(|we| we.weapon_props.as_ref());
+
+        let (blocked, block_stamina, penetrated, pen_depth, residual,
+            wound_sev, bleed, stagger_force, stagger, hit_zone) = match &result {
+            ImpactResult::Blocked { stamina_cost } => {
+                (true, *stamina_cost, false, 0.0, 0.0, None, 0.0, 0.0, false,
+                    super::armor::BodyZone::Torso) // zone unknown for blocks
+            }
+            ImpactResult::Deflected { transmitted_force } => {
+                (false, 0.0, false, 0.0, *transmitted_force, None, 0.0,
+                    *transmitted_force, *transmitted_force > 20.0,
+                    super::armor::BodyZone::Torso)
+            }
+            ImpactResult::Wounded { wound, transmitted_force } => {
+                (false, 0.0, true, 1.0, *transmitted_force,
+                    Some(wound.severity), wound.bleed_rate,
+                    *transmitted_force, *transmitted_force > 20.0, wound.zone)
+            }
+        };
+
+        // Find armor at the hit zone.
+        let zone_idx = match hit_zone {
+            super::armor::BodyZone::Head => 0,
+            super::armor::BodyZone::Torso => 1,
+            super::armor::BodyZone::LeftArm => 2,
+            super::armor::BodyZone::RightArm => 3,
+            super::armor::BodyZone::Legs => 4,
+        };
+        let hit_armor = armor_zones[zone_idx].as_ref();
+
+        state.combat_log.record(CombatObservation {
+            tick: impact.tick,
+            attacker: impact.attacker_id,
+            defender: target_key,
+            damage_type: impact.damage_type,
+            weapon_material: attacker_weapon.map(|w| w.material).unwrap_or(super::armor::MaterialType::Iron),
+            weapon_sharpness: impact.sharpness,
+            weapon_hardness: attacker_weapon.map(|w| w.hardness).unwrap_or(5.0),
+            weapon_weight: attacker_weapon.map(|w| w.weight).unwrap_or(1.0),
+            armor_construction: hit_armor.map(|a| a.construction),
+            armor_material: hit_armor.map(|a| a.material),
+            armor_hardness: hit_armor.map(|a| a.hardness).unwrap_or(0.0),
+            armor_thickness: hit_armor.map(|a| a.thickness).unwrap_or(0.0),
+            armor_coverage: hit_armor.map(|a| a.coverage).unwrap_or(0.0),
+            hit_zone,
+            angle_of_incidence: 0.0, // computed inside resolve_impact, not exposed
+            impact_force: impact.kinetic_energy,
+            blocked,
+            block_stamina_cost: block_stamina,
+            penetrated,
+            penetration_depth: pen_depth,
+            residual_force: residual,
+            wound_severity: wound_sev,
+            bleed_rate: bleed,
+            stagger_force,
+            stagger,
+            distance: 0.0, // available from PendingImpact context in future
+            height_diff: impact.height_diff,
+            attacker_skill,
+            defender_stamina: vitals_snapshot.stamina,
+            defender_facing_offset: (impact.attack_direction - facing).abs(),
+        });
 
         // Apply result to entity
         if let Some(entity) = state.entities.get_mut(target_key) {

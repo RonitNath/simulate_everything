@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use simulate_everything_engine::v3::{
+    agent::AgentTrace,
     combat_log::CombatObservation,
     state::GameState,
 };
@@ -34,6 +35,8 @@ struct TickRecord {
     dt: f32,
     snapshot: V3Snapshot,
     combat_observations: Vec<CombatObservation>,
+    /// Per-agent decision traces for this tick.
+    agent_traces: Vec<(String, Vec<AgentTrace>)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +121,7 @@ impl V3ReviewRecorder {
         state: &GameState,
         dt: f32,
         combat_observations: Vec<CombatObservation>,
+        agent_traces: Vec<(String, Vec<AgentTrace>)>,
     ) {
         let snapshot = v3_protocol::build_snapshot(state, dt);
         let record = TickRecord {
@@ -125,6 +129,7 @@ impl V3ReviewRecorder {
             dt,
             snapshot,
             combat_observations,
+            agent_traces,
         };
 
         // Rolling buffer — evict oldest if full.
@@ -498,16 +503,27 @@ async fn write_bundle(
         .await?;
     }
 
-    // decision_trace.json — placeholder until agent traces are integrated.
+    // decision_trace.json — structured per-tick per-agent traces.
+    let decision_trace: Vec<serde_json::Value> = records
+        .iter()
+        .filter(|r| !r.agent_traces.is_empty())
+        .map(|r| {
+            let mut agents = serde_json::Map::new();
+            for (name, traces) in &r.agent_traces {
+                agents.insert(
+                    name.clone(),
+                    serde_json::to_value(traces).unwrap_or_default(),
+                );
+            }
+            serde_json::json!({
+                "tick": r.tick,
+                "agents": agents,
+            })
+        })
+        .collect();
     tokio::fs::write(
         dir.join("decision_trace.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "note": "Agent decision traces will be populated when AgentTrace enums are integrated",
-            "tick_range": [
-                records.first().map(|r| r.tick),
-                records.last().map(|r| r.tick),
-            ],
-        }))?,
+        serde_json::to_string_pretty(&decision_trace)?,
     )
     .await?;
 
