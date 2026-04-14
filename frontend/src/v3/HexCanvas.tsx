@@ -15,7 +15,7 @@ import { drawCorpsesClose, drawCorpsesMid, drawCorpsesFar } from "./render/corps
 import { drawProjectiles } from "./render/projectiles";
 import {
   drawTerrain, drawTerritory, drawRoads, drawSettlements,
-  type SettlementEntry,
+  hexCenter, type HexRegion, type SettlementEntry,
   pixelToHex, boardPixelSize, HEX_SIZE, playerColorHex, worldToCanvas,
 } from "./render/grid";
 import { getViewportBounds } from "./render/camera";
@@ -31,6 +31,7 @@ interface V3HexCanvasProps {
   layers: Set<V3RenderLayer>;
   tickIntervalMs: number;
   onEntityClick?: (entityId: number) => void;
+  focusRegion?: HexRegion | null;
 }
 
 interface TooltipData {
@@ -86,6 +87,26 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     if (!canvasRef) return;
     const canvasW = canvasRef.clientWidth || 800;
     const canvasH = canvasRef.clientHeight || 600;
+    const focusRegion = props.focusRegion;
+
+    if (focusRegion) {
+      const [minX, minY] = hexCenter(focusRegion.minRow, focusRegion.minCol, HEX_SIZE);
+      const [maxX, maxY] = hexCenter(focusRegion.maxRow, focusRegion.maxCol, HEX_SIZE);
+      const contentW = Math.max(maxX - minX + HEX_SIZE * 2.5, HEX_SIZE * 5);
+      const contentH = Math.max(maxY - minY + HEX_SIZE * 2.5, HEX_SIZE * 3);
+      const pad = 36;
+      const zoomX = (canvasW - pad * 2) / contentW;
+      const zoomY = (canvasH - pad * 2) / contentH;
+      camZoom = Math.min(16.0, Math.max(1.25, Math.min(zoomX, zoomY)));
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      camX = canvasW / 2 - centerX * camZoom;
+      camY = canvasH / 2 - centerY * camZoom;
+      applyCamera();
+      cameraInitialized = true;
+      return;
+    }
+
     const points = (frame?.entities ?? []).map((e) => worldToCanvas(e.x, e.y));
 
     if (points.length === 0) {
@@ -114,7 +135,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const pad = 80;
     const zoomX = (canvasW - pad * 2) / contentW;
     const zoomY = (canvasH - pad * 2) / contentH;
-    camZoom = Math.min(8.0, Math.max(0.75, Math.min(zoomX, zoomY)));
+    camZoom = Math.min(16.0, Math.max(1.0, Math.min(zoomX, zoomY)));
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
     camX = canvasW / 2 - centerX * camZoom;
@@ -228,7 +249,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const mouseY = e.clientY - rect.top;
 
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-    const newZoom = Math.min(5.0, Math.max(0.1, camZoom * zoomFactor));
+    const newZoom = Math.min(16.0, Math.max(0.1, camZoom * zoomFactor));
 
     camX = mouseX - (mouseX - camX) * (newZoom / camZoom);
     camY = mouseY - (mouseY - camY) * (newZoom / camZoom);
@@ -246,7 +267,15 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
-  function handlePointerMove(e: PointerEvent) {
+  function handlePointerMove(e: PointerEvent | MouseEvent) {
+    if (!canvasRef) return;
+    const rect = canvasRef.getBoundingClientRect();
+    const insideCanvas =
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom;
+
     if (isDragging) {
       camX = dragStartCamX + (e.clientX - dragStartX);
       camY = dragStartCamY + (e.clientY - dragStartY);
@@ -255,8 +284,11 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       return;
     }
 
-    if (!canvasRef) return;
-    const rect = canvasRef.getBoundingClientRect();
+    if (!insideCanvas) {
+      setTooltip(null);
+      return;
+    }
+
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
     const worldX = (screenX - camX) / camZoom;
@@ -369,6 +401,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     drawTerrain(terrainGfx, {
       width: props.width, height: props.height,
       biomes: props.biomes, heights: props.heights, rivers: props.rivers,
+      region: props.focusRegion,
     });
 
     // Draw initial dynamic content
@@ -381,8 +414,9 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const canvas = app.canvas as HTMLCanvasElement;
     canvas.addEventListener("wheel", handleWheel, { passive: false });
     canvas.addEventListener("pointerdown", handlePointerDown);
-    canvas.addEventListener("pointermove", handlePointerMove);
     canvas.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("mousemove", handlePointerMove);
   });
 
   function redrawDynamic() {
@@ -391,7 +425,13 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
 
     if (territoryGfx) {
       if (layers.has("territory") && frame) {
-        drawTerritory(territoryGfx, props.width, props.height, frame.hex_ownership);
+        drawTerritory(
+          territoryGfx,
+          props.width,
+          props.height,
+          frame.hex_ownership,
+          props.focusRegion,
+        );
       } else {
         territoryGfx.clear();
       }
@@ -399,7 +439,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
 
     if (roadsGfx) {
       if (layers.has("roads") && frame) {
-        drawRoads(roadsGfx, props.width, props.height, frame.hex_roads);
+        drawRoads(roadsGfx, props.width, props.height, frame.hex_roads, props.focusRegion);
       } else {
         roadsGfx.clear();
       }
@@ -432,6 +472,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     drawTerrain(terrainGfx, {
       width: props.width, height: props.height,
       biomes: props.biomes, heights: props.heights, rivers: props.rivers,
+      region: props.focusRegion,
     });
   });
 
@@ -459,8 +500,9 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       const canvas = app.canvas as HTMLCanvasElement;
       canvas.removeEventListener("wheel", handleWheel);
       canvas.removeEventListener("pointerdown", handlePointerDown);
-      canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("mousemove", handlePointerMove);
       app.destroy(true, { children: true });
       app = null;
     }

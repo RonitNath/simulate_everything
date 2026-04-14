@@ -9,6 +9,13 @@ export const HEX_SIZE = 20;
 export const ENGINE_HEX_RADIUS = 86.60254;
 export const WORLD_TO_CANVAS_SCALE = HEX_SIZE / ENGINE_HEX_RADIUS;
 
+export interface HexRegion {
+  minRow: number;
+  maxRow: number;
+  minCol: number;
+  maxCol: number;
+}
+
 const BIOME_BASE: Record<BiomeName, [number, number, number]> = {
   desert: [180, 160, 90],
   steppe: [140, 150, 80],
@@ -131,15 +138,20 @@ export interface TerrainData {
   biomes: BiomeName[];
   heights: number[];
   rivers: boolean[];
+  region?: HexRegion | null;
 }
 
 export function drawTerrain(g: Graphics, data: TerrainData): void {
   g.clear();
-  const { width, height, biomes, heights, rivers } = data;
+  const { width, height, biomes, heights, rivers, region } = data;
   const size = HEX_SIZE;
+  const minRow = Math.max(0, region?.minRow ?? 0);
+  const maxRow = Math.min(height - 1, region?.maxRow ?? (height - 1));
+  const minCol = Math.max(0, region?.minCol ?? 0);
+  const maxCol = Math.min(width - 1, region?.maxCol ?? (width - 1));
 
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
       const idx = row * width + col;
       const biome = (biomes[idx] ?? "grassland") as BiomeName;
       const h = heights[idx] ?? 0.5;
@@ -160,12 +172,17 @@ export function drawTerritory(
   width: number,
   height: number,
   ownership: (number | null)[],
+  region?: HexRegion | null,
 ): void {
   g.clear();
   const size = HEX_SIZE;
+  const minRow = Math.max(0, region?.minRow ?? 0);
+  const maxRow = Math.min(height - 1, region?.maxRow ?? (height - 1));
+  const minCol = Math.max(0, region?.minCol ?? 0);
+  const maxCol = Math.min(width - 1, region?.maxCol ?? (width - 1));
 
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
       const idx = row * width + col;
       const owner = ownership[idx];
       if (owner === null || owner === undefined) continue;
@@ -183,12 +200,17 @@ export function drawRoads(
   width: number,
   height: number,
   roads: number[],
+  region?: HexRegion | null,
 ): void {
   g.clear();
   const size = HEX_SIZE;
+  const minRow = Math.max(0, region?.minRow ?? 0);
+  const maxRow = Math.min(height - 1, region?.maxRow ?? (height - 1));
+  const minCol = Math.max(0, region?.minCol ?? 0);
+  const maxCol = Math.min(width - 1, region?.maxCol ?? (width - 1));
 
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
+  for (let row = minRow; row <= maxRow; row++) {
+    for (let col = minCol; col <= maxCol; col++) {
       const idx = row * width + col;
       const myRoad = roads[idx] ?? 0;
       if (myRoad <= 0) continue;

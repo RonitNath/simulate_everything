@@ -22,6 +22,7 @@ import Inspector from "./v3/Inspector";
 import LayerToggles, { type V3RenderLayer } from "./v3/LayerToggles";
 import PlaybackControls from "./v3/PlaybackControls";
 import ScoreBar from "./v3/ScoreBar";
+import type { HexRegion } from "./v3/render/grid";
 import * as css from "./styles/v3.css";
 
 interface ReplayFileEntry {
@@ -59,6 +60,38 @@ const V3ReplayApp: Component = () => {
 
   const currentPlayers = (): PlayerInfo[] => currentFrame()?.players ?? [];
   const agentNames = (): string[] => initData()?.agent_names ?? [];
+
+  const focusRegion = createMemo<HexRegion | null>(() => {
+    const init = initData();
+    const replayFrames = frames();
+    if (!init || replayFrames.length === 0) return null;
+
+    let minRow = Infinity;
+    let maxRow = -Infinity;
+    let minCol = Infinity;
+    let maxCol = -Infinity;
+
+    for (const frame of replayFrames) {
+      for (const entity of frame.entities) {
+        const row = entity.hex_r;
+        const col = entity.hex_q + Math.floor((entity.hex_r - (entity.hex_r & 1)) / 2);
+        minRow = Math.min(minRow, row);
+        maxRow = Math.max(maxRow, row);
+        minCol = Math.min(minCol, col);
+        maxCol = Math.max(maxCol, col);
+      }
+    }
+
+    if (!Number.isFinite(minRow)) return null;
+
+    const margin = 2;
+    return {
+      minRow: Math.max(0, minRow - margin),
+      maxRow: Math.min(init.height - 1, maxRow + margin),
+      minCol: Math.max(0, minCol - margin),
+      maxCol: Math.min(init.width - 1, maxCol + margin),
+    };
+  });
 
   const terrainData = createMemo(() => {
     const init = initData();
@@ -339,6 +372,7 @@ const V3ReplayApp: Component = () => {
               layers={layers()}
               tickIntervalMs={tickMs()}
               onEntityClick={(id) => setSelectedEntityId(id)}
+              focusRegion={focusRegion()}
             />
           </div>
 
