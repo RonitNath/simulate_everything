@@ -20,6 +20,7 @@ crates/engine/   — game rules, state, agents, mapgen, replay, scoreboard (V1 +
 crates/web/      — Axum server: routes, WebSocket handlers, lobby, round-robin loop
 crates/cli/      — CLI runner (sim + bench harness)
 crates/replay/   — standalone replay exporter + static file server (no WS, no live state)
+crates/viewer/   — wgpu WASM viewer (WebGPU terrain renderer, camera, Trunk build)
 frontend/        — SolidJS + Vite frontend
 docs/            — detailed documentation
 ```
@@ -56,6 +57,11 @@ docs/            — detailed documentation
 | V3 RR loop | `crates/web/src/v3_roundrobin.rs` |
 | V3 review system | `crates/web/src/v3_review.rs` |
 | V3 frontend types | `frontend/src/v3types.ts` |
+| wgpu viewer crate | `crates/viewer/` |
+| Viewer terrain renderer | `crates/viewer/src/heightmap.rs` |
+| Viewer camera + input | `crates/viewer/src/camera.rs`, `src/input.rs` |
+| Viewer GPU setup | `crates/viewer/src/gpu.rs` |
+| Terrain shader (WGSL) | `crates/viewer/src/shaders/terrain.wgsl` |
 | Replay exporter + viewer | `crates/replay/src/main.rs` |
 | Systemd service template | `simulate_everything.service.example` |
 | Python agent example | `examples/agent.py` |
