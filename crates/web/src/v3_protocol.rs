@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use simulate_everything_engine::v3::{
     armor::{BodyZone, DamageType},
+    derived::{derive_hex_control, derive_hex_structures, derive_player_stats, stockpile_level},
     formation::FormationType,
     spatial::Vec3,
     state::{GameState, ResourceType, Role, StructureType},
@@ -371,14 +372,12 @@ pub fn build_snapshot(state: &GameState, dt: f32) -> V3Snapshot {
     let entities = build_entity_list(state);
     let projectiles = build_projectile_list(state);
     let stacks = build_stack_list(state);
-
-    let hex_count = state.map_width * state.map_height;
-
-    // Territory, roads, structures — V3 engine doesn't have per-hex ownership yet,
-    // so initialize empty. The RR loop will populate these as the engine evolves.
-    let hex_ownership = vec![None; hex_count];
-    let hex_roads = vec![0u8; hex_count];
-    let hex_structures = vec![None; hex_count];
+    let hex_ownership = derive_hex_control(state)
+        .into_iter()
+        .map(|hex| hex.owner)
+        .collect();
+    let hex_roads = vec![0u8; state.map_width * state.map_height];
+    let hex_structures = derive_hex_structures(state);
 
     let players = build_player_list(state);
 
@@ -531,6 +530,7 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             .iter()
             .find(|s| s.members.contains(&_key))
             .map(|s| s.id.0);
+        let current_task = derive_current_task(entity);
 
         // Swordplay visual state — derive from combatant attack/cooldown.
         let (attack_phase, attack_motion, weapon_angle, attack_progress) =
@@ -602,7 +602,7 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             build_progress,
             contains_count: entity.contains.len(),
             stack_id,
-            current_task: None,
+            current_task,
             attack_phase,
             attack_motion,
             weapon_angle,
@@ -685,36 +685,64 @@ fn build_stack_list(state: &GameState) -> Vec<StackInfo> {
 }
 
 fn build_player_list(state: &GameState) -> Vec<PlayerInfo> {
-    (0..state.num_players)
-        .map(|player_id| {
-            let mut population = 0u32;
-            let mut alive_entities = false;
-
-            for (_key, entity) in &state.entities {
-                if entity.owner == Some(player_id) && entity.person.is_some() {
-                    population += 1;
-                    if entity
-                        .vitals
-                        .as_ref()
-                        .map(|v| v.blood > 0.0)
-                        .unwrap_or(true)
-                    {
-                        alive_entities = true;
-                    }
-                }
-            }
-
-            PlayerInfo {
-                id: player_id,
-                population,
-                territory: 0, // Hex ownership not yet tracked by engine.
-                food_level: 0,
-                material_level: 0,
-                alive: alive_entities || population > 0,
-                score: population, // Simple score = population for now.
-            }
+    derive_player_stats(state)
+        .into_iter()
+        .map(|player| PlayerInfo {
+            id: player.id,
+            population: player.population,
+            territory: player.territory,
+            food_level: stockpile_level(player.food_stockpile),
+            material_level: stockpile_level(player.material_stockpile),
+            alive: player.alive || player.population > 0,
+            score: player.population + player.territory,
         })
         .collect()
+}
+
+fn derive_current_task(entity: &simulate_everything_engine::v3::state::Entity) -> Option<String> {
+    if entity
+        .combatant
+        .as_ref()
+        .and_then(|combatant| combatant.attack.as_ref())
+        .is_some()
+    {
+        return Some("Attack".to_string());
+    }
+    if entity
+        .combatant
+        .as_ref()
+        .and_then(|combatant| combatant.cooldown.as_ref())
+        .is_some()
+    {
+        return Some("Recover".to_string());
+    }
+    if entity
+        .mobile
+        .as_ref()
+        .map(|mobile| !mobile.waypoints.is_empty())
+        .unwrap_or(false)
+    {
+        return Some(
+            match entity.person.as_ref().map(|person| person.role) {
+                Some(Role::Soldier) => "Move",
+                Some(Role::Farmer) => "Travel",
+                Some(Role::Worker | Role::Builder) => "Work",
+                Some(Role::Idle) => "Move",
+                None => "Move",
+            }
+            .to_string(),
+        );
+    }
+
+    entity.person.as_ref().map(|person| {
+        match person.role {
+            Role::Farmer => "Farm",
+            Role::Worker | Role::Builder => "Work",
+            Role::Soldier => "Hold",
+            Role::Idle => "Idle",
+        }
+        .to_string()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,7 +1052,9 @@ fn diff_stack(prev: &StackInfo, cur: &StackInfo) -> Option<StackUpdate> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simulate_everything_engine::v3::{formation::FormationType, mapgen, state::Stack};
+    use simulate_everything_engine::v3::{
+        formation::FormationType, mapgen, movement::Mobile, spatial::Vec3, state::Stack,
+    };
 
     #[test]
     fn delta_tracker_reports_stack_creation_update_and_dissolve() {
@@ -1083,5 +1113,56 @@ mod tests {
         assert!(dissolved.stacks_created.is_empty());
         assert!(dissolved.stacks_updated.is_empty());
         assert_eq!(dissolved.stacks_dissolved, vec![stack_id.0]);
+    }
+
+    #[test]
+    fn snapshot_derives_player_hex_and_task_state() {
+        let mut state = mapgen::generate(15, 15, 2, 42);
+        let mover = state
+            .entities
+            .iter()
+            .find_map(|(key, entity)| {
+                (entity.owner == Some(0)
+                    && entity.person.is_some()
+                    && entity.mobile.is_some()
+                    && entity.pos.is_some())
+                .then_some(key)
+            })
+            .expect("player 0 should have a mobile entity");
+        state.entities[mover].mobile = Some(Mobile::new(2.0, 10.0));
+        state.entities[mover]
+            .mobile
+            .as_mut()
+            .unwrap()
+            .waypoints
+            .push(Vec3::new(100.0, 100.0, 0.0));
+
+        let snapshot = build_snapshot(&state, 1.0);
+        assert!(
+            snapshot.hex_ownership.iter().any(|owner| owner.is_some()),
+            "snapshot should derive non-empty hex ownership"
+        );
+        assert!(
+            snapshot
+                .hex_structures
+                .iter()
+                .any(|structure| structure.is_some()),
+            "snapshot should derive visible structure ids"
+        );
+        assert!(
+            snapshot.players.iter().any(|player| player.territory > 0),
+            "player aggregates should include derived territory"
+        );
+        assert!(
+            snapshot.players.iter().any(|player| player.food_level > 0),
+            "player aggregates should include derived stockpile levels"
+        );
+        let entity_id = state.entities[mover].id;
+        let task = snapshot
+            .entities
+            .iter()
+            .find(|entity| entity.id == entity_id)
+            .and_then(|entity| entity.current_task.as_deref());
+        assert_eq!(task, Some("Move"));
     }
 }

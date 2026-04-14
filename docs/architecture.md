@@ -477,6 +477,7 @@ Implemented in `crates/web/src/v3_roundrobin.rs` (`V3RoundRobin`).
 - Review capture is integrated into RR via `V3ReviewRecorder`, including point flags and start/stop segment capture.
 - RR now uses the same engine-owned V3 agent phase as the shared sim/bench path: `sim::run_agent_phase(...)` applies agent outputs before `sim::tick(...)`.
 - Live `/v3/rr` and `/v3/replay` both merge stack create/update/dissolve deltas through the same frontend helper, so stack state stays visually consistent between live and replay views.
+- V3 snapshots now derive territory ownership, structure overlays, player stockpile levels, and basic entity task labels from shared engine state rather than hardcoded zeros or `None`.
 
 ### V2 Agents
 

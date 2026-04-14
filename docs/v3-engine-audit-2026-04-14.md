@@ -25,7 +25,7 @@ The main failure mode was:
 3. sequencing/docs mark it complete
 4. the missing integration remains in TODO or harness-only code
 
-The `v3-shared-exec` pass improved that baseline by moving V3 command application into the shared engine, the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` reuses, and the `v3-rr-runtime` pass routed V3 RR through that same path. The next major runtime gaps are the placeholder protocol/perception/economy surfaces and the still-partial movement/pathfinding integration.
+The `v3-shared-exec` pass improved that baseline by moving V3 command application into the shared engine, the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` reuses, the `v3-rr-runtime` pass routed V3 RR through that same path, and the `v3-state-surfaces` pass replaced several placeholder protocol/perception fields with engine-derived state. The next major runtime gaps are the still-partial movement/pathfinding integration and the deeper economy systems that still live partly in harness code.
 
 ## Top Findings
 
@@ -35,7 +35,7 @@ The `v3-shared-exec` pass improved that baseline by moving V3 command applicatio
 
 3. Movement/pathfinding/formation landed mostly as primitives. The live sim uses only a subset of the promised movement stack. Pathfinding, smoothing, terrain-derived speed factors, and formation-slot placement remain only partially integrated.
 
-4. Perception and protocol remain partially scaffolded. Strategic perception still returns placeholder-grade territory/economy/threat summaries, and several V3 protocol fields are emitted as empty or zeroed placeholders.
+4. Perception and protocol were partially scaffolded. Strategic perception and the spectator protocol have now moved off the worst placeholders for territory, player aggregates, structures, and task labels, but roads and deeper economy semantics are still incomplete.
 
 5. Combat learning and ranged integration are partial. Damage tables, combat observations, and projectile physics exist, but the full feedback loop and end-to-end ranged path are not fully integrated in shared runtime flow.
 
@@ -47,16 +47,18 @@ What is genuinely solid in the shared engine:
 - melee attack progression and cooldown logic
 - spatial primitives, index, and core collision/query helpers
 - review/logging substrate
+- derived territory/player/task state used by protocol and strategic perception
 
 What remains incomplete at runtime:
 - full movement/pathfinding/formation integration
-- non-placeholder perception/protocol/economy surfaces
-- damage-table learning and the remaining bench-only economy adapters
+- deeper economy systems and the remaining bench-only economy adapters
+- roads and other protocol surfaces that still have no shared engine backing
+- damage-table learning
 
 ## Recommended Next Order
 
 1. Collapse bench-only economy adapters into shared engine systems.
-2. Replace placeholder perception/protocol fields with engine-derived data.
-3. Finish movement/pathfinding/formation integration in the shared runtime.
+2. Finish movement/pathfinding/formation integration in the shared runtime.
+3. Replace the remaining economy placeholders with shared engine state so bench adapters can retire.
 4. Wire combat observations back into the damage-table learning loop.
 5. Finish the remaining movement and combat-parity integration once parallel swordplay work settles.
