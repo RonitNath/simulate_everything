@@ -1,10 +1,12 @@
 mod camera;
+mod entities;
 mod gpu;
 mod heightmap;
 mod hex_overlay;
 mod input;
 
 use camera::Camera;
+use entities::{EntityRenderer, EntityTickData};
 use gpu::GpuState;
 use heightmap::HeightmapRenderer;
 use hex_overlay::HexOverlayRenderer;
@@ -45,6 +47,7 @@ struct ViewerState {
     gpu: GpuState,
     terrain: HeightmapRenderer,
     hex_overlay: HexOverlayRenderer,
+    entity_renderer: EntityRenderer,
     camera: Camera,
     input: InputState,
     last_frame: f64,
@@ -57,7 +60,6 @@ impl ApplicationHandler for ViewerApp {
         }
         self.init_started = true;
 
-        // Create canvas in the DOM
         let doc = web_sys::window().unwrap().document().unwrap();
         let root = doc.get_element_by_id("viewer-root").unwrap();
         let canvas: web_sys::HtmlCanvasElement = doc
@@ -75,7 +77,6 @@ impl ApplicationHandler for ViewerApp {
         );
         self.window = Some(window.clone());
 
-        // Kick off async GPU initialization
         let state_ref = self.state.clone();
         let win = window.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -84,7 +85,7 @@ impl ApplicationHandler for ViewerApp {
             let size = win.inner_size();
             let camera = Camera::new(size.width as f32, size.height as f32);
 
-            // Generate demo heightmap (rolling hills)
+            // Generate demo heightmap
             let map_size = 1024u32;
             let n = (map_size * map_size) as usize;
             let mut height_data = vec![0.0f32; n];
@@ -103,13 +104,13 @@ impl ApplicationHandler for ViewerApp {
                     let idx = (z * map_size + x) as usize;
                     height_data[idx] = h;
                     material_data[idx] = if h > 30.0 {
-                        2 // rock
+                        2
                     } else if h > 15.0 {
-                        1 // dirt
+                        1
                     } else if h < -5.0 {
-                        3 // sand
+                        3
                     } else {
-                        0 // grass
+                        0
                     };
                 }
             }
@@ -117,23 +118,22 @@ impl ApplicationHandler for ViewerApp {
             let terrain =
                 HeightmapRenderer::new(&gpu, map_size, map_size, &height_data, &material_data);
 
-            // Demo hex ownership: 7x7 hex grid, alternating players
+            // Demo hex ownership
             let hex_w = 7u32;
             let hex_h = 7u32;
             let hex_ownership: Vec<Option<u8>> = (0..(hex_w * hex_h))
                 .map(|i| {
                     let q = (i % hex_w) as i32;
                     let r = (i / hex_w) as i32;
-                    // Assign ownership based on distance from center
                     let cq = q as f32 - hex_w as f32 / 2.0;
                     let cr = r as f32 - hex_h as f32 / 2.0;
                     let dist = (cq * cq + cr * cr).sqrt();
                     if dist < 2.0 {
-                        Some(0) // blue center
+                        Some(0)
                     } else if dist < 3.5 {
-                        Some(1) // red ring
+                        Some(1)
                     } else {
-                        None // unowned
+                        None
                     }
                 })
                 .collect();
@@ -150,6 +150,37 @@ impl ApplicationHandler for ViewerApp {
                 hex_h,
             );
 
+            // Entity renderer
+            let mut entity_renderer =
+                EntityRenderer::new(&gpu, terrain.camera_bind_group_layout());
+
+            // Demo entities: scatter 500 entities around the map center
+            let demo_entities: Vec<EntityTickData> = (0..500)
+                .map(|i| {
+                    let angle = i as f32 * 0.1;
+                    let radius = 50.0 + (i as f32 * 0.7) % 200.0;
+                    let x = 512.0 + radius * angle.cos();
+                    let z = 512.0 + radius * angle.sin();
+                    // Look up height at this position
+                    let tx = (x as u32).min(map_size - 1);
+                    let tz = (z as u32).min(map_size - 1);
+                    let y = height_data[(tz * map_size + tx) as usize];
+
+                    EntityTickData {
+                        pos: [x, y, z],
+                        facing: angle,
+                        owner: (i % 4) as u32,
+                        entity_kind: 0, // person
+                        health_frac: 1.0 - (i as f32 * 0.001),
+                        stamina_frac: 0.8,
+                        flags: 0,
+                        _pad: [0.0; 3],
+                    }
+                })
+                .collect();
+
+            entity_renderer.push_tick(&gpu.queue, &demo_entities);
+
             let now = web_sys::window()
                 .unwrap()
                 .performance()
@@ -160,12 +191,13 @@ impl ApplicationHandler for ViewerApp {
                 gpu,
                 terrain,
                 hex_overlay,
+                entity_renderer,
                 camera,
                 input: InputState::new(),
                 last_frame: now,
             });
 
-            log::info!("GPU initialized, terrain + hex overlay ready");
+            log::info!("GPU initialized, terrain + hex overlay + entities ready");
             win.request_redraw();
         });
     }
@@ -212,15 +244,13 @@ impl ApplicationHandler for ViewerApp {
                 let dt = ((now - state.last_frame) / 1000.0) as f32;
                 state.last_frame = now;
 
-                // Update camera from held keys
                 state.input.update_camera(&mut state.camera, dt);
-
-                // Flush any dirty terrain chunks
                 state.terrain.flush_dirty_chunks(&state.gpu.queue);
 
-                // Render
                 let camera_uniforms = state.camera.uniforms();
                 let camera_target = state.camera.target.to_array();
+                let camera_pos = state.camera.eye().to_array();
+                let viewport_height = state.camera.height;
 
                 let frame = match state.gpu.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -239,6 +269,15 @@ impl ApplicationHandler for ViewerApp {
                     },
                 );
 
+                // Compute: interpolate entities + assign LOD
+                state.entity_renderer.interpolate(
+                    &mut encoder,
+                    &state.gpu.queue,
+                    1.0, // t=1.0 (no interpolation yet — needs WS tick stream)
+                    camera_pos,
+                    viewport_height,
+                );
+
                 // Pass 1: terrain
                 state.terrain.render(
                     &mut encoder,
@@ -249,8 +288,16 @@ impl ApplicationHandler for ViewerApp {
                     camera_target,
                 );
 
-                // Pass 2: hex overlay (on top of terrain)
+                // Pass 2: hex overlay
                 state.hex_overlay.render(
+                    &mut encoder,
+                    &view,
+                    &state.gpu.depth_view,
+                    state.terrain.camera_bind_group(),
+                );
+
+                // Pass 3: entities
+                state.entity_renderer.render(
                     &mut encoder,
                     &view,
                     &state.gpu.depth_view,
@@ -260,7 +307,6 @@ impl ApplicationHandler for ViewerApp {
                 state.gpu.queue.submit(std::iter::once(encoder.finish()));
                 frame.present();
 
-                // Request next frame
                 drop(state_borrow);
                 if let Some(win) = &self.window {
                     win.request_redraw();
