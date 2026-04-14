@@ -34,6 +34,7 @@ pub mod state;
 pub mod steering;
 pub mod strategy;
 pub mod tactical;
+pub mod terrain_ops;
 pub mod vitals;
 pub mod weapon;
 pub mod wound;

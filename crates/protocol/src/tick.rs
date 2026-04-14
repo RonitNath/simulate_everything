@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::*;
 use crate::init::V3Init;
+use crate::terrain::TerrainPatch;
 
 // ---------------------------------------------------------------------------
 // Snapshot — full state per tick
@@ -39,6 +40,7 @@ pub struct V3SnapshotDelta {
     pub stacks_updated: Vec<StackUpdate>,
     pub stacks_dissolved: Vec<u32>,
     pub hex_changes: Vec<HexDelta>,
+    pub terrain_patches: Vec<TerrainPatch>,
     pub players: Vec<PlayerInfo>,
 }
 

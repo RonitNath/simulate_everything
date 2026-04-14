@@ -14,6 +14,7 @@ use super::index::SpatialIndex;
 use super::movement::Mobile;
 use super::projectile::Projectile;
 use super::spatial::{Heightfield, Vec3};
+use super::terrain_ops::TerrainOpLog;
 use super::vitals::Vitals;
 use super::weapon::{AttackState, CooldownState, WeaponProperties};
 use super::wound::WoundList;
@@ -351,6 +352,7 @@ pub struct GameState {
     pub coarse_index: CoarseIndex,
     pub hex_mapping: HexMapping,
     pub heightfield: Heightfield,
+    pub terrain_ops: TerrainOpLog,
     pub stacks: Vec<Stack>,
     pub map_width: usize,
     pub map_height: usize,
@@ -378,6 +380,7 @@ impl GameState {
             coarse_index: CoarseIndex::new(),
             hex_mapping: HexMapping::new(),
             heightfield,
+            terrain_ops: TerrainOpLog::new(),
             stacks: Vec::new(),
             map_width,
             map_height,

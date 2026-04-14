@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
+use simulate_everything_engine::v3::spatial::GeoMaterial;
 use simulate_everything_engine::v3::{
     derived::{derive_hex_control, derive_hex_structures, derive_player_stats, stockpile_level},
-    spatial::Vec3,
+    spatial::{Vec2, Vec3, terrain_height_at, terrain_material_at, terrain_raster_bounds},
     state::{GameState, TaskAssignment},
+    terrain_ops::TERRAIN_PATCH_CELL_SIZE,
     wound::Severity,
 };
 
@@ -11,7 +13,8 @@ use simulate_everything_engine::v3::{
 pub use simulate_everything_protocol::{
     BodyZone, DamageType, EntityKind, EntityUpdate, FormationType, HexDelta, PlayerInfo,
     ProjectileInfo, ResourceType, Role, SpectatorEntityInfo, StackInfo, StackUpdate, StructureType,
-    TimeMode, V3Init, V3RrStatus, V3ServerToSpectator, V3Snapshot, V3SnapshotDelta, WoundSeverity,
+    TerrainPatch, TerrainRasterInit, TimeMode, V3Init, V3RrStatus, V3ServerToSpectator, V3Snapshot,
+    V3SnapshotDelta, WoundSeverity,
 };
 
 /// Convert engine wound severity to wire wound severity.
@@ -20,6 +23,73 @@ fn map_severity(s: Severity) -> WoundSeverity {
         Severity::Scratch | Severity::Laceration => WoundSeverity::Light,
         Severity::Puncture => WoundSeverity::Serious,
         Severity::Fracture => WoundSeverity::Critical,
+    }
+}
+
+fn material_to_wire(material: GeoMaterial) -> u32 {
+    match material {
+        GeoMaterial::Soil => 0,
+        GeoMaterial::Sand => 1,
+        GeoMaterial::Clay => 2,
+        GeoMaterial::Rock => 3,
+    }
+}
+
+fn build_terrain_raster(state: &GameState) -> TerrainRasterInit {
+    let (origin, width, height) = terrain_raster_bounds(state, TERRAIN_PATCH_CELL_SIZE);
+    let mut heights = Vec::with_capacity((width * height) as usize);
+    let mut materials = Vec::with_capacity((width * height) as usize);
+
+    for y in 0..height {
+        for x in 0..width {
+            let pos = Vec2::new(
+                origin.x + (x as f32 + 0.5) * TERRAIN_PATCH_CELL_SIZE,
+                origin.y + (y as f32 + 0.5) * TERRAIN_PATCH_CELL_SIZE,
+            );
+            heights.push(terrain_height_at(state, pos));
+            materials.push(material_to_wire(terrain_material_at(state, pos)));
+        }
+    }
+
+    TerrainRasterInit {
+        width,
+        height,
+        origin_x: origin.x,
+        origin_y: origin.y,
+        cell_size: TERRAIN_PATCH_CELL_SIZE,
+        heights,
+        materials,
+    }
+}
+
+fn build_terrain_patch(
+    state: &mut GameState,
+    hex: simulate_everything_engine::v2::hex::Axial,
+) -> TerrainPatch {
+    let (origin, cols, rows, cell_size, heights, materials) = {
+        let patch = state
+            .terrain_ops
+            .rasterized_patch(hex, &state.heightfield, state.map_width, state.map_height)
+            .expect("rasterized patch should exist after build");
+        (
+            patch.origin,
+            patch.cols,
+            patch.rows,
+            patch.cell_size,
+            patch.heights.clone(),
+            patch.materials.clone(),
+        )
+    };
+    let full = terrain_raster_bounds(state, cell_size);
+    let x = ((origin.x - full.0.x) / cell_size).round().max(0.0) as u32;
+    let y = ((origin.y - full.0.y) / cell_size).round().max(0.0) as u32;
+    TerrainPatch {
+        x,
+        y,
+        width: cols as u32,
+        height: rows as u32,
+        heights,
+        materials: materials.into_iter().map(material_to_wire).collect(),
     }
 }
 
@@ -95,6 +165,7 @@ pub fn build_init(
 
     let terrain = height_map.clone();
     let region_ids = vec![0u16; hex_count];
+    let terrain_raster = build_terrain_raster(state);
 
     V3Init {
         width: state.map_width as u32,
@@ -102,6 +173,7 @@ pub fn build_init(
         terrain,
         height_map,
         material_map,
+        terrain_raster,
         region_ids,
         player_count: state.num_players,
         agent_names: agent_names.to_vec(),
@@ -458,11 +530,12 @@ impl DeltaTracker {
 
     /// Build a delta from the current game state compared to the previous tick.
     /// Updates internal state for the next comparison.
-    pub fn build_delta(&mut self, state: &GameState, dt: f32) -> V3SnapshotDelta {
+    pub fn build_delta(&mut self, state: &mut GameState, dt: f32) -> V3SnapshotDelta {
         let cur_entities = build_entity_list(state);
         let cur_projectiles = build_projectile_list(state);
         let cur_stacks = build_stack_list(state);
         let players = build_player_list(state);
+        let dirty_terrain_hexes = state.terrain_ops.drain_dirty_hexes();
 
         // --- Entities ---
         let cur_entity_ids: std::collections::HashSet<u32> =
@@ -534,6 +607,10 @@ impl DeltaTracker {
         self.prev_entities = cur_entities.into_iter().map(|e| (e.id, e)).collect();
         self.prev_projectiles = cur_projectiles.into_iter().map(|p| (p.id, p)).collect();
         self.prev_stacks = cur_stacks.into_iter().map(|s| (s.id, s)).collect();
+        let terrain_patches = dirty_terrain_hexes
+            .into_iter()
+            .map(|hex| build_terrain_patch(state, hex))
+            .collect();
 
         V3SnapshotDelta {
             tick: state.tick,
@@ -548,6 +625,7 @@ impl DeltaTracker {
             stacks_updated,
             stacks_dissolved,
             hex_changes: Vec::new(), // Hex ownership not yet tracked.
+            terrain_patches,
             players,
         }
     }
@@ -771,7 +849,7 @@ mod tests {
             leader: member,
         });
 
-        let created = tracker.build_delta(&state, dt);
+        let created = tracker.build_delta(&mut state, dt);
         assert_eq!(created.stacks_created.len(), 1);
         assert_eq!(created.stacks_created[0].id, stack_id.0);
         assert!(created.stacks_updated.is_empty());
@@ -783,7 +861,7 @@ mod tests {
             .find(|stack| stack.id == stack_id)
             .expect("new stack should exist")
             .formation = FormationType::Wedge;
-        let updated = tracker.build_delta(&state, dt);
+        let updated = tracker.build_delta(&mut state, dt);
         assert_eq!(updated.stacks_created.len(), 0);
         assert_eq!(updated.stacks_updated.len(), 1);
         assert_eq!(updated.stacks_updated[0].id, stack_id.0);
@@ -793,7 +871,7 @@ mod tests {
         );
 
         state.stacks.retain(|stack| stack.id != stack_id);
-        let dissolved = tracker.build_delta(&state, dt);
+        let dissolved = tracker.build_delta(&mut state, dt);
         assert!(dissolved.stacks_created.is_empty());
         assert!(dissolved.stacks_updated.is_empty());
         assert_eq!(dissolved.stacks_dissolved, vec![stack_id.0]);

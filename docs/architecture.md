@@ -474,6 +474,8 @@ Implemented in `crates/web/src/v3_roundrobin.rs` (`V3RoundRobin`).
 - Max 5000 ticks per game before timeout.
 - Spectators receive `v3_init`, `v3_snapshot` / `v3_snapshot_delta`, `v3_game_end`, `v3_config`, and `v3_rr_status`.
 - Late joiners receive the cached `v3_init`, latest full snapshot, and current RR status before live deltas.
+- `v3_init` now includes a dense `terrain_raster` payload for the wgpu viewer: full-resolution height/material textures plus raster origin and cell size.
+- `v3_snapshot_delta` now includes `terrain_patches`, allowing the terrain renderer to patch only changed raster regions instead of rebuilding the full heightmap each tick.
 - Review capture is integrated into RR via `V3ReviewRecorder`, including point flags and start/stop segment capture.
 - RR now uses the same engine-owned V3 agent phase as the shared sim/bench path: `sim::run_agent_phase(...)` applies agent outputs before `sim::tick(...)`.
 - RR and `v3bench` now also use the same shared economy-ready world bootstrap (`mapgen::generate_economy_ready(...)`) instead of bench-local support structures.

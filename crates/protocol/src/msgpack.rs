@@ -23,6 +23,15 @@ mod tests {
             terrain: vec![0.5; 400],
             height_map: vec![1.0; 400],
             material_map: vec![0.2; 400],
+            terrain_raster: TerrainRasterInit {
+                width: 32,
+                height: 32,
+                origin_x: -10.0,
+                origin_y: -10.0,
+                cell_size: 1.0,
+                heights: vec![0.0; 1024],
+                materials: vec![0; 1024],
+            },
             region_ids: vec![0; 400],
             player_count: 2,
             agent_names: vec!["Alpha".into(), "Beta".into()],
@@ -145,10 +154,19 @@ mod tests {
             stacks_updated: vec![],
             stacks_dissolved: vec![],
             hex_changes: vec![],
+            terrain_patches: vec![TerrainPatch {
+                x: 10,
+                y: 20,
+                width: 4,
+                height: 4,
+                heights: vec![1.0; 16],
+                materials: vec![2; 16],
+            }],
             players: vec![],
         };
         let bytes = encode(&delta).unwrap();
         let decoded: V3SnapshotDelta = decode(&bytes).unwrap();
         assert_eq!(decoded.entities_updated[0].x, Some(15.0));
+        assert_eq!(decoded.terrain_patches.len(), 1);
     }
 }

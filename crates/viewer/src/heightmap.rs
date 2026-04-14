@@ -11,6 +11,10 @@ pub struct TerrainUniforms {
     pub origin_x: f32,
     pub origin_z: f32,
     pub cell_size: f32,
+    pub raster_origin_x: f32,
+    pub raster_origin_z: f32,
+    pub raster_cell_size: f32,
+    pub _pad0: f32,
     pub map_width: f32,
     pub map_height: f32,
     pub texel_uv: f32,
@@ -45,6 +49,9 @@ pub struct HeightmapRenderer {
     material_texture: Texture,
     sampler: Sampler,
     rings: Vec<ClipmapRing>,
+    raster_origin_x: f32,
+    raster_origin_z: f32,
+    raster_cell_size: f32,
     map_width: u32,
     map_height: u32,
     // Chunk dirty tracking
@@ -53,6 +60,8 @@ pub struct HeightmapRenderer {
     dirty_chunks: Vec<bool>,
     /// CPU-side copy of heightmap for chunk re-uploads.
     height_data: Vec<f32>,
+    /// CPU-side copy of material data for chunk re-uploads.
+    material_data: Vec<u32>,
 }
 
 impl HeightmapRenderer {
@@ -60,6 +69,9 @@ impl HeightmapRenderer {
         gpu: &GpuState,
         map_width: u32,
         map_height: u32,
+        raster_origin_x: f32,
+        raster_origin_z: f32,
+        raster_cell_size: f32,
         height_data: &[f32],
         material_data: &[u32],
     ) -> Self {
@@ -238,7 +250,10 @@ impl HeightmapRenderer {
         // --- Pipeline ---
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("terrain pipeline layout"),
-            bind_group_layouts: &[Some(&camera_bind_group_layout), Some(&terrain_bind_group_layout)],
+            bind_group_layouts: &[
+                Some(&camera_bind_group_layout),
+                Some(&terrain_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -357,25 +372,22 @@ impl HeightmapRenderer {
             material_texture,
             sampler,
             rings,
+            raster_origin_x,
+            raster_origin_z,
+            raster_cell_size,
             map_width,
             map_height,
             chunks_x,
             chunks_y,
             dirty_chunks,
             height_data: height_data.to_vec(),
+            material_data: material_data.to_vec(),
         }
     }
 
     /// Apply a heightmap mutation to a rectangular region.
     /// Updates the CPU-side copy and marks overlapping chunks dirty.
-    pub fn mutate_heightmap(
-        &mut self,
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
-        data: &[f32],
-    ) {
+    pub fn mutate_heightmap(&mut self, x: u32, y: u32, width: u32, height: u32, data: &[f32]) {
         // Update CPU-side copy
         for dy in 0..height {
             for dx in 0..width {
@@ -384,7 +396,9 @@ impl HeightmapRenderer {
                 if tx < self.map_width && ty < self.map_height {
                     let idx = (ty * self.map_width + tx) as usize;
                     let src_idx = (dy * width + dx) as usize;
-                    if let (Some(dst), Some(src)) = (self.height_data.get_mut(idx), data.get(src_idx)) {
+                    if let (Some(dst), Some(src)) =
+                        (self.height_data.get_mut(idx), data.get(src_idx))
+                    {
                         *dst = *src;
                     }
                 }
@@ -407,6 +421,51 @@ impl HeightmapRenderer {
         }
     }
 
+    pub fn mutate_materialmap(&mut self, x: u32, y: u32, width: u32, height: u32, data: &[u32]) {
+        for dy in 0..height {
+            for dx in 0..width {
+                let tx = x + dx;
+                let ty = y + dy;
+                if tx < self.map_width && ty < self.map_height {
+                    let idx = (ty * self.map_width + tx) as usize;
+                    let src_idx = (dy * width + dx) as usize;
+                    if let (Some(dst), Some(src)) =
+                        (self.material_data.get_mut(idx), data.get(src_idx))
+                    {
+                        *dst = *src;
+                    }
+                }
+            }
+        }
+
+        let chunk_x0 = x / CHUNK_SIZE;
+        let chunk_y0 = y / CHUNK_SIZE;
+        let chunk_x1 = ((x + width).min(self.map_width) - 1) / CHUNK_SIZE;
+        let chunk_y1 = ((y + height).min(self.map_height) - 1) / CHUNK_SIZE;
+
+        for cy in chunk_y0..=chunk_y1 {
+            for cx in chunk_x0..=chunk_x1 {
+                let ci = (cy * self.chunks_x + cx) as usize;
+                if let Some(d) = self.dirty_chunks.get_mut(ci) {
+                    *d = true;
+                }
+            }
+        }
+    }
+
+    pub fn mutate_terrain_patch(
+        &mut self,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        heights: &[f32],
+        materials: &[u32],
+    ) {
+        self.mutate_heightmap(x, y, width, height, heights);
+        self.mutate_materialmap(x, y, width, height, materials);
+    }
+
     /// Upload all dirty chunks to the GPU, then clear dirty flags.
     pub fn flush_dirty_chunks(&mut self, queue: &Queue) {
         for ci in 0..(self.chunks_x * self.chunks_y) as usize {
@@ -424,11 +483,33 @@ impl HeightmapRenderer {
 
             // Extract chunk data from CPU copy
             let mut chunk_data = Vec::with_capacity((w * h) as usize);
+            let mut material_chunk = Vec::with_capacity((w * h) as usize);
             for row in y0..(y0 + h) {
                 let start = (row * self.map_width + x0) as usize;
                 let end = start + w as usize;
                 chunk_data.extend_from_slice(&self.height_data[start..end]);
+                material_chunk.extend_from_slice(&self.material_data[start..end]);
             }
+
+            queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: &self.material_texture,
+                    mip_level: 0,
+                    origin: Origin3d { x: x0, y: y0, z: 0 },
+                    aspect: TextureAspect::All,
+                },
+                bytemuck::cast_slice(&material_chunk),
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+                Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
 
             queue.write_texture(
                 TexelCopyTextureInfo {
@@ -443,7 +524,11 @@ impl HeightmapRenderer {
                     bytes_per_row: Some(w * 4),
                     rows_per_image: Some(h),
                 },
-                Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
 
             self.dirty_chunks[ci] = false;
@@ -511,9 +596,13 @@ impl HeightmapRenderer {
                 origin_x,
                 origin_z,
                 cell_size: ring.cell_size,
+                raster_origin_x: self.raster_origin_x,
+                raster_origin_z: self.raster_origin_z,
+                raster_cell_size: self.raster_cell_size,
+                _pad0: 0.0,
                 map_width: self.map_width as f32,
                 map_height: self.map_height as f32,
-                texel_uv: 1.0 / self.map_width as f32,
+                texel_uv: 1.0 / (self.map_width.max(self.map_height) as f32),
                 sun_dir: [0.4, 0.8, 0.3],
                 fog_density: 0.0003,
                 fog_color: [0.65, 0.75, 0.85],

@@ -17,6 +17,10 @@ struct TerrainUniforms {
     origin_z: f32,
     // Spacing between vertices in world units
     cell_size: f32,
+    raster_origin_x: f32,
+    raster_origin_z: f32,
+    raster_cell_size: f32,
+    _pad0: f32,
     // Heightmap texture dimensions
     map_width: f32,
     map_height: f32,
@@ -74,7 +78,10 @@ fn vs_terrain(@builtin(vertex_index) vid: u32) -> VertexOutput {
     let world_z = terrain.origin_z + f32(grid_row) * terrain.cell_size;
 
     // UV for heightmap sampling
-    let uv = vec2f(world_x / terrain.map_width, world_z / terrain.map_height);
+    let uv = vec2f(
+        (world_x - terrain.raster_origin_x) / (terrain.map_width * terrain.raster_cell_size),
+        (world_z - terrain.raster_origin_z) / (terrain.map_height * terrain.raster_cell_size),
+    );
 
     // Sample height with bilinear filtering (hardware sampler)
     let height = textureSampleLevel(heightmap, terrain_sampler, uv, 0.0).r;
@@ -115,11 +122,17 @@ fn fs_terrain(in: VertexOutput) -> @location(0) vec4f {
     let h_u = textureSampleLevel(heightmap, terrain_sampler, in.uv + vec2f(0.0,  texel), 0.0).r;
 
     // World-space texel size for correct normal scale
-    let texel_world = terrain.cell_size;
+    let texel_world = terrain.raster_cell_size;
     let normal = normalize(vec3f(h_l - h_r, 2.0 * texel_world, h_d - h_u));
 
     // Material from material map
-    let map_coord = vec2i(in.uv * vec2f(terrain.map_width, terrain.map_height));
+    let map_coord = vec2i(
+        clamp(
+            in.uv * vec2f(terrain.map_width, terrain.map_height),
+            vec2f(0.0, 0.0),
+            vec2f(terrain.map_width - 1.0, terrain.map_height - 1.0),
+        )
+    );
     let mat_idx = textureLoad(material_map, map_coord, 0).r;
 
     // Base material color

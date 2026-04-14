@@ -1167,6 +1167,7 @@ fn run_swordplay_drill(args: &[String]) {
             0.0,
             &attack_state,
             None,
+            None,
             idx as u64 + 1,
         )
         .expect("drill attacks are in range");
@@ -1290,11 +1291,11 @@ fn write_swordplay_drill_replay(
     let snapshot = v3_protocol::build_snapshot(&state, 1.0);
     let snapshot_msg = v3_protocol::V3ServerToSpectator::Snapshot { snapshot };
     writeln!(file, "{}", serde_json::to_string(&snapshot_msg).unwrap()).unwrap();
-    let _ = delta_tracker.build_delta(&state, 1.0);
+    let _ = delta_tracker.build_delta(&mut state, 1.0);
 
     for (idx, (step, frame)) in steps.iter().zip(frames).enumerate() {
         apply_swordplay_step_to_replay(&mut state, step, frame, idx as u64 + 1);
-        let delta = delta_tracker.build_delta(&state, 1.0);
+        let delta = delta_tracker.build_delta(&mut state, 1.0);
         let msg = v3_protocol::V3ServerToSpectator::SnapshotDelta { delta };
         writeln!(file, "{}", serde_json::to_string(&msg).unwrap()).unwrap();
     }
@@ -1745,7 +1746,7 @@ fn run_arena(config: &ArenaConfigFile, replay_path: Option<&str>) {
                 let msg = v3_protocol::V3ServerToSpectator::Snapshot { snapshot: snap };
                 writeln!(f, "{}", serde_json::to_string(&msg).unwrap()).unwrap();
             } else {
-                let delta = delta_tracker.build_delta(&state, 1.0);
+                let delta = delta_tracker.build_delta(&mut state, 1.0);
                 let msg = v3_protocol::V3ServerToSpectator::SnapshotDelta { delta };
                 writeln!(f, "{}", serde_json::to_string(&msg).unwrap()).unwrap();
             }

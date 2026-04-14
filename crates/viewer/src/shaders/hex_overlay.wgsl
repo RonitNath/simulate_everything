@@ -8,10 +8,14 @@ struct CameraUniforms {
 }
 
 struct HexOverlayUniforms {
+    raster_origin_x: f32,
+    raster_origin_z: f32,
+    raster_cell_size: f32,
+    _pad0: f32,
     map_width: f32,
     map_height: f32,
     alpha: f32,
-    _pad0: f32,
+    _pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
@@ -35,7 +39,10 @@ struct VertexOutput {
 @vertex
 fn vs_hex_overlay(in: VertexInput) -> VertexOutput {
     // Sample heightmap to drape vertex onto terrain
-    let uv = vec2f(in.world_xz.x / overlay.map_width, in.world_xz.y / overlay.map_height);
+    let uv = vec2f(
+        (in.world_xz.x - overlay.raster_origin_x) / (overlay.map_width * overlay.raster_cell_size),
+        (in.world_xz.y - overlay.raster_origin_z) / (overlay.map_height * overlay.raster_cell_size),
+    );
     let height = textureSampleLevel(heightmap, terrain_sampler, uv, 0.0).r;
 
     // Small Y offset to avoid z-fighting with terrain

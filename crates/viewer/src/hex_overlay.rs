@@ -31,10 +31,14 @@ struct HexVertex {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct HexOverlayUniforms {
+    raster_origin_x: f32,
+    raster_origin_z: f32,
+    raster_cell_size: f32,
+    _pad0: f32,
     map_width: f32,
     map_height: f32,
     alpha: f32,
-    _pad0: f32,
+    _pad1: f32,
 }
 
 /// Hex overlay renderer: territory fill + borders draped on terrain.
@@ -53,17 +57,17 @@ pub struct HexOverlayRenderer {
 fn hex_center(q: i32, r: i32) -> [f32; 2] {
     let fq = q as f32;
     let fr = r as f32;
-    [
-        SQRT3 * HEX_RADIUS * (fq + fr / 2.0),
-        1.5 * HEX_RADIUS * fr,
-    ]
+    [SQRT3 * HEX_RADIUS * (fq + fr / 2.0), 1.5 * HEX_RADIUS * fr]
 }
 
 /// World position of flat-top hex corner i (0..5) for hex (q, r).
 fn hex_corner(q: i32, r: i32, i: usize) -> [f32; 2] {
     let c = hex_center(q, r);
     let angle = std::f32::consts::FRAC_PI_3 * i as f32;
-    [c[0] + HEX_RADIUS * angle.cos(), c[1] + HEX_RADIUS * angle.sin()]
+    [
+        c[0] + HEX_RADIUS * angle.cos(),
+        c[1] + HEX_RADIUS * angle.sin(),
+    ]
 }
 
 /// Generate border (line list) and fill (triangle list) vertex data.
@@ -85,8 +89,14 @@ fn generate_hex_geometry(
             for i in 0..6 {
                 let c0 = hex_corner(q, r, i);
                 let c1 = hex_corner(q, r, (i + 1) % 6);
-                border_verts.push(HexVertex { world_xz: c0, color: border_color });
-                border_verts.push(HexVertex { world_xz: c1, color: border_color });
+                border_verts.push(HexVertex {
+                    world_xz: c0,
+                    color: border_color,
+                });
+                border_verts.push(HexVertex {
+                    world_xz: c1,
+                    color: border_color,
+                });
             }
 
             // Territory fill: 6 triangles from center to adjacent corners
@@ -97,9 +107,18 @@ fn generate_hex_geometry(
                 for i in 0..6 {
                     let c0 = hex_corner(q, r, i);
                     let c1 = hex_corner(q, r, (i + 1) % 6);
-                    fill_verts.push(HexVertex { world_xz: center, color: fill_color });
-                    fill_verts.push(HexVertex { world_xz: c0, color: fill_color });
-                    fill_verts.push(HexVertex { world_xz: c1, color: fill_color });
+                    fill_verts.push(HexVertex {
+                        world_xz: center,
+                        color: fill_color,
+                    });
+                    fill_verts.push(HexVertex {
+                        world_xz: c0,
+                        color: fill_color,
+                    });
+                    fill_verts.push(HexVertex {
+                        world_xz: c1,
+                        color: fill_color,
+                    });
                 }
             }
         }
@@ -177,6 +196,9 @@ impl HexOverlayRenderer {
         camera_bgl: &BindGroupLayout,
         heightmap_view: &TextureView,
         sampler: &Sampler,
+        raster_origin_x: f32,
+        raster_origin_z: f32,
+        raster_cell_size: f32,
         map_width: u32,
         map_height: u32,
         hex_ownership: &[Option<u8>],
@@ -240,10 +262,14 @@ impl HexOverlayRenderer {
         let uniform_buf = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("hex overlay uniforms"),
             contents: bytemuck::bytes_of(&HexOverlayUniforms {
+                raster_origin_x,
+                raster_origin_z,
+                raster_cell_size,
+                _pad0: 0.0,
                 map_width: map_width as f32,
                 map_height: map_height as f32,
                 alpha: 1.0,
-                _pad0: 0.0,
+                _pad1: 0.0,
             }),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
@@ -274,12 +300,20 @@ impl HexOverlayRenderer {
         });
 
         let border_pipeline = create_pipeline(
-            device, &shader, &pipeline_layout, gpu.format,
-            PrimitiveTopology::LineList, "hex border pipeline",
+            device,
+            &shader,
+            &pipeline_layout,
+            gpu.format,
+            PrimitiveTopology::LineList,
+            "hex border pipeline",
         );
         let fill_pipeline = create_pipeline(
-            device, &shader, &pipeline_layout, gpu.format,
-            PrimitiveTopology::TriangleList, "hex fill pipeline",
+            device,
+            &shader,
+            &pipeline_layout,
+            gpu.format,
+            PrimitiveTopology::TriangleList,
+            "hex fill pipeline",
         );
 
         Self {

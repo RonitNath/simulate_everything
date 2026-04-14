@@ -11,7 +11,7 @@ use super::lifecycle::{self, cleanup_dead, cleanup_inert_projectiles};
 use super::martial;
 use super::movement::{self, Mobile};
 use super::projectile::{self, ProjectileTick};
-use super::spatial::Vec3;
+use super::spatial::{Vec2, Vec3, terrain_height_at, terrain_material_at, terrain_slope_at};
 use super::state::GameState;
 use super::steering;
 use super::weapon::{self, AttackTick};
@@ -176,15 +176,17 @@ fn rebuild_spatial_index(state: &mut GameState) {
     );
 
     // Rebuild coarse index (full rebuild each tick — few cells, cheap)
-    state.coarse_index.rebuild(state.entities.iter().filter_map(|(key, e)| {
-        let pos = e.pos?;
-        let is_soldier = e
-            .person
-            .as_ref()
-            .map(|p| p.role == super::state::Role::Soldier)
-            .unwrap_or(false);
-        Some((key, pos, e.owner, is_soldier))
-    }));
+    state
+        .coarse_index
+        .rebuild(state.entities.iter().filter_map(|(key, e)| {
+            let pos = e.pos?;
+            let is_soldier = e
+                .person
+                .as_ref()
+                .map(|p| p.role == super::state::Role::Soldier)
+                .unwrap_or(false);
+            Some((key, pos, e.owner, is_soldier))
+        }));
 }
 
 // ---------------------------------------------------------------------------
@@ -233,9 +235,15 @@ fn compute_steering_and_move(state: &mut GameState, dt: f32) {
                 .unwrap_or(0.0);
 
             let speed_factors = movement::SpeedFactors {
-                base_capability: 3.0,    // default person speed
-                slope_factor: 1.0,       // TODO: compute from heightfield
-                surface_factor: 1.0,     // TODO: compute from material at pos
+                base_capability: 3.0, // default person speed
+                slope_factor: movement::slope_factor(terrain_slope_at(
+                    state,
+                    pos.xy(),
+                    mobile.vel.xy(),
+                )),
+                surface_factor: movement::surface_factor(
+                    terrain_material_at(state, pos.xy()).friction(),
+                ),
                 encumbrance_factor: 1.0, // TODO: compute from carried weight
                 wound_factor: movement::wound_factor(leg_wound_weight),
                 stamina_factor: movement::stamina_factor(stamina),
@@ -542,11 +550,7 @@ fn advance_projectiles(state: &mut GameState) -> Vec<PendingImpact> {
             &proj_component,
             attacker_id,
             state.tick,
-            |x, y| {
-                // TODO: use heightfield for proper terrain height
-                let _ = (x, y);
-                0.0
-            },
+            |x, y| terrain_height_at(state, Vec2::new(x, y)),
             |check_pos| {
                 // Find nearest entity within collision radius
                 for &(key, entity_pos, radius) in &entity_positions {

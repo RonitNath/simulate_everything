@@ -367,7 +367,7 @@ impl V3RoundRobin {
                 }
 
                 // Broadcast delta to spectators (only changed fields).
-                let delta = delta_tracker.build_delta(&state, dt);
+                let delta = delta_tracker.build_delta(&mut state, dt);
                 self.broadcast(V3ServerToSpectator::SnapshotDelta { delta })
                     .await;
 

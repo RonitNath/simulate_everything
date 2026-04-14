@@ -1,9 +1,8 @@
 use super::body_model::{
-    AngularConstraint, BodyModel, BodyPointId, DistanceConstraint, CORE_DISTANCES,
-    SKELETON_ANGLES, stance_template,
+    AngularConstraint, BodyModel, BodyPointId, CORE_DISTANCES, DistanceConstraint, SKELETON_ANGLES,
+    stance_template,
 };
-use super::hex::world_to_vertex;
-use super::spatial::{Vec2, Vec3};
+use super::spatial::{Vec2, Vec3, terrain_height_at};
 use super::state::GameState;
 use crate::v2::state::EntityKey;
 
@@ -243,9 +242,6 @@ pub fn tick_body_physics(state: &mut GameState, dt: f32) {
         })
         .collect();
 
-    let map_w = state.map_width;
-    let map_h = state.map_height;
-
     for (key, root, facing) in work {
         // Take the body model out, step it, put it back.
         // This lets us borrow heightfield immutably during step_body.
@@ -255,10 +251,7 @@ pub fn tick_body_physics(state: &mut GameState, dt: f32) {
         };
 
         step_body(&mut body, root, facing, dt, |x, y| {
-            let pos = Vec2::new(x, y);
-            state
-                .heightfield
-                .effective_height_at(pos, |p| world_to_vertex(p, map_w, map_h))
+            terrain_height_at(state, Vec2::new(x, y))
         });
 
         state.entities[key].body = Some(Box::new(body));
@@ -271,8 +264,8 @@ pub fn tick_body_physics(state: &mut GameState, dt: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::body_model::{BodyModel, StanceId};
+    use super::*;
 
     fn flat_terrain(_x: f32, _y: f32) -> f32 {
         0.0
@@ -296,11 +289,7 @@ mod tests {
 
         // No point should be wildly out of range
         for (i, p) in body.points.iter().enumerate() {
-            assert!(
-                p.pos.length() < 50.0,
-                "point {i} exploded to {:?}",
-                p.pos
-            );
+            assert!(p.pos.length() < 50.0, "point {i} exploded to {:?}", p.pos);
         }
     }
 
@@ -376,16 +365,8 @@ mod tests {
         // Feet should be at or near ground level
         let lf = body.point(BodyPointId::LeftFoot).pos;
         let rf = body.point(BodyPointId::RightFoot).pos;
-        assert!(
-            lf.z.abs() < 0.05,
-            "left foot not grounded: z={}",
-            lf.z
-        );
-        assert!(
-            rf.z.abs() < 0.05,
-            "right foot not grounded: z={}",
-            rf.z
-        );
+        assert!(lf.z.abs() < 0.05, "left foot not grounded: z={}", lf.z);
+        assert!(rf.z.abs() < 0.05, "right foot not grounded: z={}", rf.z);
     }
 
     #[test]

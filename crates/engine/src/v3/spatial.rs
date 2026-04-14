@@ -3,6 +3,10 @@ use std::ops::{Add, Mul, Sub};
 
 use serde::{Deserialize, Serialize};
 
+use super::hex::world_to_vertex;
+use super::state::GameState;
+use super::terrain_ops::{sample_base_material, terrain_raster_spec};
+
 /// 3D world-space position. f32 gives sub-mm precision at 30km map extent.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -167,6 +171,11 @@ impl Mul<f32> for Vec2 {
             y: self.y * s,
         }
     }
+}
+
+pub fn terrain_raster_bounds(state: &GameState, cell_size: f32) -> (Vec2, u32, u32) {
+    let spec = terrain_raster_spec(state.map_width, state.map_height, cell_size);
+    (spec.origin, spec.width, spec.height)
 }
 
 // ---------------------------------------------------------------------------
@@ -391,8 +400,40 @@ pub fn layer_of(entity_z: f32, terrain_z: f32) -> Layer {
     }
 }
 
+pub fn coarse_height_at(state: &GameState, pos: Vec2) -> f32 {
+    state.heightfield.effective_height_at(pos, |p| {
+        world_to_vertex(p, state.map_width, state.map_height)
+    })
+}
+
+pub fn terrain_height_at(state: &GameState, pos: Vec2) -> f32 {
+    let base = coarse_height_at(state, pos);
+    let hex = state.hex_mapping.medium_hex(Vec3::new(pos.x, pos.y, 0.0));
+    base + state.terrain_ops.height_delta_at(hex, pos)
+}
+
+pub fn terrain_slope_at(state: &GameState, pos: Vec2, direction: Vec2) -> f32 {
+    let dir = direction.normalize();
+    if dir.length_squared() < 1e-10 {
+        return 0.0;
+    }
+    let p1 = Vec2::new(pos.x + dir.x, pos.y + dir.y);
+    terrain_height_at(state, p1) - terrain_height_at(state, pos)
+}
+
+pub fn terrain_material_at(state: &GameState, pos: Vec2) -> GeoMaterial {
+    let hex = state.hex_mapping.medium_hex(Vec3::new(pos.x, pos.y, 0.0));
+    state
+        .terrain_ops
+        .material_override_at(hex, pos)
+        .unwrap_or_else(|| {
+            sample_base_material(&state.heightfield, state.map_width, state.map_height, pos)
+        })
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::terrain_ops::{DitchProfile, TerrainOp};
     use super::*;
 
     #[test]
@@ -504,5 +545,34 @@ mod tests {
     fn geo_material_friction() {
         assert!(GeoMaterial::Rock.friction() < GeoMaterial::Sand.friction());
         assert!(GeoMaterial::Soil.friction() < GeoMaterial::Clay.friction());
+    }
+
+    #[test]
+    fn terrain_height_matches_base_without_ops() {
+        let hf = Heightfield::new(8, 8, 10.0, GeoMaterial::Soil);
+        let state = GameState::new(4, 4, 2, hf);
+        let pos = Vec2::new(10.0, 10.0);
+        assert!((terrain_height_at(&state, pos) - coarse_height_at(&state, pos)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn terrain_height_includes_op_delta() {
+        let hf = Heightfield::new(32, 32, 10.0, GeoMaterial::Soil);
+        let mut state = GameState::new(10, 10, 2, hf);
+        let hex = state.hex_mapping.medium_hex(Vec3::new(0.0, 0.0, 0.0));
+        state.terrain_ops.push_op(
+            hex,
+            TerrainOp::Ditch {
+                start: Vec2::new(-10.0, 0.0),
+                end: Vec2::new(10.0, 0.0),
+                width: 8.0,
+                depth: 2.0,
+                profile: DitchProfile::Trapezoidal,
+            },
+            &state.heightfield,
+            state.map_width,
+            state.map_height,
+        );
+        assert!(terrain_height_at(&state, Vec2::new(0.0, 0.0)) < 10.0);
     }
 }
