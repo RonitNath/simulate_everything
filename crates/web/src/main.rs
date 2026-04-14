@@ -5,6 +5,7 @@ mod v2_protocol;
 mod v2_roundrobin;
 mod v2_rr_review;
 mod v3_protocol;
+mod v3_roundrobin;
 
 use askama::Template;
 use axum::{
@@ -36,6 +37,7 @@ use tokio::sync::{Mutex, broadcast};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 use v2_roundrobin::V2RoundRobin;
+use v3_roundrobin::V3RoundRobin;
 
 // ============================================================
 // Shared state
@@ -45,6 +47,7 @@ struct AppState {
     lobby: Arc<Lobby>,
     rr: Arc<RoundRobin>,
     v2_rr: Arc<V2RoundRobin>,
+    v3_rr: Arc<V3RoundRobin>,
     scoreboard: Arc<Mutex<Scoreboard>>,
     build_ver: String,
 }
@@ -823,6 +826,126 @@ async fn api_v2_rr_delete_review(
 }
 
 // ============================================================
+// V3 Round-Robin
+// ============================================================
+
+async fn ws_v3_rr(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let rx = state.v3_rr.spectator_subscribe();
+    let catchup = state.v3_rr.spectator_catchup().await;
+    ws.on_upgrade(move |socket| handle_v3_spectator(socket, rx, catchup))
+}
+
+async fn handle_v3_spectator(
+    mut socket: WebSocket,
+    mut rx: broadcast::Receiver<v3_protocol::V3ServerToSpectator>,
+    catchup: Vec<v3_protocol::V3ServerToSpectator>,
+) {
+    for msg in catchup {
+        let text = serde_json::to_string(&msg).unwrap();
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                let text = serde_json::to_string(&msg).unwrap();
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                warn!("V3 spectator lagged, dropped {} messages", n);
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct V3RrConfigUpdate {
+    tick_ms: Option<u64>,
+    mode: Option<String>,
+    autoplay: Option<bool>,
+}
+
+async fn api_v3_rr_config(
+    State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<V3RrConfigUpdate>,
+) -> impl IntoResponse {
+    if let Some(ms) = body.tick_ms {
+        state.v3_rr.set_tick_ms(ms);
+    }
+    if let Some(ref mode_str) = body.mode {
+        let mode = match mode_str.as_str() {
+            "strategic" | "Strategic" => Some(v3_protocol::TimeMode::Strategic),
+            "tactical" | "Tactical" => Some(v3_protocol::TimeMode::Tactical),
+            "cinematic" | "Cinematic" => Some(v3_protocol::TimeMode::Cinematic),
+            _ => None,
+        };
+        if let Some(m) = mode {
+            state.v3_rr.set_mode(m).await;
+        }
+    }
+    if let Some(ap) = body.autoplay {
+        state.v3_rr.set_autoplay(ap);
+    }
+    let mode_val = body
+        .mode
+        .as_deref()
+        .and_then(|s| match s {
+            "strategic" | "Strategic" => Some(v3_protocol::TimeMode::Strategic),
+            "tactical" | "Tactical" => Some(v3_protocol::TimeMode::Tactical),
+            "cinematic" | "Cinematic" => Some(v3_protocol::TimeMode::Cinematic),
+            _ => None,
+        });
+    state
+        .v3_rr
+        .broadcast_config(body.tick_ms, mode_val, body.autoplay)
+        .await;
+    state.v3_rr.broadcast_rr_status().await;
+    Json(serde_json::json!({"ok": true}))
+}
+
+async fn api_v3_rr_pause(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v3_rr.pause();
+    state.v3_rr.broadcast_rr_status().await;
+    Json(serde_json::json!({"ok": true, "paused": true}))
+}
+
+async fn api_v3_rr_resume(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v3_rr.resume();
+    state.v3_rr.broadcast_rr_status().await;
+    Json(serde_json::json!({"ok": true, "paused": false}))
+}
+
+async fn api_v3_rr_reset(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.v3_rr.reset();
+    state.v3_rr.broadcast_rr_status().await;
+    Json(serde_json::json!({"ok": true, "reset": true}))
+}
+
+async fn api_v3_rr_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let status = serde_json::to_value(
+        state
+            .v3_rr
+            .spectator_catchup()
+            .await
+            .into_iter()
+            .find_map(|m| {
+                if let v3_protocol::V3ServerToSpectator::RrStatus(s) = m {
+                    Some(s)
+                } else {
+                    None
+                }
+            }),
+    )
+    .unwrap_or(serde_json::json!({}));
+    Json(status)
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -877,6 +1000,12 @@ async fn main() {
         v2_rr_loop.run_loop().await;
     });
 
+    let v3_rr = Arc::new(V3RoundRobin::new(tick_ms));
+    let v3_rr_loop = v3_rr.clone();
+    tokio::spawn(async move {
+        v3_rr_loop.run_loop().await;
+    });
+
     let build_ver = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -886,6 +1015,7 @@ async fn main() {
         lobby,
         rr,
         v2_rr,
+        v3_rr,
         scoreboard,
         build_ver,
     });
@@ -936,6 +1066,13 @@ async fn main() {
             get(api_v2_rr_review).delete(api_v2_rr_delete_review),
         )
         .route("/api/v2/rr/status", get(api_v2_rr_status))
+        // V3 RR routes
+        .route("/ws/v3/rr", get(ws_v3_rr))
+        .route("/api/v3/rr/config", axum::routing::post(api_v3_rr_config))
+        .route("/api/v3/rr/pause", axum::routing::post(api_v3_rr_pause))
+        .route("/api/v3/rr/resume", axum::routing::post(api_v3_rr_resume))
+        .route("/api/v3/rr/reset", axum::routing::post(api_v3_rr_reset))
+        .route("/api/v3/rr/status", get(api_v3_rr_status))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 
