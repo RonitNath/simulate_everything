@@ -52,6 +52,7 @@ docs/            — detailed documentation
 | V3 entity model + state | `crates/engine/src/v3/state.rs` |
 | V3 sim tick | `crates/engine/src/v3/sim.rs` |
 | V3 agent architecture | `crates/engine/src/v3/agent.rs` |
+| V3 terrain operations | `crates/engine/src/v3/terrain_ops.rs` |
 | V3 wire types + msgpack | `crates/protocol/` |
 | V3 WS builders + delta tracker | `crates/web/src/v3_protocol.rs` |
 | V3 RR loop | `crates/web/src/v3_roundrobin.rs` |

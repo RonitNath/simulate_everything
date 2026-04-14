@@ -74,6 +74,8 @@ struct LiveWorld {
     entities: HashMap<u32, SpectatorEntityInfo>,
     body_models: HashMap<u32, BodyRenderInfo>,
     hex_ownership: Vec<Option<u8>>,
+    hex_grid_width: u32,
+    hex_grid_height: u32,
     current_tick: u64,
     tick_interval_secs: f32,
     last_tick_received_at_ms: Option<f64>,
@@ -85,6 +87,8 @@ impl Default for LiveWorld {
             entities: HashMap::new(),
             body_models: HashMap::new(),
             hex_ownership: Vec::new(),
+            hex_grid_width: 0,
+            hex_grid_height: 0,
             current_tick: 0,
             tick_interval_secs: 0.1,
             last_tick_received_at_ms: None,
@@ -122,12 +126,15 @@ impl ApplicationHandler for ViewerApp {
             camera.target = glam::Vec3::new(15.0, 0.0, 15.0);
             camera.distance = 120.0;
 
-            let terrain = HeightmapRenderer::new(&gpu, 2, 2, &[0.0; 4], &[0; 4]);
+            let terrain = HeightmapRenderer::new(&gpu, 2, 2, 0.0, 0.0, 1.0, &[0.0; 4], &[0; 4]);
             let hex_overlay = HexOverlayRenderer::new(
                 &gpu,
                 terrain.camera_bind_group_layout(),
                 terrain.heightmap_view(),
                 terrain.sampler(),
+                0.0,
+                0.0,
+                1.0,
                 2,
                 2,
                 &[None; 4],
@@ -444,7 +451,7 @@ fn publish_selection(entity_id: Option<u32>) {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let Ok(parent) = window.parent() else {
+    let Some(parent) = window.parent().ok().flatten() else {
         return;
     };
     if parent == window {
@@ -468,13 +475,24 @@ fn publish_selection(entity_id: Option<u32>) {
 fn apply_init(state: &mut ViewerState, init: V3Init) {
     let width = init.width.max(1);
     let height = init.height.max(1);
-    let material: Vec<u32> = init.material_map.iter().map(|value| *value as u32).collect();
+    let raster = &init.terrain_raster;
+    let rw = raster.width.max(1);
+    let rh = raster.height.max(1);
+    log::info!(
+        "apply_init: grid {}x{}, raster {}x{} origin=({},{}) cell={}",
+        width, height, rw, rh, raster.origin_x, raster.origin_y, raster.cell_size,
+    );
     rebuild_terrain_and_overlay(
         state,
+        rw,
+        rh,
+        raster.origin_x,
+        raster.origin_y,
+        raster.cell_size,
         width,
         height,
-        &init.height_map,
-        &material,
+        &raster.heights,
+        &raster.materials,
         vec![None; (width * height) as usize],
     );
     state.camera.target = glam::Vec3::new(width as f32 * 0.5, 0.0, height as f32 * 0.5);
@@ -482,6 +500,8 @@ fn apply_init(state: &mut ViewerState, init: V3Init) {
     state.live.entities.clear();
     state.live.body_models.clear();
     state.live.hex_ownership = vec![None; (width * height) as usize];
+    state.live.hex_grid_width = width;
+    state.live.hex_grid_height = height;
     state.live.current_tick = 0;
     state.live.last_tick_received_at_ms = None;
     if state.selected_entity_id.take().is_some() {
@@ -537,6 +557,17 @@ fn apply_delta(state: &mut ViewerState, delta: V3SnapshotDelta) {
         rebuild_overlay(state, state.live.hex_ownership.clone());
     }
 
+    for patch in &delta.terrain_patches {
+        state.terrain.mutate_terrain_patch(
+            patch.x,
+            patch.y,
+            patch.width,
+            patch.height,
+            &patch.heights,
+            &patch.materials,
+        );
+    }
+
     mark_tick_received(&mut state.live, delta.tick);
     sync_selection(state);
     upload_live_state(state);
@@ -564,23 +595,40 @@ fn mark_tick_received(live: &mut LiveWorld, tick: u64) {
 
 fn rebuild_terrain_and_overlay(
     state: &mut ViewerState,
-    width: u32,
-    height: u32,
+    raster_width: u32,
+    raster_height: u32,
+    origin_x: f32,
+    origin_z: f32,
+    cell_size: f32,
+    grid_width: u32,
+    grid_height: u32,
     height_map: &[f32],
     material_map: &[u32],
     hex_ownership: Vec<Option<u8>>,
 ) {
-    state.terrain = HeightmapRenderer::new(&state.gpu, width, height, height_map, material_map);
+    state.terrain = HeightmapRenderer::new(
+        &state.gpu,
+        raster_width,
+        raster_height,
+        origin_x,
+        origin_z,
+        cell_size,
+        height_map,
+        material_map,
+    );
     state.hex_overlay = HexOverlayRenderer::new(
         &state.gpu,
         state.terrain.camera_bind_group_layout(),
         state.terrain.heightmap_view(),
         state.terrain.sampler(),
-        width,
-        height,
+        origin_x,
+        origin_z,
+        cell_size,
+        raster_width,
+        raster_height,
         &hex_ownership,
-        width,
-        height,
+        grid_width,
+        grid_height,
     );
     state.entity_renderer =
         EntityRenderer::new(&state.gpu, state.terrain.camera_bind_group_layout());
@@ -588,18 +636,19 @@ fn rebuild_terrain_and_overlay(
 }
 
 fn rebuild_overlay(state: &mut ViewerState, hex_ownership: Vec<Option<u8>>) {
-    let width = state.terrain.map_width();
-    let height = state.terrain.map_height();
     state.hex_overlay = HexOverlayRenderer::new(
         &state.gpu,
         state.terrain.camera_bind_group_layout(),
         state.terrain.heightmap_view(),
         state.terrain.sampler(),
-        width,
-        height,
+        state.terrain.raster_origin_x(),
+        state.terrain.raster_origin_z(),
+        state.terrain.raster_cell_size(),
+        state.terrain.map_width(),
+        state.terrain.map_height(),
         &hex_ownership,
-        width,
-        height,
+        state.live.hex_grid_width.max(1),
+        state.live.hex_grid_height.max(1),
     );
 }
 

@@ -44,6 +44,7 @@ pub struct V3SnapshotDelta {
     pub stacks_updated: Vec<StackUpdate>,
     pub stacks_dissolved: Vec<u32>,
     pub hex_changes: Vec<HexDelta>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub terrain_patches: Vec<TerrainPatch>,
     pub players: Vec<PlayerInfo>,
 }
