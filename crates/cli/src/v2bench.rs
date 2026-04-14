@@ -59,7 +59,7 @@ pub fn main(args: &[String]) {
     // Parse matchups.
     let matchups: Vec<Vec<&str>> = if let Some(m) = flag_value(args, "--matchups") {
         if m == "all" {
-            let names: Vec<&str> = v2_agent::builtin_agent_names().iter().copied().collect();
+            let names: Vec<&str> = v2_agent::builtin_agent_names().to_vec();
             let mut pairs = Vec::new();
             for i in 0..names.len() {
                 for j in (i + 1)..names.len() {
@@ -544,7 +544,9 @@ fn canonical_pair_with_owners(
     }
 }
 
-fn end_reason_label(reason: simulate_everything_engine::v2::gamelog::EngagementEndReason) -> &'static str {
+fn end_reason_label(
+    reason: simulate_everything_engine::v2::gamelog::EngagementEndReason,
+) -> &'static str {
     use simulate_everything_engine::v2::gamelog::EngagementEndReason;
 
     match reason {
@@ -640,8 +642,10 @@ fn analyze_engagements(
                         && (sample.unit_id == interval.unit_a || sample.unit_id == interval.unit_b)
                 })
                 .collect();
-            let mut grouped: HashMap<u64, Vec<&simulate_everything_engine::v2::gamelog::UnitPositionSample>> =
-                HashMap::new();
+            let mut grouped: HashMap<
+                u64,
+                Vec<&simulate_everything_engine::v2::gamelog::UnitPositionSample>,
+            > = HashMap::new();
             for sample in relevant_samples {
                 grouped.entry(sample.tick).or_default().push(sample);
             }
@@ -656,8 +660,12 @@ fn analyze_engagements(
                     continue;
                 }
                 sample_count += 1;
-                let a = pair_samples.iter().find(|sample| sample.unit_id == interval.unit_a);
-                let b = pair_samples.iter().find(|sample| sample.unit_id == interval.unit_b);
+                let a = pair_samples
+                    .iter()
+                    .find(|sample| sample.unit_id == interval.unit_a);
+                let b = pair_samples
+                    .iter()
+                    .find(|sample| sample.unit_id == interval.unit_b);
                 let (Some(a), Some(b)) = (a, b) else {
                     continue;
                 };
@@ -691,8 +699,10 @@ fn analyze_unengaged_adjacencies(
 ) -> Vec<AdjacencyInterval> {
     use simulate_everything_engine::v2::hex::{self, Axial};
 
-    let mut grouped: HashMap<u64, Vec<&simulate_everything_engine::v2::gamelog::UnitPositionSample>> =
-        HashMap::new();
+    let mut grouped: HashMap<
+        u64,
+        Vec<&simulate_everything_engine::v2::gamelog::UnitPositionSample>,
+    > = HashMap::new();
     for sample in &log.unit_positions {
         grouped.entry(sample.tick).or_default().push(sample);
     }
@@ -726,19 +736,19 @@ fn analyze_unengaged_adjacencies(
 
         let prior_keys: Vec<_> = active.keys().copied().collect();
         for key in prior_keys {
-            if !current.contains_key(&key) {
-                if let Some(finished) = active.remove(&key) {
-                    intervals.push(AdjacencyInterval {
-                        unit_a: finished.unit_a,
-                        unit_b: finished.unit_b,
-                        unit_a_owner: finished.unit_a_owner,
-                        unit_b_owner: finished.unit_b_owner,
-                        start_tick: finished.start_tick,
-                        end_tick: finished.last_tick,
-                        sample_count: ((finished.last_tick - finished.start_tick) / 10) + 1,
-                        approx_location: finished.last_location,
-                    });
-                }
+            if !current.contains_key(&key)
+                && let Some(finished) = active.remove(&key)
+            {
+                intervals.push(AdjacencyInterval {
+                    unit_a: finished.unit_a,
+                    unit_b: finished.unit_b,
+                    unit_a_owner: finished.unit_a_owner,
+                    unit_b_owner: finished.unit_b_owner,
+                    start_tick: finished.start_tick,
+                    end_tick: finished.last_tick,
+                    sample_count: ((finished.last_tick - finished.start_tick) / 10) + 1,
+                    approx_location: finished.last_location,
+                });
             }
         }
 
@@ -843,7 +853,10 @@ fn run_diagnose(
             let long_engagements: Vec<_> = analyses
                 .iter()
                 .filter(|analysis| {
-                    analysis.interval.end_tick.saturating_sub(analysis.interval.start_tick)
+                    analysis
+                        .interval
+                        .end_tick
+                        .saturating_sub(analysis.interval.start_tick)
                         >= LONG_ENGAGEMENT_THRESHOLD_TICKS
                 })
                 .collect();
@@ -925,7 +938,9 @@ fn run_diagnose(
             let status = if v >= 30.0 { "PASS" } else { "FAIL" };
             eprintln!("  survival rate when critical: {:.1}%  [{}]", v, status);
         }
-        None => eprintln!("  no critical engagements observed  [PASS] (rout prevents critical state)"),
+        None => {
+            eprintln!("  no critical engagements observed  [PASS] (rout prevents critical state)")
+        }
     }
 
     eprintln!("\n--- CHECK 3: Force Concentration (target >= 2.0 friendlies near attacker) ---");
@@ -1041,11 +1056,7 @@ fn check_retreat_rate(log: &simulate_everything_engine::v2::gamelog::GameLog) ->
         .events
         .iter()
         .filter_map(|e| {
-            if let GameEvent::UnitKilled {
-                unit_id,
-                ..
-            } = e
-            {
+            if let GameEvent::UnitKilled { unit_id, .. } = e {
                 Some(*unit_id)
             } else {
                 None
@@ -1302,7 +1313,7 @@ fn run_profile_game(
 
     let tick_limit = sim::timeout_limit(max_ticks);
     while state.tick < tick_limit && !sim::is_over(&state) {
-        if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+        if state.tick.is_multiple_of(AGENT_POLL_INTERVAL as u64) {
             let mut poll_us = vec![0u64; np];
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let p = pid as u8;
@@ -1381,30 +1392,30 @@ fn run_ascii_game(
     let tick_limit = sim::timeout_limit(max_ticks);
     while state.tick < tick_limit && !sim::is_over(&state) {
         // Render snapshot before this tick's agent poll.
-        if let Some(ticks) = snapshot_ticks {
-            if ticks.contains(&state.tick) {
-                println!("{}", ascii::render_state(&state));
-                // Also print per-player unit details.
-                for u in state.units.values() {
-                    let engaged = if u.engagements.is_empty() {
-                        ""
-                    } else {
-                        " ENGAGED"
-                    };
-                    let dest = u
-                        .destination
-                        .map(|d| format!(" -> ({},{})", d.q, d.r))
-                        .unwrap_or_default();
-                    eprintln!(
-                        "  P{} unit {} str={:.0} at ({},{}){}{}",
-                        u.owner, u.public_id, u.strength, u.pos.q, u.pos.r, dest, engaged,
-                    );
-                }
-                eprintln!();
+        if let Some(ticks) = snapshot_ticks
+            && ticks.contains(&state.tick)
+        {
+            println!("{}", ascii::render_state(&state));
+            // Also print per-player unit details.
+            for u in state.units.values() {
+                let engaged = if u.engagements.is_empty() {
+                    ""
+                } else {
+                    " ENGAGED"
+                };
+                let dest = u
+                    .destination
+                    .map(|d| format!(" -> ({},{})", d.q, d.r))
+                    .unwrap_or_default();
+                eprintln!(
+                    "  P{} unit {} str={:.0} at ({},{}){}{}",
+                    u.owner, u.public_id, u.strength, u.pos.q, u.pos.r, dest, engaged,
+                );
             }
+            eprintln!();
         }
 
-        if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+        if state.tick.is_multiple_of(AGENT_POLL_INTERVAL as u64) {
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let p = pid as u8;
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
@@ -1516,7 +1527,7 @@ fn run_bench_game(
 
     let tick_limit = sim::timeout_limit(max_ticks);
     while state.tick < tick_limit && !sim::is_over(&state) {
-        if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+        if state.tick.is_multiple_of(AGENT_POLL_INTERVAL as u64) {
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let p = pid as u8;
                 if !state.players.iter().any(|pl| pl.id == p && pl.alive) {
@@ -1538,7 +1549,7 @@ fn run_bench_game(
 
         sim::tick(&mut state);
 
-        if state.tick % snap_interval == 0 || sim::is_over(&state) {
+        if state.tick.is_multiple_of(snap_interval) || sim::is_over(&state) {
             let snap = take_snapshot(&state, num_players);
 
             // Track lead changes by unit count.
@@ -1550,10 +1561,10 @@ fn run_bench_game(
                 .max_by_key(|(_, u)| **u)
                 .map(|(i, _)| i as u8);
 
-            if let (Some(prev), Some(curr)) = (prev_leader, leader) {
-                if prev != curr {
-                    lead_changes += 1;
-                }
+            if let (Some(prev), Some(curr)) = (prev_leader, leader)
+                && prev != curr
+            {
+                lead_changes += 1;
             }
             prev_leader = leader;
 
@@ -1793,11 +1804,11 @@ fn score_game(
     }
 
     // Comeback: winner was behind late.
-    if let Some(wi) = winner_idx {
-        if winner_was_behind_late(wi, snapshots, max_ticks / 4) {
-            score += 30.0;
-            tags.push("comeback".into());
-        }
+    if let Some(wi) = winner_idx
+        && winner_was_behind_late(wi, snapshots, max_ticks / 4)
+    {
+        score += 30.0;
+        tags.push("comeback".into());
     }
 
     // Draw.
@@ -1845,11 +1856,11 @@ fn score_game(
     }
 
     // Upset.
-    if let Some(wi) = winner_idx {
-        if wi != 0 {
-            score += 5.0;
-            tags.push("upset".into());
-        }
+    if let Some(wi) = winner_idx
+        && wi != 0
+    {
+        score += 5.0;
+        tags.push("upset".into());
     }
 
     (score, tags)
@@ -1868,12 +1879,11 @@ fn count_late_lead_changes(snapshots: &[V2Snapshot], after_tick: u64) -> u32 {
             .max_by_key(|(_, u)| **u)
             .map(|(i, _)| i);
 
-        if snap.tick > after_tick {
-            if let (Some(prev), Some(curr)) = (prev_leader, leader) {
-                if prev != curr {
-                    changes += 1;
-                }
-            }
+        if snap.tick > after_tick
+            && let (Some(prev), Some(curr)) = (prev_leader, leader)
+            && prev != curr
+        {
+            changes += 1;
         }
         prev_leader = leader;
     }
@@ -1966,8 +1976,8 @@ fn print_interesting_games(results: &[V2GameResult], top_n: usize) {
 
     eprintln!("\n  Top {} interesting games:", top_n.min(ranked.len()));
     eprintln!(
-        "  {:>6} {:>6} {:>8} {:>12} {:>12} {:>8}  {}",
-        "seed", "ticks", "winner", "final_units", "final_hexes", "score", "tags"
+        "  {:>6} {:>6} {:>8} {:>12} {:>12} {:>8}  tags",
+        "seed", "ticks", "winner", "final_units", "final_hexes", "score"
     );
     for r in ranked.iter().take(top_n) {
         let winner_str = r.winner.as_deref().unwrap_or("draw");

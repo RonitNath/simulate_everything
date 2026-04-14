@@ -312,7 +312,7 @@ fn pick_settler_target(state: &GameState, player_id: u8, origin: Axial) -> Optio
         }
 
         let dist = hex::distance(origin, ax);
-        if dist < 2 || dist > 10 {
+        if !(2..=10).contains(&dist) {
             continue;
         }
 

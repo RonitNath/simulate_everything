@@ -228,7 +228,7 @@ fn run_scenario(scenario: Scenario) {
     };
 
     for _ in 0..scenario.ticks {
-        if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+        if state.tick.is_multiple_of(AGENT_POLL_INTERVAL as u64) {
             metrics.polling_ticks += 1;
             for (pid, agent) in agents.iter_mut().enumerate() {
                 let player_id = pid as u8;

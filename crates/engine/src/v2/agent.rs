@@ -71,6 +71,12 @@ pub struct SpreadAgent {
     cached_observation: Option<Observation>,
 }
 
+impl Default for SpreadAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpreadAgent {
     pub fn new() -> Self {
         Self {
@@ -119,14 +125,15 @@ impl SpreadAgent {
                     q: d.q,
                     r: d.r,
                 });
-                if let Some(idx) = cell_index(obs, Axial::new(unit.q, unit.r)) {
-                    if obs.stockpile_owner[idx] == Some(obs.player) && obs.road_levels[idx] == 0 {
-                        directives.push(Directive::BuildRoad {
-                            hex_q: unit.q,
-                            hex_r: unit.r,
-                            level: 1,
-                        });
-                    }
+                if let Some(idx) = cell_index(obs, Axial::new(unit.q, unit.r))
+                    && obs.stockpile_owner[idx] == Some(obs.player)
+                    && obs.road_levels[idx] == 0
+                {
+                    directives.push(Directive::BuildRoad {
+                        hex_q: unit.q,
+                        hex_r: unit.r,
+                        level: 1,
+                    });
                 }
             }
         }
@@ -180,6 +187,12 @@ pub struct StrikerAgent {
     mode: StrikerMode,
     rally_point: Option<Axial>,
     cached_observation: Option<Observation>,
+}
+
+impl Default for StrikerAgent {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StrikerAgent {
@@ -367,14 +380,15 @@ impl StrikerAgent {
                     q: d.q,
                     r: d.r,
                 });
-                if let Some(idx) = cell_index(obs, Axial::new(unit.q, unit.r)) {
-                    if obs.stockpile_owner[idx] == Some(obs.player) && obs.road_levels[idx] == 0 {
-                        directives.push(Directive::BuildRoad {
-                            hex_q: unit.q,
-                            hex_r: unit.r,
-                            level: 1,
-                        });
-                    }
+                if let Some(idx) = cell_index(obs, Axial::new(unit.q, unit.r))
+                    && obs.stockpile_owner[idx] == Some(obs.player)
+                    && obs.road_levels[idx] == 0
+                {
+                    directives.push(Directive::BuildRoad {
+                        hex_q: unit.q,
+                        hex_r: unit.r,
+                        level: 1,
+                    });
                 }
             }
         }
@@ -424,6 +438,12 @@ impl Agent for StrikerAgent {
 
 pub struct TurtleAgent {
     cached_observation: Option<Observation>,
+}
+
+impl Default for TurtleAgent {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TurtleAgent {
@@ -513,14 +533,15 @@ impl TurtleAgent {
                     q: d.q,
                     r: d.r,
                 });
-                if let Some(idx) = cell_index(obs, Axial::new(unit.q, unit.r)) {
-                    if obs.stockpile_owner[idx] == Some(obs.player) && obs.road_levels[idx] == 0 {
-                        directives.push(Directive::BuildRoad {
-                            hex_q: unit.q,
-                            hex_r: unit.r,
-                            level: 1,
-                        });
-                    }
+                if let Some(idx) = cell_index(obs, Axial::new(unit.q, unit.r))
+                    && obs.stockpile_owner[idx] == Some(obs.player)
+                    && obs.road_levels[idx] == 0
+                {
+                    directives.push(Directive::BuildRoad {
+                        hex_q: unit.q,
+                        hex_r: unit.r,
+                        level: 1,
+                    });
                 }
             }
         }

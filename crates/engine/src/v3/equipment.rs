@@ -60,23 +60,19 @@ where
     F: Fn(EntityKey) -> Option<WeaponProperties>,
 {
     // Check hands_required vs shield
-    if let Some(weapon_key) = equipment.weapon {
-        if let Some(props) = weapon_props(weapon_key) {
-            if props.hands_required >= 2 && equipment.shield.is_some() {
-                return Err(EquipError::HandsConflict);
-            }
-        }
+    if let Some(weapon_key) = equipment.weapon
+        && let Some(props) = weapon_props(weapon_key)
+        && props.hands_required >= 2
+        && equipment.shield.is_some()
+    {
+        return Err(EquipError::HandsConflict);
     }
     Ok(())
 }
 
 /// Equip an armor entity to the appropriate zones on an Equipment component.
 /// The armor's `zones_covered` determines which slots are filled.
-pub fn equip_armor(
-    equipment: &mut Equipment,
-    armor_key: EntityKey,
-    armor: &ArmorProperties,
-) {
+pub fn equip_armor(equipment: &mut Equipment, armor_key: EntityKey, armor: &ArmorProperties) {
     for zone in &armor.zones_covered {
         let idx = zone_index(*zone);
         equipment.armor_slots[idx] = Some(armor_key);
@@ -105,9 +101,9 @@ pub fn zone_index(zone: BodyZone) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::armor;
     use super::super::weapon;
+    use super::*;
     use slotmap::SlotMap;
 
     fn make_key(sm: &mut SlotMap<EntityKey, ()>) -> EntityKey {
@@ -134,9 +130,16 @@ mod tests {
             armor_slots: [None; ZONE_COUNT],
         };
 
-        assert!(validate_equipment(&eq, |k| {
-            if k == sword_key { Some(sword.clone()) } else { None }
-        }).is_ok());
+        assert!(
+            validate_equipment(&eq, |k| {
+                if k == sword_key {
+                    Some(sword.clone())
+                } else {
+                    None
+                }
+            })
+            .is_ok()
+        );
     }
 
     #[test]
@@ -155,7 +158,11 @@ mod tests {
 
         assert_eq!(
             validate_equipment(&eq, |k| {
-                if k == bow_key { Some(bow.clone()) } else { None }
+                if k == bow_key {
+                    Some(bow.clone())
+                } else {
+                    None
+                }
             }),
             Err(EquipError::HandsConflict)
         );
@@ -207,8 +214,14 @@ mod tests {
         equip_armor(&mut eq, armor_key, &hauberk);
 
         assert_eq!(eq.armor_slots[zone_index(BodyZone::Torso)], Some(armor_key));
-        assert_eq!(eq.armor_slots[zone_index(BodyZone::LeftArm)], Some(armor_key));
-        assert_eq!(eq.armor_slots[zone_index(BodyZone::RightArm)], Some(armor_key));
+        assert_eq!(
+            eq.armor_slots[zone_index(BodyZone::LeftArm)],
+            Some(armor_key)
+        );
+        assert_eq!(
+            eq.armor_slots[zone_index(BodyZone::RightArm)],
+            Some(armor_key)
+        );
         assert_eq!(eq.armor_slots[zone_index(BodyZone::Head)], None);
     }
 

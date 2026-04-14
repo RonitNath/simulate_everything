@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use super::hex::Axial;
-use super::state::{UnitKey, Role};
 use super::observation::Observation;
+use super::state::{Role, UnitKey};
+use serde::{Deserialize, Serialize};
 
 /// Grand strategic posture: what the agent is trying to accomplish this phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,13 +65,31 @@ pub enum StrategicDirective {
 /// Concrete entity-level orders from the operations layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OperationalCommand {
-    AssignRole { entity: UnitKey, role: Role },
-    FormStack { entities: Vec<UnitKey> },
-    RouteStack { stack: StackId, destination: Axial },
-    DisbandStack { stack: StackId },
-    BuildStructure { hex: Axial, structure_type: StructureType },
-    EstablishSupplyRoute { from: Axial, to: Axial },
-    ProducePerson { settlement_hex: Axial },
+    AssignRole {
+        entity: UnitKey,
+        role: Role,
+    },
+    FormStack {
+        entities: Vec<UnitKey>,
+    },
+    RouteStack {
+        stack: StackId,
+        destination: Axial,
+    },
+    DisbandStack {
+        stack: StackId,
+    },
+    BuildStructure {
+        hex: Axial,
+        structure_type: StructureType,
+    },
+    EstablishSupplyRoute {
+        from: Axial,
+        to: Axial,
+    },
+    ProducePerson {
+        settlement_hex: Axial,
+    },
 }
 
 /// Per-tick orders for individual entities in contact with enemies.
@@ -99,7 +117,11 @@ pub trait StrategyLayer: Send {
 
 /// Translates strategic directives into entity-level orders every ~5 ticks.
 pub trait OperationsLayer: Send {
-    fn execute(&mut self, obs: &Observation, directives: &[StrategicDirective]) -> Vec<OperationalCommand>;
+    fn execute(
+        &mut self,
+        obs: &Observation,
+        directives: &[StrategicDirective],
+    ) -> Vec<OperationalCommand>;
 }
 
 /// Issues per-tick combat decisions for stacks in contact with enemies.

@@ -504,11 +504,11 @@ fn recompute_player_totals(state: &mut GameState) {
         player.material = 0.0;
     }
     for cell in &state.grid {
-        if let Some(owner) = cell.stockpile_owner {
-            if let Some(player) = state.players.iter_mut().find(|p| p.id == owner) {
-                player.food += cell.food_stockpile;
-                player.material += cell.material_stockpile;
-            }
+        if let Some(owner) = cell.stockpile_owner
+            && let Some(player) = state.players.iter_mut().find(|p| p.id == owner)
+        {
+            player.food += cell.food_stockpile;
+            player.material += cell.material_stockpile;
         }
     }
 }
@@ -658,7 +658,7 @@ fn place_start_positions_np(
 
         for &(row, col) in &sampled {
             let ax = offset_to_axial(row as i32, col as i32);
-            if placed.iter().any(|&p| p == ax) {
+            if placed.contains(&ax) {
                 continue;
             }
             let min_dist = placed

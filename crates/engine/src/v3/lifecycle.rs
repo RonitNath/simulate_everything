@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 
 use super::hex::world_to_hex;
-use super::state::{Entity, EntityBuilder, GameState};
+use super::state::{EntityBuilder, GameState};
 use crate::v2::state::EntityKey;
 
 // ---------------------------------------------------------------------------
@@ -57,10 +57,10 @@ pub fn contain(state: &mut GameState, container: EntityKey, contained: EntityKey
     }
 
     // Add to parent's contains list
-    if let Some(parent) = state.entities.get_mut(container) {
-        if !parent.contains.contains(&contained) {
-            parent.contains.push(contained);
-        }
+    if let Some(parent) = state.entities.get_mut(container)
+        && !parent.contains.contains(&contained)
+    {
+        parent.contains.push(contained);
     }
 }
 
@@ -128,10 +128,11 @@ pub fn cleanup_dead(state: &mut GameState) {
         .entities
         .iter()
         .filter_map(|(key, entity)| {
-            if let Some(ref vitals) = entity.vitals {
-                if vitals.is_dead() && (entity.mobile.is_some() || entity.combatant.is_some()) {
-                    return Some(key);
-                }
+            if let Some(ref vitals) = entity.vitals
+                && vitals.is_dead()
+                && (entity.mobile.is_some() || entity.combatant.is_some())
+            {
+                return Some(key);
             }
             None
         })
@@ -210,10 +211,10 @@ pub fn check_elimination(state: &GameState) -> SmallVec<[u8; 4]> {
             if is_dead {
                 continue;
             }
-            if let Some(owner) = entity.owner {
-                if (owner as usize) < alive.len() {
-                    alive[owner as usize] = true;
-                }
+            if let Some(owner) = entity.owner
+                && (owner as usize) < alive.len()
+            {
+                alive[owner as usize] = true;
             }
         }
     }

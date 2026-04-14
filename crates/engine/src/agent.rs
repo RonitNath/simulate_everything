@@ -175,10 +175,13 @@ pub(crate) fn valid_dirs(obs: &Observation, row: usize, col: usize) -> Vec<Direc
         let (dr, dc) = dir.delta();
         let nr = row as i32 + dr;
         let nc = col as i32 + dc;
-        if nr >= 0 && nc >= 0 && (nr as usize) < obs.height && (nc as usize) < obs.width {
-            if obs.tile(nr as usize, nc as usize) != Tile::Mountain {
-                dirs.push(dir);
-            }
+        if nr >= 0
+            && nc >= 0
+            && (nr as usize) < obs.height
+            && (nc as usize) < obs.width
+            && obs.tile(nr as usize, nc as usize) != Tile::Mountain
+        {
+            dirs.push(dir);
         }
     }
     dirs

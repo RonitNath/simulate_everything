@@ -110,21 +110,21 @@ pub fn penetration_modifier(
     // Construction modifier: how the shape interacts with the damage type
     let construction_mod = match (damage, construction) {
         // Slash vs constructions
-        (DamageType::Slash, ArmorConstruction::Plate) => 0.4,   // plate deflects slashes
-        (DamageType::Slash, ArmorConstruction::Chain) => 0.6,   // chain resists slashes
-        (DamageType::Slash, ArmorConstruction::Padded) => 1.2,  // padding doesn't stop edges
+        (DamageType::Slash, ArmorConstruction::Plate) => 0.4, // plate deflects slashes
+        (DamageType::Slash, ArmorConstruction::Chain) => 0.6, // chain resists slashes
+        (DamageType::Slash, ArmorConstruction::Padded) => 1.2, // padding doesn't stop edges
         (DamageType::Slash, ArmorConstruction::Layered) => 0.7, // layers catch edges
 
         // Pierce vs constructions
-        (DamageType::Pierce, ArmorConstruction::Plate) => 0.8,  // plate deflects but gaps exist
-        (DamageType::Pierce, ArmorConstruction::Chain) => 0.5,  // chain disperses point loads
+        (DamageType::Pierce, ArmorConstruction::Plate) => 0.8, // plate deflects but gaps exist
+        (DamageType::Pierce, ArmorConstruction::Chain) => 0.5, // chain disperses point loads
         (DamageType::Pierce, ArmorConstruction::Padded) => 1.3, // padding offers little vs points
         (DamageType::Pierce, ArmorConstruction::Layered) => 0.7,
 
         // Crush vs constructions
-        (DamageType::Crush, ArmorConstruction::Plate) => 0.9,   // rigid transmits some force
-        (DamageType::Crush, ArmorConstruction::Chain) => 1.1,   // chain doesn't absorb blunt
-        (DamageType::Crush, ArmorConstruction::Padded) => 0.4,  // padding absorbs crush
+        (DamageType::Crush, ArmorConstruction::Plate) => 0.9, // rigid transmits some force
+        (DamageType::Crush, ArmorConstruction::Chain) => 1.1, // chain doesn't absorb blunt
+        (DamageType::Crush, ArmorConstruction::Padded) => 0.4, // padding absorbs crush
         (DamageType::Crush, ArmorConstruction::Layered) => 0.6,
     };
 
@@ -185,21 +185,33 @@ mod tests {
     #[test]
     fn penetration_modifier_slash_vs_plate_is_low() {
         // Plate deflects slashes well
-        let m = penetration_modifier(DamageType::Slash, MaterialType::Iron, ArmorConstruction::Plate);
+        let m = penetration_modifier(
+            DamageType::Slash,
+            MaterialType::Iron,
+            ArmorConstruction::Plate,
+        );
         assert!(m < 0.5, "slash vs iron plate should be very low: {m}");
     }
 
     #[test]
     fn penetration_modifier_crush_vs_padded_is_low() {
         // Padding absorbs crush
-        let m = penetration_modifier(DamageType::Crush, MaterialType::Leather, ArmorConstruction::Padded);
+        let m = penetration_modifier(
+            DamageType::Crush,
+            MaterialType::Leather,
+            ArmorConstruction::Padded,
+        );
         assert!(m < 0.6, "crush vs leather padded should be low: {m}");
     }
 
     #[test]
     fn penetration_modifier_pierce_vs_padded_is_high() {
         // Padding doesn't stop piercing
-        let m = penetration_modifier(DamageType::Pierce, MaterialType::Cloth, ArmorConstruction::Padded);
+        let m = penetration_modifier(
+            DamageType::Pierce,
+            MaterialType::Cloth,
+            ArmorConstruction::Padded,
+        );
         assert!(m > 1.5, "pierce vs cloth padded should be high: {m}");
     }
 
@@ -207,16 +219,26 @@ mod tests {
     fn penetration_modifier_all_combos_positive() {
         for damage in [DamageType::Slash, DamageType::Pierce, DamageType::Crush] {
             for material in [
-                MaterialType::Iron, MaterialType::Steel, MaterialType::Bronze,
-                MaterialType::Leather, MaterialType::Wood, MaterialType::Bone,
-                MaterialType::Cloth, MaterialType::Stone,
+                MaterialType::Iron,
+                MaterialType::Steel,
+                MaterialType::Bronze,
+                MaterialType::Leather,
+                MaterialType::Wood,
+                MaterialType::Bone,
+                MaterialType::Cloth,
+                MaterialType::Stone,
             ] {
                 for construction in [
-                    ArmorConstruction::Plate, ArmorConstruction::Chain,
-                    ArmorConstruction::Padded, ArmorConstruction::Layered,
+                    ArmorConstruction::Plate,
+                    ArmorConstruction::Chain,
+                    ArmorConstruction::Padded,
+                    ArmorConstruction::Layered,
                 ] {
                     let m = penetration_modifier(damage, material, construction);
-                    assert!(m > 0.0, "modifier must be positive: {damage:?} vs {material:?} {construction:?} = {m}");
+                    assert!(
+                        m > 0.0,
+                        "modifier must be positive: {damage:?} vs {material:?} {construction:?} = {m}"
+                    );
                 }
             }
         }
@@ -224,9 +246,20 @@ mod tests {
 
     #[test]
     fn steel_resists_more_than_cloth() {
-        let steel = penetration_modifier(DamageType::Slash, MaterialType::Steel, ArmorConstruction::Plate);
-        let cloth = penetration_modifier(DamageType::Slash, MaterialType::Cloth, ArmorConstruction::Plate);
-        assert!(steel < cloth, "steel plate should resist slash better than cloth plate");
+        let steel = penetration_modifier(
+            DamageType::Slash,
+            MaterialType::Steel,
+            ArmorConstruction::Plate,
+        );
+        let cloth = penetration_modifier(
+            DamageType::Slash,
+            MaterialType::Cloth,
+            ArmorConstruction::Plate,
+        );
+        assert!(
+            steel < cloth,
+            "steel plate should resist slash better than cloth plate"
+        );
     }
 
     #[test]

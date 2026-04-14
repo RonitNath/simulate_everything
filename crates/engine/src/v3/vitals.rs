@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::armor::BodyZone;
-use super::wound::{zone_wound_weight, Wound};
+use super::wound::{Wound, zone_wound_weight};
 
 // ---------------------------------------------------------------------------
 // Tunable constants — blood thresholds
@@ -60,6 +60,12 @@ pub struct Vitals {
     pub stagger_ticks: u16,
     /// Current movement mode.
     pub movement_mode: MovementMode,
+}
+
+impl Default for Vitals {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Vitals {
@@ -180,10 +186,10 @@ pub fn stamina_drain_for_mode(mode: MovementMode) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::v2::state::EntityKey;
     use super::super::armor::DamageType;
     use super::super::wound::{Severity, Wound};
+    use super::*;
+    use crate::v2::state::EntityKey;
     use slotmap::SlotMap;
 
     fn dummy_attacker() -> EntityKey {
@@ -410,7 +416,10 @@ mod tests {
         v_sprint.movement_mode = MovementMode::Sprint;
         v_sprint.tick_movement_drain(1.0);
 
-        assert!(v_sprint.stamina < v_run.stamina, "sprint should drain more than run");
+        assert!(
+            v_sprint.stamina < v_run.stamina,
+            "sprint should drain more than run"
+        );
     }
 
     #[test]

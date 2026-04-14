@@ -646,10 +646,10 @@ fn build_stack_list(state: &GameState) -> Vec<StackInfo> {
                     .members
                     .iter()
                     .fold((0.0f32, 0.0f32, 0u32), |(sx, sy, n), &key| {
-                        if let Some(entity) = state.entities.get(key) {
-                            if let Some(pos) = entity.pos {
-                                return (sx + pos.x, sy + pos.y, n + 1);
-                            }
+                        if let Some(entity) = state.entities.get(key)
+                            && let Some(pos) = entity.pos
+                        {
+                            return (sx + pos.x, sy + pos.y, n + 1);
                         }
                         (sx, sy, n)
                     });
@@ -774,6 +774,12 @@ pub struct DeltaTracker {
     prev_stacks: HashMap<u32, StackInfo>,
 }
 
+impl Default for DeltaTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DeltaTracker {
     pub fn new() -> Self {
         Self {
@@ -820,10 +826,10 @@ impl DeltaTracker {
         // Updated: in both, with changed fields.
         let mut entities_updated: Vec<EntityUpdate> = Vec::new();
         for e in &cur_entities {
-            if let Some(prev) = self.prev_entities.get(&e.id) {
-                if let Some(update) = diff_entity(prev, e) {
-                    entities_updated.push(update);
-                }
+            if let Some(prev) = self.prev_entities.get(&e.id)
+                && let Some(update) = diff_entity(prev, e)
+            {
+                entities_updated.push(update);
             }
         }
 
@@ -857,10 +863,10 @@ impl DeltaTracker {
 
         let mut stacks_updated: Vec<StackUpdate> = Vec::new();
         for s in &cur_stacks {
-            if let Some(prev) = self.prev_stacks.get(&s.id) {
-                if let Some(update) = diff_stack(prev, s) {
-                    stacks_updated.push(update);
-                }
+            if let Some(prev) = self.prev_stacks.get(&s.id)
+                && let Some(update) = diff_stack(prev, s)
+            {
+                stacks_updated.push(update);
             }
         }
 
@@ -965,18 +971,18 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
         changed = true;
     }
 
-    if let (Some(cb), Some(pb)) = (cur.blood, prev.blood) {
-        if (cb - pb).abs() > VITAL_EPSILON {
-            update.blood = Some(cb);
-            changed = true;
-        }
+    if let (Some(cb), Some(pb)) = (cur.blood, prev.blood)
+        && (cb - pb).abs() > VITAL_EPSILON
+    {
+        update.blood = Some(cb);
+        changed = true;
     }
 
-    if let (Some(cs), Some(ps)) = (cur.stamina, prev.stamina) {
-        if (cs - ps).abs() > VITAL_EPSILON {
-            update.stamina = Some(cs);
-            changed = true;
-        }
+    if let (Some(cs), Some(ps)) = (cur.stamina, prev.stamina)
+        && (cs - ps).abs() > VITAL_EPSILON
+    {
+        update.stamina = Some(cs);
+        changed = true;
     }
 
     if cur.wounds != prev.wounds {
@@ -1029,11 +1035,7 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
         changed = true;
     }
 
-    if changed {
-        Some(update)
-    } else {
-        None
-    }
+    if changed { Some(update) } else { None }
 }
 
 /// Compare two stack snapshots and return a StackUpdate with only changed fields.
@@ -1068,11 +1070,7 @@ fn diff_stack(prev: &StackInfo, cur: &StackInfo) -> Option<StackUpdate> {
         changed = true;
     }
 
-    if changed {
-        Some(update)
-    } else {
-        None
-    }
+    if changed { Some(update) } else { None }
 }
 
 #[cfg(test)]

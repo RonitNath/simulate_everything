@@ -34,8 +34,8 @@ use simulate_everything_engine::{
     v2,
 };
 use std::fs;
-use std::path::PathBuf;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tokio::sync::{Mutex, broadcast};
@@ -121,7 +121,7 @@ async fn simulator_page(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 async fn api_game(Query(params): Query<GameParams>) -> impl IntoResponse {
-    let seed = params.seed.unwrap_or_else(|| rand::random());
+    let seed = params.seed.unwrap_or_else(rand::random);
     let players = params.players.unwrap_or(2);
     let turns = params.turns.unwrap_or(500);
     let size = match (params.width, params.height) {
@@ -189,7 +189,7 @@ async fn api_v2_game(Query(params): Query<V2GameParams>) -> impl IntoResponse {
         width: params.width.unwrap_or(30),
         height: params.height.unwrap_or(30),
         num_players: params.players.unwrap_or(2),
-        seed: params.seed.unwrap_or_else(|| rand::random()),
+        seed: params.seed.unwrap_or_else(rand::random),
     };
     let max_ticks = params.ticks.unwrap_or(2000);
     let replay = tokio::task::spawn_blocking(move || {
@@ -684,7 +684,11 @@ async fn api_v3_replay_files() -> Result<Json<Vec<ReplayFileEntry>>, StatusCode>
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             entries.push(ReplayFileEntry {
-                name: path.file_name().and_then(|s| s.to_str()).unwrap_or("unknown").to_string(),
+                name: path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
                 path: path.to_string_lossy().to_string(),
                 size_bytes: metadata.len(),
                 modified_unix_ms,
@@ -705,7 +709,9 @@ async fn api_v3_replay_file(
     Query(query): Query<ReplayFileQuery>,
 ) -> Result<(StatusCode, String), StatusCode> {
     let requested = PathBuf::from(&query.path);
-    let canonical = requested.canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
+    let canonical = requested
+        .canonicalize()
+        .map_err(|_| StatusCode::NOT_FOUND)?;
     if !replay_search_roots()
         .iter()
         .any(|root| canonical.starts_with(root))
@@ -1007,15 +1013,12 @@ async fn api_v3_rr_config(
     if let Some(ap) = body.autoplay {
         state.v3_rr.set_autoplay(ap);
     }
-    let mode_val = body
-        .mode
-        .as_deref()
-        .and_then(|s| match s {
-            "strategic" | "Strategic" => Some(v3_protocol::TimeMode::Strategic),
-            "tactical" | "Tactical" => Some(v3_protocol::TimeMode::Tactical),
-            "cinematic" | "Cinematic" => Some(v3_protocol::TimeMode::Cinematic),
-            _ => None,
-        });
+    let mode_val = body.mode.as_deref().and_then(|s| match s {
+        "strategic" | "Strategic" => Some(v3_protocol::TimeMode::Strategic),
+        "tactical" | "Tactical" => Some(v3_protocol::TimeMode::Tactical),
+        "cinematic" | "Cinematic" => Some(v3_protocol::TimeMode::Cinematic),
+        _ => None,
+    });
     state
         .v3_rr
         .broadcast_config(body.tick_ms, mode_val, body.autoplay)
@@ -1043,20 +1046,15 @@ async fn api_v3_rr_reset(State(state): State<Arc<AppState>>) -> impl IntoRespons
 }
 
 async fn api_v3_rr_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let status = serde_json::to_value(
-        state
-            .v3_rr
-            .spectator_catchup()
-            .await
-            .into_iter()
-            .find_map(|m| {
-                if let v3_protocol::V3ServerToSpectator::RrStatus(s) = m {
-                    Some(s)
-                } else {
-                    None
-                }
-            }),
-    )
+    let status = serde_json::to_value(state.v3_rr.spectator_catchup().await.into_iter().find_map(
+        |m| {
+            if let v3_protocol::V3ServerToSpectator::RrStatus(s) = m {
+                Some(s)
+            } else {
+                None
+            }
+        },
+    ))
     .unwrap_or(serde_json::json!({}));
     Json(status)
 }
@@ -1411,7 +1409,10 @@ async fn main() {
         .route("/api/v3/drill/exec", axum::routing::post(api_v3_drill_exec))
         .route("/api/v3/drill/status", get(api_v3_drill_status))
         .route("/api/v3/drill/ascii", get(api_v3_drill_ascii))
-        .route("/api/v3/drill/reset", axum::routing::post(api_v3_drill_reset))
+        .route(
+            "/api/v3/drill/reset",
+            axum::routing::post(api_v3_drill_reset),
+        )
         .route("/api/v3/drill/zoo", axum::routing::post(api_v3_drill_zoo))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);

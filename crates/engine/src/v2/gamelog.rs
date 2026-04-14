@@ -111,6 +111,12 @@ pub struct GameLog {
     known_settlements: Vec<(u8, Axial)>,
 }
 
+impl Default for GameLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GameLog {
     pub fn new() -> Self {
         Self {
@@ -459,8 +465,8 @@ impl GameLog {
             let middle: Vec<_> = timeline[2..timeline.len() - 3]
                 .iter()
                 .step_by((timeline.len() - 5).max(1) / middle_budget.max(1) + 1)
-                .cloned()
                 .take(middle_budget)
+                .cloned()
                 .collect();
             timeline = head;
             timeline.extend(middle);

@@ -6,7 +6,7 @@ use super::sim;
 use super::state::GameState;
 
 pub(crate) fn advance_game_tick(state: &mut GameState, agents: &mut [Box<dyn Agent>]) {
-    if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+    if state.tick.is_multiple_of(AGENT_POLL_INTERVAL as u64) {
         let mut session =
             observation::ObservationSession::new(state.players.len(), state.width * state.height);
         for (player_id, agent) in agents.iter_mut().enumerate() {
@@ -50,7 +50,7 @@ pub fn run_loop<F>(
         agent.init(&init);
     }
     while state.tick < tick_limit && !sim::is_over(state) {
-        if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+        if state.tick.is_multiple_of(AGENT_POLL_INTERVAL as u64) {
             for (player_id, agent) in agents.iter_mut().enumerate() {
                 let pid = player_id as u8;
                 if !state.players.iter().any(|p| p.id == pid && p.alive) {
@@ -98,7 +98,7 @@ pub fn run_loop<F>(
         sim::tick(state);
 
         // Record unit positions every 10 ticks
-        if state.game_log.is_some() && state.tick % 10 == 0 {
+        if state.game_log.is_some() && state.tick.is_multiple_of(10) {
             let positions: Vec<super::gamelog::UnitPositionSample> = state
                 .units
                 .values()
@@ -119,7 +119,7 @@ pub fn run_loop<F>(
         }
 
         // Economy sampling every 50 ticks
-        if state.game_log.is_some() && state.tick % 50 == 0 {
+        if state.game_log.is_some() && state.tick.is_multiple_of(50) {
             let player_ids: Vec<u8> = state
                 .players
                 .iter()

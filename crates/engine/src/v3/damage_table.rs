@@ -194,7 +194,7 @@ impl DamageEstimateTable {
         let tick = obs.tick;
 
         // Store in recent buffer.
-        let recent_buf = self.recent.entry(obs.key).or_insert_with(Vec::new);
+        let recent_buf = self.recent.entry(obs.key).or_default();
         if recent_buf.len() >= SURPRISE_WINDOW * 2 {
             // Keep only the last SURPRISE_WINDOW entries.
             let drain_to = recent_buf.len() - SURPRISE_WINDOW;
@@ -206,7 +206,7 @@ impl DamageEstimateTable {
             DamageEstimate::theoretical(0.5) // no physics data, use neutral
         });
 
-        let prior_wound_rate = entry.wound_rate;
+        let _prior_wound_rate = entry.wound_rate;
 
         // Incremental update.
         let n = entry.sample_count as f32 + 1.0;
@@ -223,28 +223,27 @@ impl DamageEstimateTable {
         // Surprise detection: compare recent window against overall running
         // average. If they diverge significantly, conditions have changed —
         // reset from the recent window only.
-        if entry.sample_count > SURPRISE_WINDOW as u32 * 2 {
-            if let Some(recent) = self.recent.get(&obs.key) {
-                if recent.len() >= SURPRISE_WINDOW {
-                    let window = &recent[recent.len() - SURPRISE_WINDOW..];
-                    let recent_wound_rate = window.iter().filter(|o| o.wounded).count() as f32
-                        / SURPRISE_WINDOW as f32;
+        if entry.sample_count > SURPRISE_WINDOW as u32 * 2
+            && let Some(recent) = self.recent.get(&obs.key)
+            && recent.len() >= SURPRISE_WINDOW
+        {
+            let window = &recent[recent.len() - SURPRISE_WINDOW..];
+            let recent_wound_rate =
+                window.iter().filter(|o| o.wounded).count() as f32 / SURPRISE_WINDOW as f32;
 
-                    if (recent_wound_rate - entry.wound_rate).abs() > SURPRISE_THRESHOLD {
-                        let new_severity: f32 = window.iter().map(|o| o.severity).sum::<f32>()
-                            / SURPRISE_WINDOW as f32;
-                        let new_stagger: f32 = window.iter().filter(|o| o.staggered).count()
-                            as f32 / SURPRISE_WINDOW as f32;
-                        let new_stamina: f32 = window.iter().map(|o| o.stamina_cost).sum::<f32>()
-                            / SURPRISE_WINDOW as f32;
+            if (recent_wound_rate - entry.wound_rate).abs() > SURPRISE_THRESHOLD {
+                let new_severity: f32 =
+                    window.iter().map(|o| o.severity).sum::<f32>() / SURPRISE_WINDOW as f32;
+                let new_stagger: f32 =
+                    window.iter().filter(|o| o.staggered).count() as f32 / SURPRISE_WINDOW as f32;
+                let new_stamina: f32 =
+                    window.iter().map(|o| o.stamina_cost).sum::<f32>() / SURPRISE_WINDOW as f32;
 
-                        entry.wound_rate = recent_wound_rate;
-                        entry.avg_severity = new_severity;
-                        entry.stagger_rate = new_stagger;
-                        entry.stamina_drain = new_stamina;
-                        entry.sample_count = SURPRISE_WINDOW as u32;
-                    }
-                }
+                entry.wound_rate = recent_wound_rate;
+                entry.avg_severity = new_severity;
+                entry.stagger_rate = new_stagger;
+                entry.stamina_drain = new_stamina;
+                entry.sample_count = SURPRISE_WINDOW as u32;
             }
         }
     }
@@ -289,8 +288,11 @@ mod tests {
     fn from_physics_all_entries_have_valid_rates() {
         let table = DamageEstimateTable::from_physics();
         for est in table.estimates.values() {
-            assert!(est.wound_rate >= 0.05 && est.wound_rate <= 0.95,
-                "wound_rate {} out of range", est.wound_rate);
+            assert!(
+                est.wound_rate >= 0.05 && est.wound_rate <= 0.95,
+                "wound_rate {} out of range",
+                est.wound_rate
+            );
             assert!(est.sample_count == 0, "theoretical should have 0 samples");
         }
     }
@@ -305,8 +307,11 @@ mod tests {
             armor_material: MaterialType::Steel,
         };
         let est = table.get(&key).unwrap();
-        assert!(est.wound_rate < 0.3,
-            "slash vs steel plate should have low wound rate: {}", est.wound_rate);
+        assert!(
+            est.wound_rate < 0.3,
+            "slash vs steel plate should have low wound rate: {}",
+            est.wound_rate
+        );
     }
 
     #[test]
@@ -319,8 +324,11 @@ mod tests {
             armor_material: MaterialType::Leather,
         };
         let est = table.get(&key).unwrap();
-        assert!(est.wound_rate < 0.4,
-            "crush vs leather padded should have low wound rate: {}", est.wound_rate);
+        assert!(
+            est.wound_rate < 0.4,
+            "crush vs leather padded should have low wound rate: {}",
+            est.wound_rate
+        );
     }
 
     #[test]
@@ -333,8 +341,11 @@ mod tests {
             armor_material: MaterialType::Leather,
         };
         let est = table.get(&key).unwrap();
-        assert!(est.wound_rate > 0.3,
-            "pierce vs leather padded should have high wound rate: {}", est.wound_rate);
+        assert!(
+            est.wound_rate > 0.3,
+            "pierce vs leather padded should have high wound rate: {}",
+            est.wound_rate
+        );
     }
 
     #[test]
@@ -348,7 +359,11 @@ mod tests {
         }
 
         let est = table.get(&key).unwrap();
-        assert!(est.wound_rate > 0.9, "should converge near 1.0: {}", est.wound_rate);
+        assert!(
+            est.wound_rate > 0.9,
+            "should converge near 1.0: {}",
+            est.wound_rate
+        );
         assert_eq!(est.sample_count, 10);
     }
 

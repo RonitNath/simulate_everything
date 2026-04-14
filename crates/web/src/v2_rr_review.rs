@@ -231,11 +231,15 @@ impl ReviewStore {
         let _guard = self.lock.lock().await;
         self.ensure_root().await?;
         let mut manifest = self.read_manifest().await?;
-        manifest.reviews.retain(|entry| entry.id != bundle.summary.id);
-        manifest.reviews.push(bundle.summary.clone());
         manifest
             .reviews
-            .sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| a.id.cmp(&b.id)));
+            .retain(|entry| entry.id != bundle.summary.id);
+        manifest.reviews.push(bundle.summary.clone());
+        manifest.reviews.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         let bytes = serde_json::to_vec_pretty(&bundle)?;
         fs::write(self.bundle_path(&bundle.summary.id), bytes).await?;
         self.write_manifest(&manifest).await
@@ -351,11 +355,11 @@ impl ReviewRecorder {
         self.append_log_deltas(state.game_log.as_ref());
         let tick_anomalies = detect_overlap_anomalies(state);
         self.anomalies.extend(tick_anomalies.iter().cloned());
-        if let Some(active) = &mut self.active_segment {
-            if state.tick >= active.start_tick {
-                active.frames.push(frame);
-                active.anomalies.extend(tick_anomalies);
-            }
+        if let Some(active) = &mut self.active_segment
+            && state.tick >= active.start_tick
+        {
+            active.frames.push(frame);
+            active.anomalies.extend(tick_anomalies);
         }
     }
 
@@ -366,7 +370,8 @@ impl ReviewRecorder {
             current_tick,
             capturable_start_tick: self.frames.front().map(|f| f.tick),
             capturable_end_tick: self.frames.back().map(|f| f.tick),
-            pending_capture_count: self.pending_points.len() + usize::from(self.active_segment.is_some()),
+            pending_capture_count: self.pending_points.len()
+                + usize::from(self.active_segment.is_some()),
             active_capture: self.active_segment_summary(),
             review_dir: self.store.root().display().to_string(),
         }
@@ -411,7 +416,11 @@ impl ReviewRecorder {
         pending
     }
 
-    fn validate_game_and_tick(&self, game_number: u64, tick: u64) -> Result<(u64, u64, u64), String> {
+    fn validate_game_and_tick(
+        &self,
+        game_number: u64,
+        tick: u64,
+    ) -> Result<(u64, u64, u64), String> {
         let current_game = self
             .game_number
             .ok_or_else(|| String::from("RR game not initialized"))?;
@@ -536,11 +545,7 @@ impl ReviewRecorder {
         })
     }
 
-    pub fn stop_capture(
-        &mut self,
-        game_number: u64,
-        tick: u64,
-    ) -> Result<ReviewBundle, String> {
+    pub fn stop_capture(&mut self, game_number: u64, tick: u64) -> Result<ReviewBundle, String> {
         let (_current_game, _capturable_start_tick, _capturable_end_tick) =
             self.validate_game_and_tick(game_number, tick)?;
         let active = self
@@ -558,13 +563,19 @@ impl ReviewRecorder {
     }
 
     pub fn collect_ready_bundles(&mut self, state: &GameState) -> Vec<ReviewBundle> {
-        self.collect_point_bundles_matching(state, |pending, current_tick| pending.range_end <= current_tick)
+        self.collect_point_bundles_matching(state, |pending, current_tick| {
+            pending.range_end <= current_tick
+        })
     }
 
     pub fn finalize_all(&mut self, state: &GameState) -> Vec<ReviewBundle> {
-        let mut bundles = self.collect_point_bundles_matching(state, |_pending, _current_tick| true);
+        let mut bundles =
+            self.collect_point_bundles_matching(state, |_pending, _current_tick| true);
         if let Some(active) = self.active_segment.take() {
-            let final_tick = self.current_tick.unwrap_or(state.tick).max(active.start_tick);
+            let final_tick = self
+                .current_tick
+                .unwrap_or(state.tick)
+                .max(active.start_tick);
             bundles.push(self.build_segment_bundle(active, final_tick, false, Some(state)));
         }
         bundles
@@ -574,19 +585,31 @@ impl ReviewRecorder {
         let Some(log) = log else {
             return;
         };
-        self.log.events.extend(log.events[self.log.events.len()..].iter().cloned());
         self.log
-            .agent_polls
-            .extend(log.agent_polls[self.log.agent_polls.len()..].iter().cloned());
-        self.log
-            .economy_samples
-            .extend(log.economy_samples[self.log.economy_samples.len()..].iter().cloned());
-        self.log
-            .unit_positions
-            .extend(log.unit_positions[self.log.unit_positions.len()..].iter().cloned());
+            .events
+            .extend(log.events[self.log.events.len()..].iter().cloned());
+        self.log.agent_polls.extend(
+            log.agent_polls[self.log.agent_polls.len()..]
+                .iter()
+                .cloned(),
+        );
+        self.log.economy_samples.extend(
+            log.economy_samples[self.log.economy_samples.len()..]
+                .iter()
+                .cloned(),
+        );
+        self.log.unit_positions.extend(
+            log.unit_positions[self.log.unit_positions.len()..]
+                .iter()
+                .cloned(),
+        );
     }
 
-    fn collect_point_bundles_matching<F>(&mut self, state: &GameState, predicate: F) -> Vec<ReviewBundle>
+    fn collect_point_bundles_matching<F>(
+        &mut self,
+        state: &GameState,
+        predicate: F,
+    ) -> Vec<ReviewBundle>
     where
         F: Fn(&PendingCapture, u64) -> bool,
     {
@@ -613,7 +636,9 @@ impl ReviewRecorder {
         complete: bool,
     ) -> ReviewBundle {
         let meta = self.meta.as_ref().expect("review meta initialized");
-        let range_end = pending.range_end.min(self.current_tick.unwrap_or(state.tick));
+        let range_end = pending
+            .range_end
+            .min(self.current_tick.unwrap_or(state.tick));
         let frames: Vec<Frame> = self
             .frames
             .iter()
@@ -717,8 +742,9 @@ impl ReviewRecorder {
             agent_names: meta.agent_names.clone(),
             frames,
             winner: if complete {
-                state.map(|state| sim::winner_at_limit(state, sim::timeout_limit(TIMEOUT_TICKS)))
-                    .flatten()
+                state.and_then(|state| {
+                    sim::winner_at_limit(state, sim::timeout_limit(TIMEOUT_TICKS))
+                })
             } else {
                 None
             },
@@ -920,7 +946,13 @@ mod tests {
         assert_eq!(bundle.summary.range_start, 6);
         assert_eq!(bundle.summary.range_end, 12);
         assert!(bundle.summary.complete);
-        assert!(bundle.replay.frames.iter().all(|frame| frame.tick >= 6 && frame.tick <= 12));
+        assert!(
+            bundle
+                .replay
+                .frames
+                .iter()
+                .all(|frame| frame.tick >= 6 && frame.tick <= 12)
+        );
     }
 
     #[test]

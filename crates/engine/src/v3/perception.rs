@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::derived::{derive_hex_control, derive_player_stats, region_center};
 use super::spatial::Vec3;
 use super::state::GameState;
-use crate::v2::hex::{neighbors, Axial};
+use crate::v2::hex::{Axial, neighbors};
 
 // ---------------------------------------------------------------------------
 // StrategicView

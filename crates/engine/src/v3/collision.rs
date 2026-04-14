@@ -67,9 +67,8 @@ pub struct Hit {
 pub fn intersects(a: &Geometry, b: &Geometry) -> bool {
     match (a, b) {
         (Geometry::Circle(a), Geometry::Circle(b)) => circle_circle(a, b),
-        (Geometry::Circle(c), Geometry::Segment(s)) | (Geometry::Segment(s), Geometry::Circle(c)) => {
-            circle_segment(c, s)
-        }
+        (Geometry::Circle(c), Geometry::Segment(s))
+        | (Geometry::Segment(s), Geometry::Circle(c)) => circle_segment(c, s),
         (Geometry::Circle(c), Geometry::Rect(r)) | (Geometry::Rect(r), Geometry::Circle(c)) => {
             circle_rect(c, r)
         }
@@ -82,8 +81,9 @@ pub fn intersects(a: &Geometry, b: &Geometry) -> bool {
         (Geometry::Segment(s), Geometry::Triangle(t))
         | (Geometry::Triangle(t), Geometry::Segment(s)) => segment_triangle(s, t),
         (Geometry::Rect(a), Geometry::Rect(b)) => rect_rect(a, b),
-        (Geometry::Rect(r), Geometry::Triangle(t))
-        | (Geometry::Triangle(t), Geometry::Rect(r)) => rect_triangle(r, t),
+        (Geometry::Rect(r), Geometry::Triangle(t)) | (Geometry::Triangle(t), Geometry::Rect(r)) => {
+            rect_triangle(r, t)
+        }
         (Geometry::Triangle(a), Geometry::Triangle(b)) => triangle_triangle(a, b),
     }
 }
@@ -197,9 +197,7 @@ fn segment_triangle(s: &LineSegment, t: &Triangle) -> bool {
 
 fn rect_rect(a: &OrientedRect, b: &OrientedRect) -> bool {
     // SAT with 4 axes (2 per rect)
-    let axes = rect_axes(a)
-        .into_iter()
-        .chain(rect_axes(b));
+    let axes = rect_axes(a).into_iter().chain(rect_axes(b));
     let corners_a = rect_corners(a);
     let corners_b = rect_corners(b);
 
@@ -353,7 +351,10 @@ pub fn ray_rect(origin: Vec2, dir: Vec2, rect: &OrientedRect) -> Option<Hit> {
     let local_o = to_rect_local(origin, rect);
     let cos_r = rect.rotation.cos();
     let sin_r = rect.rotation.sin();
-    let local_d = Vec2::new(dir.x * cos_r + dir.y * sin_r, -dir.x * sin_r + dir.y * cos_r);
+    let local_d = Vec2::new(
+        dir.x * cos_r + dir.y * sin_r,
+        -dir.x * sin_r + dir.y * cos_r,
+    );
 
     // AABB slab test
     let (mut tmin, mut tmax) = (f32::NEG_INFINITY, f32::INFINITY);
@@ -438,17 +439,15 @@ pub fn ray_triangle(origin: Vec2, dir: Vec2, tri: &Triangle) -> Option<Hit> {
         let t = diff.perp_dot(edge_dir) / denom;
         let u = diff.perp_dot(dir) / denom;
 
-        if t >= 0.0 && (0.0..=1.0).contains(&u) {
-            if best.as_ref().is_none_or(|b| t < b.t) {
-                let point = origin + dir * t;
-                let normal = Vec2::new(-edge_dir.y, edge_dir.x).normalize();
-                let normal = if normal.dot(dir) > 0.0 {
-                    normal * -1.0
-                } else {
-                    normal
-                };
-                best = Some(Hit { t, point, normal });
-            }
+        if t >= 0.0 && (0.0..=1.0).contains(&u) && best.as_ref().is_none_or(|b| t < b.t) {
+            let point = origin + dir * t;
+            let normal = Vec2::new(-edge_dir.y, edge_dir.x).normalize();
+            let normal = if normal.dot(dir) > 0.0 {
+                normal * -1.0
+            } else {
+                normal
+            };
+            best = Some(Hit { t, point, normal });
         }
     }
 
@@ -704,10 +703,7 @@ fn from_rect_local(p: Vec2, r: &OrientedRect) -> Vec2 {
 fn rect_axes(r: &OrientedRect) -> [Vec2; 2] {
     let cos_r = r.rotation.cos();
     let sin_r = r.rotation.sin();
-    [
-        Vec2::new(cos_r, sin_r),
-        Vec2::new(-sin_r, cos_r),
-    ]
+    [Vec2::new(cos_r, sin_r), Vec2::new(-sin_r, cos_r)]
 }
 
 /// Get the four corners of an oriented rect in world space.
@@ -751,22 +747,10 @@ fn segment_aabb(start: Vec2, end: Vec2, half: Vec2) -> bool {
     }
     // Test segment against each edge of the AABB
     let aabb_edges = [
-        (
-            Vec2::new(-half.x, -half.y),
-            Vec2::new(half.x, -half.y),
-        ),
-        (
-            Vec2::new(half.x, -half.y),
-            Vec2::new(half.x, half.y),
-        ),
-        (
-            Vec2::new(half.x, half.y),
-            Vec2::new(-half.x, half.y),
-        ),
-        (
-            Vec2::new(-half.x, half.y),
-            Vec2::new(-half.x, -half.y),
-        ),
+        (Vec2::new(-half.x, -half.y), Vec2::new(half.x, -half.y)),
+        (Vec2::new(half.x, -half.y), Vec2::new(half.x, half.y)),
+        (Vec2::new(half.x, half.y), Vec2::new(-half.x, half.y)),
+        (Vec2::new(-half.x, half.y), Vec2::new(-half.x, -half.y)),
     ];
     for (s, e) in &aabb_edges {
         if segments_intersect(start, end, *s, *e) {

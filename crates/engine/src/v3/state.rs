@@ -114,6 +114,12 @@ pub struct Combatant {
     pub cooldown: Option<CooldownState>,
 }
 
+impl Default for Combatant {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Combatant {
     pub fn new() -> Self {
         Self {
@@ -235,6 +241,12 @@ pub struct EntityBuilder {
     pub(crate) projectile: Option<Projectile>,
     pub(crate) structure: Option<Structure>,
     pub(crate) resource: Option<Resource>,
+}
+
+impl Default for EntityBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EntityBuilder {

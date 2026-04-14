@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use super::hex::{world_to_hex_2d, within_hysteresis};
+use super::hex::{within_hysteresis, world_to_hex_2d};
 use super::spatial::Vec2;
 use crate::v2::hex::{Axial, axial_to_offset, offset_to_axial};
 use crate::v2::state::EntityKey;

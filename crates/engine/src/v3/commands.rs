@@ -189,10 +189,10 @@ pub fn apply_operational_command(state: &mut GameState, cmd: &OperationalCommand
                 .map(|s| s.members.to_vec())
                 .unwrap_or_default();
             for member_key in members {
-                if let Some(entity) = state.entities.get_mut(member_key) {
-                    if let Some(mobile) = &mut entity.mobile {
-                        mobile.waypoints = waypoints.clone();
-                    }
+                if let Some(entity) = state.entities.get_mut(member_key)
+                    && let Some(mobile) = &mut entity.mobile
+                {
+                    mobile.waypoints = waypoints.clone();
                 }
             }
             CommandStatus::Applied
@@ -248,49 +248,45 @@ pub fn apply_tactical_command(state: &mut GameState, cmd: &TacticalCommand) -> C
                 return CommandStatus::Rejected;
             };
 
-            if let Some(entity) = state.entities.get_mut(*attacker) {
-                if let Some(combatant) = &mut entity.combatant {
-                    if combatant.attack.is_none() && combatant.cooldown.is_none() {
-                        if let Some(eq) = &entity.equipment {
-                            if let Some(weapon_key) = eq.weapon {
-                                let motion = martial::select_attack_motion(
-                                    skill,
-                                    state.tick,
-                                    *attacker,
-                                    *target,
-                                    attacker_pos.z - target_pos.z,
-                                );
-                                combatant.attack = Some(AttackState::for_melee(
-                                    *target, weapon_key, motion, skill,
-                                ));
-                            }
-                        }
-                    }
-                }
+            if let Some(entity) = state.entities.get_mut(*attacker)
+                && let Some(combatant) = &mut entity.combatant
+                && combatant.attack.is_none()
+                && combatant.cooldown.is_none()
+                && let Some(eq) = &entity.equipment
+                && let Some(weapon_key) = eq.weapon
+            {
+                let motion = martial::select_attack_motion(
+                    skill,
+                    state.tick,
+                    *attacker,
+                    *target,
+                    attacker_pos.z - target_pos.z,
+                );
+                combatant.attack = Some(AttackState::for_melee(*target, weapon_key, motion, skill));
             }
             CommandStatus::Applied
         }
         TacticalCommand::SetFacing { entity, angle } => {
-            if let Some(e) = state.entities.get_mut(*entity) {
-                if let Some(combatant) = &mut e.combatant {
-                    combatant.facing = *angle;
-                }
+            if let Some(e) = state.entities.get_mut(*entity)
+                && let Some(combatant) = &mut e.combatant
+            {
+                combatant.facing = *angle;
             }
             CommandStatus::Applied
         }
         TacticalCommand::Retreat { entity, toward } => {
-            if let Some(e) = state.entities.get_mut(*entity) {
-                if let Some(mobile) = &mut e.mobile {
-                    mobile.waypoints = vec![*toward];
-                }
+            if let Some(e) = state.entities.get_mut(*entity)
+                && let Some(mobile) = &mut e.mobile
+            {
+                mobile.waypoints = vec![*toward];
             }
             CommandStatus::Applied
         }
         TacticalCommand::Hold { entity } => {
-            if let Some(e) = state.entities.get_mut(*entity) {
-                if let Some(mobile) = &mut e.mobile {
-                    mobile.waypoints.clear();
-                }
+            if let Some(e) = state.entities.get_mut(*entity)
+                && let Some(mobile) = &mut e.mobile
+            {
+                mobile.waypoints.clear();
             }
             CommandStatus::Applied
         }
@@ -810,12 +806,14 @@ mod tests {
             apply_tactical_command(&mut state, &TacticalCommand::Hold { entity }),
             CommandStatus::Applied
         );
-        assert!(state.entities[entity]
-            .mobile
-            .as_ref()
-            .unwrap()
-            .waypoints
-            .is_empty());
+        assert!(
+            state.entities[entity]
+                .mobile
+                .as_ref()
+                .unwrap()
+                .waypoints
+                .is_empty()
+        );
 
         assert_eq!(
             apply_tactical_command(

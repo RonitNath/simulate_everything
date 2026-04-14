@@ -155,46 +155,44 @@ pub fn resolve_impact(impact: &Impact, defender: &DefenderState) -> ImpactResult
 
     // Step 2: Block check
     let mut attempted_block = None;
-    if let Some(block) = &defender.block {
-        if defender.vitals.stamina > 0.0 && !defender.vitals.is_staggered() {
-            // Check if attack is within block arc (centered on defender's front).
-            // "Front" is defender_facing + π (the direction attacks come from head-on).
-            let front = defender.facing + std::f32::consts::PI;
-            let deviation = angle_diff(impact.attack_direction, front).abs();
-            let effectiveness = martial::block_effectiveness(
-                block.maneuver,
-                impact.attack_motion,
-                impact.height_diff,
-            );
-            let effective_arc = block.arc
-                * (0.65 + 0.55 * block.read_skill.clamp(0.0, 1.0))
-                * (0.45 + 0.55 * effectiveness);
-            if deviation <= effective_arc / 2.0 && effectiveness > 0.2 {
-                attempted_block = Some(block.maneuver);
-                // Block cost: KE * efficiency, modified by height
-                let height_mod = 1.0 + impact.height_diff.max(0.0) * HEIGHT_BLOCK_MODIFIER;
-                let read_discount = 1.1 - 0.45 * block.read_skill.clamp(0.0, 1.0);
-                let maneuver_discount = 1.3 - 0.75 * effectiveness;
-                let cost = impact.kinetic_energy
-                    * block.efficiency
-                    * BLOCK_COST_SCALE
-                    * height_mod
-                    * read_discount
-                    * maneuver_discount;
+    if let Some(block) = &defender.block
+        && defender.vitals.stamina > 0.0
+        && !defender.vitals.is_staggered()
+    {
+        // Check if attack is within block arc (centered on defender's front).
+        // "Front" is defender_facing + π (the direction attacks come from head-on).
+        let front = defender.facing + std::f32::consts::PI;
+        let deviation = angle_diff(impact.attack_direction, front).abs();
+        let effectiveness =
+            martial::block_effectiveness(block.maneuver, impact.attack_motion, impact.height_diff);
+        let effective_arc = block.arc
+            * (0.65 + 0.55 * block.read_skill.clamp(0.0, 1.0))
+            * (0.45 + 0.55 * effectiveness);
+        if deviation <= effective_arc / 2.0 && effectiveness > 0.2 {
+            attempted_block = Some(block.maneuver);
+            // Block cost: KE * efficiency, modified by height
+            let height_mod = 1.0 + impact.height_diff.max(0.0) * HEIGHT_BLOCK_MODIFIER;
+            let read_discount = 1.1 - 0.45 * block.read_skill.clamp(0.0, 1.0);
+            let maneuver_discount = 1.3 - 0.75 * effectiveness;
+            let cost = impact.kinetic_energy
+                * block.efficiency
+                * BLOCK_COST_SCALE
+                * height_mod
+                * read_discount
+                * maneuver_discount;
 
-                if defender.vitals.stamina >= cost {
-                    // Full block
-                    return ImpactResult::Blocked {
-                        stamina_cost: cost,
-                        maneuver: block.maneuver,
-                    };
-                }
-                // Partial block: residual force passes through.
-                // We don't short-circuit — the remaining energy continues
-                // through the armor/penetration pipeline. The stamina is
-                // still fully drained (defender tried to block).
-                // For simplicity in V3.0, partial blocks reduce KE proportionally.
+            if defender.vitals.stamina >= cost {
+                // Full block
+                return ImpactResult::Blocked {
+                    stamina_cost: cost,
+                    maneuver: block.maneuver,
+                };
             }
+            // Partial block: residual force passes through.
+            // We don't short-circuit — the remaining energy continues
+            // through the armor/penetration pipeline. The stamina is
+            // still fully drained (defender tried to block).
+            // For simplicity in V3.0, partial blocks reduce KE proportionally.
         }
     }
 

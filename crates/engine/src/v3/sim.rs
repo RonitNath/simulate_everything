@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use super::agent::{AgentOutput, LayeredAgent};
 use super::combat_log::CombatObservation;
-use super::commands::{apply_agent_output, CommandApplySummary};
+use super::commands::{CommandApplySummary, apply_agent_output};
 use super::damage::{self, BlockCapability, DefenderState, Impact, ImpactResult};
 use super::economy;
 use super::index::update_hex_membership;
@@ -452,11 +452,7 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
         .iter_mut()
         .filter_map(|(key, entity)| {
             let cd = entity.combatant.as_mut()?.cooldown.as_mut()?;
-            if cd.tick() {
-                Some(key)
-            } else {
-                None
-            }
+            if cd.tick() { Some(key) } else { None }
         })
         .collect();
 
@@ -635,10 +631,10 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
             let mut armor_zones: [Option<super::armor::ArmorProperties>; 5] = Default::default();
             if let Some(eq) = &entity.equipment {
                 for (i, slot) in eq.armor_slots.iter().enumerate() {
-                    if let Some(armor_key) = slot {
-                        if let Some(armor_entity) = state.entities.get(*armor_key) {
-                            armor_zones[i] = armor_entity.armor_props.clone();
-                        }
+                    if let Some(armor_key) = slot
+                        && let Some(armor_entity) = state.entities.get(*armor_key)
+                    {
+                        armor_zones[i] = armor_entity.armor_props.clone();
                     }
                 }
             }
@@ -796,10 +792,10 @@ fn apply_all_impacts(state: &mut GameState, impacts: &[PendingImpact]) {
         });
 
         // Apply result to entity
-        if let Some(entity) = state.entities.get_mut(target_key) {
-            if let (Some(vitals), Some(wounds)) = (&mut entity.vitals, &mut entity.wounds) {
-                damage::apply_impact_result(result, vitals, wounds);
-            }
+        if let Some(entity) = state.entities.get_mut(target_key)
+            && let (Some(vitals), Some(wounds)) = (&mut entity.vitals, &mut entity.wounds)
+        {
+            damage::apply_impact_result(result, vitals, wounds);
         }
     }
 }

@@ -99,7 +99,7 @@ fn compute_wedge(count: usize, spacing: f32) -> Vec<Vec2> {
 
     for i in 1..count {
         // Alternate left (odd) and right (even).
-        let rank = ((i + 1) / 2) as f32; // 1, 1, 2, 2, 3, 3, ...
+        let rank = i.div_ceil(2) as f32; // 1, 1, 2, 2, 3, 3, ...
         let dist = rank * spacing;
         let sign = if i % 2 == 1 { -1.0 } else { 1.0 }; // left first
 
@@ -169,7 +169,7 @@ fn compute_skirmish(count: usize, spacing: f32) -> Vec<Vec2> {
     // Wider spacing than normal formations.
     let wide = spacing * 1.5;
     let cols = (count as f32).sqrt().ceil() as usize;
-    let rows = (count + cols - 1) / cols;
+    let rows = count.div_ceil(cols);
 
     (0..count)
         .map(|i| {
@@ -199,12 +199,7 @@ pub fn rotate_slots(slots: &[Vec2], facing: f32) -> Vec<Vec2> {
     let sin_f = facing.sin();
     slots
         .iter()
-        .map(|s| {
-            Vec2::new(
-                s.x * cos_f - s.y * sin_f,
-                s.x * sin_f + s.y * cos_f,
-            )
-        })
+        .map(|s| Vec2::new(s.x * cos_f - s.y * sin_f, s.x * sin_f + s.y * cos_f))
         .collect()
 }
 
@@ -254,7 +249,11 @@ mod tests {
         let slots = compute_slots(FormationType::Column, 5, 20.0);
         // All x should be 0 (single file).
         for s in &slots {
-            assert!(approx_eq(s.x, 0.0), "column should be single file: x={}", s.x);
+            assert!(
+                approx_eq(s.x, 0.0),
+                "column should be single file: x={}",
+                s.x
+            );
         }
         // Each subsequent entity further back.
         for i in 1..slots.len() {
@@ -294,7 +293,11 @@ mod tests {
         assert_eq!(slots.len(), 5);
         // All y should be 0 (all at the same depth).
         for s in &slots {
-            assert!(approx_eq(s.y, 0.0), "line should be at same depth: y={}", s.y);
+            assert!(
+                approx_eq(s.y, 0.0),
+                "line should be at same depth: y={}",
+                s.y
+            );
         }
     }
 
@@ -303,7 +306,10 @@ mod tests {
         let slots = compute_slots(FormationType::Line, 5, 20.0);
         // Center of mass x should be ~0.
         let avg_x: f32 = slots.iter().map(|s| s.x).sum::<f32>() / slots.len() as f32;
-        assert!(approx_eq(avg_x, 0.0), "line should be centered: avg_x={avg_x}");
+        assert!(
+            approx_eq(avg_x, 0.0),
+            "line should be centered: avg_x={avg_x}"
+        );
     }
 
     #[test]
@@ -449,9 +455,15 @@ mod tests {
     fn skirmish_has_2d_spread() {
         let skirmish = compute_slots(FormationType::Skirmish, 9, 20.0);
         assert_eq!(skirmish.len(), 9);
-        let width = skirmish.iter().map(|s| s.x).fold(f32::NEG_INFINITY, f32::max)
+        let width = skirmish
+            .iter()
+            .map(|s| s.x)
+            .fold(f32::NEG_INFINITY, f32::max)
             - skirmish.iter().map(|s| s.x).fold(f32::INFINITY, f32::min);
-        let height = skirmish.iter().map(|s| s.y).fold(f32::NEG_INFINITY, f32::max)
+        let height = skirmish
+            .iter()
+            .map(|s| s.y)
+            .fold(f32::NEG_INFINITY, f32::max)
             - skirmish.iter().map(|s| s.y).fold(f32::INFINITY, f32::min);
         // Skirmish should spread in both dimensions (unlike Line which is 1D).
         assert!(width > 10.0, "skirmish should have x spread: {width}");
@@ -472,8 +484,11 @@ mod tests {
     #[test]
     fn single_entity_all_formations() {
         for ft in [
-            FormationType::Column, FormationType::Line, FormationType::Wedge,
-            FormationType::Square, FormationType::Skirmish,
+            FormationType::Column,
+            FormationType::Line,
+            FormationType::Wedge,
+            FormationType::Square,
+            FormationType::Skirmish,
         ] {
             let slots = compute_slots(ft, 1, 20.0);
             assert_eq!(slots.len(), 1, "{ft:?} should produce 1 slot");

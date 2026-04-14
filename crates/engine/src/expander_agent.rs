@@ -34,6 +34,12 @@ enum Phase {
     Strike,
 }
 
+impl Default for ExpanderAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExpanderAgent {
     pub fn new() -> Self {
         Self {
@@ -130,10 +136,10 @@ impl ExpanderAgent {
     fn best_attack_target(&self, obs: &Observation) -> Option<usize> {
         // Known enemy general — highest priority.
         for entry in &self.enemy_generals {
-            if let Some(idx) = entry {
-                if self.memory_owner[*idx].is_some_and(|o| o != obs.player) {
-                    return Some(*idx);
-                }
+            if let Some(idx) = entry
+                && self.memory_owner[*idx].is_some_and(|o| o != obs.player)
+            {
+                return Some(*idx);
             }
         }
         // Estimate: centroid of visible enemy cells.
@@ -438,16 +444,16 @@ impl ExpanderAgent {
                         }
                     }
 
-                    if let Some(dir) = best_dir {
-                        if best_score >= 0 {
-                            orders.push(Action::Move {
-                                row,
-                                col,
-                                dir,
-                                split: false,
-                            });
-                            continue;
-                        }
+                    if let Some(dir) = best_dir
+                        && best_score >= 0
+                    {
+                        orders.push(Action::Move {
+                            row,
+                            col,
+                            dir,
+                            split: false,
+                        });
+                        continue;
                     }
 
                     // Frontier with no good outward move: consolidate inward

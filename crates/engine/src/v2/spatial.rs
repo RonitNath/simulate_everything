@@ -44,10 +44,10 @@ impl SpatialIndex {
             cell.clear();
         }
         for (key, entity) in entities.iter() {
-            if let Some(pos) = entity.pos {
-                if let Some(idx) = self.index(pos) {
-                    self.entity_cells[idx].push(key);
-                }
+            if let Some(pos) = entity.pos
+                && let Some(idx) = self.index(pos)
+            {
+                self.entity_cells[idx].push(key);
             }
         }
     }

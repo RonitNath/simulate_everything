@@ -12,9 +12,9 @@ use crate::v2::state::EntityKey;
 use serde::{Deserialize, Serialize};
 
 pub use super::commands::{
-    apply_agent_output, apply_operational_command, apply_tactical_command,
-    validate_operational_command as validate_operational,
-    validate_tactical_command as validate_tactical, CommandApplySummary, CommandStatus,
+    CommandApplySummary, CommandStatus, apply_agent_output, apply_operational_command,
+    apply_tactical_command, validate_operational_command as validate_operational,
+    validate_tactical_command as validate_tactical,
 };
 
 // ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ impl LayeredAgent {
         let mut output = AgentOutput::default();
 
         // Strategy layer — runs at strategy cadence.
-        if tick % self.strategy_cadence == 0 {
+        if tick.is_multiple_of(self.strategy_cadence) {
             let view = super::perception::build_strategic_view(state, self.player);
             self.active_directives = self.strategy.plan(&view);
             output.strategy_ran = true;
@@ -334,7 +334,7 @@ impl LayeredAgent {
         }
 
         // Operations layer — runs at operations cadence.
-        if tick % self.operations_cadence == 0 {
+        if tick.is_multiple_of(self.operations_cadence) {
             let commands = self
                 .operations
                 .execute(state, &self.active_directives, self.player);

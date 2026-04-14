@@ -4,7 +4,7 @@ use rand::SeedableRng;
 use super::armor::{self, MaterialType};
 use super::economy;
 use super::equipment::{self, Equipment};
-use super::hex::{hex_to_world, HEX_SIZE};
+use super::hex::hex_to_world;
 use super::lifecycle::{contain, spawn_entity};
 use super::movement::Mobile;
 use super::spatial::{GeoMaterial, Heightfield, Vec3, Vertex};
@@ -13,7 +13,7 @@ use super::state::{
     StructureType,
 };
 use super::weapon;
-use crate::v2::hex::{offset_to_axial, Axial};
+use crate::v2::hex::{Axial, offset_to_axial};
 use crate::v2::state::EntityKey;
 
 // ---------------------------------------------------------------------------

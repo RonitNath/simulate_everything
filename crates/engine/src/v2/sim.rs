@@ -51,7 +51,7 @@ pub fn tick(state: &mut GameState) {
     state.rebuild_spatial();
     compute_territory(state);
     update_settlement_types(state);
-    if state.tick % CITY_AI_INTERVAL == 0 {
+    if state.tick.is_multiple_of(CITY_AI_INTERVAL) {
         city_ai::run_city_ai(state);
     }
     generate_resources(state);
@@ -296,7 +296,7 @@ pub fn compute_territory(state: &mut GameState) {
 
 /// Promote/demote Settlement types based on current population, remove extinct settlements.
 pub fn update_settlement_types(state: &mut GameState) {
-    if state.tick % 10 != 0 {
+    if !state.tick.is_multiple_of(10) {
         return;
     }
 
@@ -375,18 +375,16 @@ fn add_stockpile(state: &mut GameState, ax: Axial, owner: u8, food: f32, materia
         })
         .unwrap_or(false);
 
-    if can_deposit {
-        if let Some(cell) = state.cell_at_mut(target) {
-            let cap = storage_cap(cell.has_depot);
-            let next_food = (cell.food_stockpile + food).clamp(0.0, cap);
-            let next_material = (cell.material_stockpile + material).clamp(0.0, cap);
-            food_overflow = (cell.food_stockpile + food - next_food).max(0.0);
-            material_overflow = (cell.material_stockpile + material - next_material).max(0.0);
-            changed |= (next_food - cell.food_stockpile).abs() > 0.0001;
-            changed |= (next_material - cell.material_stockpile).abs() > 0.0001;
-            cell.food_stockpile = next_food;
-            cell.material_stockpile = next_material;
-        }
+    if can_deposit && let Some(cell) = state.cell_at_mut(target) {
+        let cap = storage_cap(cell.has_depot);
+        let next_food = (cell.food_stockpile + food).clamp(0.0, cap);
+        let next_material = (cell.material_stockpile + material).clamp(0.0, cap);
+        food_overflow = (cell.food_stockpile + food - next_food).max(0.0);
+        material_overflow = (cell.material_stockpile + material - next_material).max(0.0);
+        changed |= (next_food - cell.food_stockpile).abs() > 0.0001;
+        changed |= (next_material - cell.material_stockpile).abs() > 0.0001;
+        cell.food_stockpile = next_food;
+        cell.material_stockpile = next_material;
     }
     // else: target hex is enemy-owned; overflow defaults cover the full amount
     #[cfg(debug_assertions)]
@@ -518,20 +516,17 @@ fn entity_train_soldiers(state: &mut GameState) {
         .entities
         .iter()
         .filter(|(_, e)| {
-            e.person
-                .as_ref()
-                .is_some_and(|p| p.role == Role::Soldier && p.combat_skill < SOLDIER_READY_THRESHOLD)
+            e.person.as_ref().is_some_and(|p| {
+                p.role == Role::Soldier && p.combat_skill < SOLDIER_READY_THRESHOLD
+            })
         })
         .map(|(k, _)| k)
         .collect();
 
     for key in updates {
-        if let Some(person) = state
-            .entities
-            .get_mut(key)
-            .and_then(|e| e.person.as_mut())
-        {
-            person.combat_skill = (person.combat_skill + TRAINING_RATE).min(SOLDIER_READY_THRESHOLD);
+        if let Some(person) = state.entities.get_mut(key).and_then(|e| e.person.as_mut()) {
+            person.combat_skill =
+                (person.combat_skill + TRAINING_RATE).min(SOLDIER_READY_THRESHOLD);
         }
     }
 }
@@ -555,20 +550,18 @@ fn entity_consume_food(state: &mut GameState) {
 
     for (key, hex, owner) in consumers {
         let hex_owner = territory_owner(state, hex);
-        let can_eat =
-            hex_owner.is_none() || hex_owner == Some(owner);
+        let can_eat = hex_owner.is_none() || hex_owner == Some(owner);
 
         let mut fed = false;
-        if can_eat {
-            if let Some(cell) = state.cell_at_mut(hex) {
-                if cell.food_stockpile >= PERSON_FOOD_RATE {
-                    cell.food_stockpile -= PERSON_FOOD_RATE;
-                    state.mark_dirty_axial(hex);
-                    fed = true;
-                    #[cfg(debug_assertions)]
-                    state.record_food_consumed(PERSON_FOOD_RATE);
-                }
-            }
+        if can_eat
+            && let Some(cell) = state.cell_at_mut(hex)
+            && cell.food_stockpile >= PERSON_FOOD_RATE
+        {
+            cell.food_stockpile -= PERSON_FOOD_RATE;
+            state.mark_dirty_axial(hex);
+            fed = true;
+            #[cfg(debug_assertions)]
+            state.record_food_consumed(PERSON_FOOD_RATE);
         }
 
         if !fed {
@@ -577,11 +570,7 @@ fn entity_consume_food(state: &mut GameState) {
     }
 
     for key in starved {
-        if let Some(person) = state
-            .entities
-            .get_mut(key)
-            .and_then(|e| e.person.as_mut())
-        {
+        if let Some(person) = state.entities.get_mut(key).and_then(|e| e.person.as_mut()) {
             person.health = (person.health - STARVATION_HEALTH_DAMAGE).max(0.0);
         }
     }
@@ -593,11 +582,7 @@ fn entity_build_structures(state: &mut GameState) {
     let builder_structures: Vec<(EntityKey, EntityKey)> = state
         .entities
         .iter()
-        .filter(|(_, e)| {
-            e.person
-                .as_ref()
-                .is_some_and(|p| p.role == Role::Builder)
-        })
+        .filter(|(_, e)| e.person.as_ref().is_some_and(|p| p.role == Role::Builder))
         .filter_map(|(key, e)| {
             // Builder must be contained in a structure
             let container_key = e.contained_in?;
@@ -623,7 +608,7 @@ fn entity_build_structures(state: &mut GameState) {
 }
 
 fn grow_population(state: &mut GameState) {
-    if state.tick % 10 != 0 {
+    if !state.tick.is_multiple_of(10) {
         return;
     }
 
@@ -730,10 +715,10 @@ fn spawn_idle_persons(state: &mut GameState, hex: Axial, owner: u8, count: u16) 
             resource: None,
             structure: None,
         });
-        if let Some(skey) = structure_key {
-            if let Some(container) = state.entities.get_mut(skey) {
-                container.contains.push(key);
-            }
+        if let Some(skey) = structure_key
+            && let Some(container) = state.entities.get_mut(skey)
+        {
+            container.contains.push(key);
         }
     }
 }
@@ -889,14 +874,13 @@ fn consume_upkeep(state: &mut GameState) {
     for (pos, owner) in convoy_info {
         let hex_owner = territory_owner(state, pos);
         let mut consumed = 0.0;
-        if let Some(cell) = state.cell_at_mut(pos) {
-            if (hex_owner.is_none() || hex_owner == Some(owner))
-                && cell.food_stockpile >= UPKEEP_PER_UNIT * 0.5
-            {
-                cell.food_stockpile -= UPKEEP_PER_UNIT * 0.5;
-                state.mark_dirty_axial(pos);
-                consumed = UPKEEP_PER_UNIT * 0.5;
-            }
+        if let Some(cell) = state.cell_at_mut(pos)
+            && (hex_owner.is_none() || hex_owner == Some(owner))
+            && cell.food_stockpile >= UPKEEP_PER_UNIT * 0.5
+        {
+            cell.food_stockpile -= UPKEEP_PER_UNIT * 0.5;
+            state.mark_dirty_axial(pos);
+            consumed = UPKEEP_PER_UNIT * 0.5;
         }
         #[cfg(debug_assertions)]
         state.record_food_consumed(consumed);
@@ -1269,91 +1253,91 @@ fn move_convoys(state: &mut GameState) {
                 }
                 continue;
             }
-            if next == dest {
-                if let Some(convoy) = state.convoys.remove(id) {
-                    match convoy.cargo_type {
-                        CargoType::Settlers => {
-                            let dest_claimed = {
-                                let (row, col) = hex::axial_to_offset(dest);
-                                if row >= 0
-                                    && col >= 0
-                                    && (row as usize) < state.height
-                                    && (col as usize) < state.width
-                                {
-                                    let idx = row as usize * state.width + col as usize;
-                                    let tc = state.territory_cache.get(idx).copied().flatten();
-                                    tc.is_none() || tc == Some(owner)
-                                } else {
-                                    false
-                                }
-                            };
-                            if dest_claimed
-                                && state
-                                    .cell_at(dest)
-                                    .map(|c| c.terrain_value > 0.0)
-                                    .unwrap_or(false)
-                                && !state.is_settlement(owner, dest)
+            if next == dest
+                && let Some(convoy) = state.convoys.remove(id)
+            {
+                match convoy.cargo_type {
+                    CargoType::Settlers => {
+                        let dest_claimed = {
+                            let (row, col) = hex::axial_to_offset(dest);
+                            if row >= 0
+                                && col >= 0
+                                && (row as usize) < state.height
+                                && (col as usize) < state.width
                             {
-                                let settler_count = convoy.cargo_amount.round() as u16;
-                                if let Some(target) = state.population.iter_mut().find(|p| {
-                                    p.1.owner == owner && p.1.hex == dest && p.1.role == Role::Idle
-                                }) {
-                                    target.1.count += settler_count;
-                                } else {
-                                    state.population.insert(Population {
-                                        public_id: state.next_pop_id,
-                                        hex: dest,
-                                        owner,
-                                        count: settler_count,
-                                        role: Role::Idle,
-                                        training: 0.0,
-                                    });
-                                    state.next_pop_id += 1;
-                                }
-                                // Create a Settlement entity for the new colony.
-                                let stype = if settler_count >= super::CITY_THRESHOLD {
-                                    SettlementType::City
-                                } else if settler_count >= super::VILLAGE_THRESHOLD {
-                                    SettlementType::Village
-                                } else {
-                                    SettlementType::Farm
-                                };
-                                state.settlements.insert(Settlement {
-                                    public_id: state.next_settlement_id,
+                                let idx = row as usize * state.width + col as usize;
+                                let tc = state.territory_cache.get(idx).copied().flatten();
+                                tc.is_none() || tc == Some(owner)
+                            } else {
+                                false
+                            }
+                        };
+                        if dest_claimed
+                            && state
+                                .cell_at(dest)
+                                .map(|c| c.terrain_value > 0.0)
+                                .unwrap_or(false)
+                            && !state.is_settlement(owner, dest)
+                        {
+                            let settler_count = convoy.cargo_amount.round() as u16;
+                            if let Some(target) = state.population.iter_mut().find(|p| {
+                                p.1.owner == owner && p.1.hex == dest && p.1.role == Role::Idle
+                            }) {
+                                target.1.count += settler_count;
+                            } else {
+                                state.population.insert(Population {
+                                    public_id: state.next_pop_id,
                                     hex: dest,
                                     owner,
-                                    settlement_type: stype,
+                                    count: settler_count,
+                                    role: Role::Idle,
+                                    training: 0.0,
                                 });
-                                state.next_settlement_id += 1;
+                                state.next_pop_id += 1;
                             }
-                        }
-                        CargoType::Food | CargoType::Material => {
-                            add_convoy_cargo_to_cell(
-                                state,
-                                dest,
+                            // Create a Settlement entity for the new colony.
+                            let stype = if settler_count >= super::CITY_THRESHOLD {
+                                SettlementType::City
+                            } else if settler_count >= super::VILLAGE_THRESHOLD {
+                                SettlementType::Village
+                            } else {
+                                SettlementType::Farm
+                            };
+                            state.settlements.insert(Settlement {
+                                public_id: state.next_settlement_id,
+                                hex: dest,
                                 owner,
-                                convoy.cargo_type,
-                                convoy.cargo_amount,
-                            );
-                            if !convoy.returning && convoy.origin != dest {
-                                let return_route =
-                                    pathfinding::find_path_weighted(state, dest, convoy.origin);
-                                state.convoys.insert(Convoy {
-                                    public_id: state.next_convoy_id,
-                                    owner: convoy.owner,
-                                    pos: dest,
-                                    origin: convoy.origin,
-                                    destination: convoy.origin,
-                                    cargo_type: convoy.cargo_type,
-                                    cargo_amount: 0.0,
-                                    capacity: convoy.capacity,
-                                    speed: convoy.speed,
-                                    move_cooldown: CONVOY_MOVE_COOLDOWN,
-                                    returning: true,
-                                    route: return_route,
-                                });
-                                state.next_convoy_id += 1;
-                            }
+                                settlement_type: stype,
+                            });
+                            state.next_settlement_id += 1;
+                        }
+                    }
+                    CargoType::Food | CargoType::Material => {
+                        add_convoy_cargo_to_cell(
+                            state,
+                            dest,
+                            owner,
+                            convoy.cargo_type,
+                            convoy.cargo_amount,
+                        );
+                        if !convoy.returning && convoy.origin != dest {
+                            let return_route =
+                                pathfinding::find_path_weighted(state, dest, convoy.origin);
+                            state.convoys.insert(Convoy {
+                                public_id: state.next_convoy_id,
+                                owner: convoy.owner,
+                                pos: dest,
+                                origin: convoy.origin,
+                                destination: convoy.origin,
+                                cargo_type: convoy.cargo_type,
+                                cargo_amount: 0.0,
+                                capacity: convoy.capacity,
+                                speed: convoy.speed,
+                                move_cooldown: CONVOY_MOVE_COOLDOWN,
+                                returning: true,
+                                route: return_route,
+                            });
+                            state.next_convoy_id += 1;
                         }
                     }
                 }
@@ -1583,18 +1567,12 @@ fn cleanup(state: &mut GameState) {
             .iter()
             .filter(|(_, u)| u.owner == pid)
             .flat_map(|(_, unit)| {
-                unit.engagements
-                    .iter()
-                    .filter_map(|eng| {
-                        state.units.get(eng.enemy_id).map(|enemy| {
-                            (
-                                unit.public_id,
-                                unit.owner,
-                                enemy.public_id,
-                                enemy.owner,
-                            )
-                        })
-                    })
+                unit.engagements.iter().filter_map(|eng| {
+                    state
+                        .units
+                        .get(eng.enemy_id)
+                        .map(|enemy| (unit.public_id, unit.owner, enemy.public_id, enemy.owner))
+                })
             })
             .collect();
         for (unit_public_id, unit_owner, enemy_public_id, enemy_owner) in elimination_pairs {
@@ -1669,11 +1647,11 @@ fn refresh_player_totals(state: &mut GameState) {
         player.material = 0.0;
     }
     for cell in &state.grid {
-        if let Some(owner) = cell.stockpile_owner {
-            if let Some(player) = state.players.iter_mut().find(|p| p.id == owner) {
-                player.food += cell.food_stockpile;
-                player.material += cell.material_stockpile;
-            }
+        if let Some(owner) = cell.stockpile_owner
+            && let Some(player) = state.players.iter_mut().find(|p| p.id == owner)
+        {
+            player.food += cell.food_stockpile;
+            player.material += cell.material_stockpile;
         }
     }
 }

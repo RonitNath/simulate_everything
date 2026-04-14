@@ -142,9 +142,8 @@ pub fn obstacle_avoidance(
 
             // Steer perpendicular to the obstacle direction.
             let lateral = Vec2::new(-to_center.y, to_center.x).normalize();
-            avoidance = Vec3::new(lateral.x, lateral.y, 0.0)
-                * max_force
-                * DEFAULT_AVOIDANCE_STRENGTH;
+            avoidance =
+                Vec3::new(lateral.x, lateral.y, 0.0) * max_force * DEFAULT_AVOIDANCE_STRENGTH;
         }
     }
 
@@ -247,9 +246,8 @@ fn geometry_bounding_radius(geom: &Geometry) -> f32 {
     match geom {
         Geometry::Circle(c) => c.radius,
         Geometry::Segment(s) => {
-            let half_len = ((s.end.x - s.start.x).powi(2) + (s.end.y - s.start.y).powi(2))
-                .sqrt()
-                / 2.0;
+            let half_len =
+                ((s.end.x - s.start.x).powi(2) + (s.end.y - s.start.y).powi(2)).sqrt() / 2.0;
             half_len + s.thickness
         }
         Geometry::Rect(r) => (r.half_extents.x.powi(2) + r.half_extents.y.powi(2)).sqrt(),
@@ -351,10 +349,7 @@ mod tests {
     #[test]
     fn cohesion_toward_group_center() {
         let pos = Vec3::new(0.0, 0.0, 0.0);
-        let neighbors = vec![
-            Vec3::new(10.0, 0.0, 0.0),
-            Vec3::new(10.0, 10.0, 0.0),
-        ];
+        let neighbors = vec![Vec3::new(10.0, 0.0, 0.0), Vec3::new(10.0, 10.0, 0.0)];
         let f = cohesion(pos, &neighbors, 5.0);
         assert!(f.x > 0.0, "should steer toward group center");
         assert!(f.y > 0.0, "should steer toward group center y");
@@ -363,10 +358,7 @@ mod tests {
     #[test]
     fn alignment_matches_group_velocity() {
         let vel = Vec3::new(1.0, 0.0, 0.0);
-        let neighbor_vels = vec![
-            Vec3::new(0.0, 3.0, 0.0),
-            Vec3::new(0.0, 3.0, 0.0),
-        ];
+        let neighbor_vels = vec![Vec3::new(0.0, 3.0, 0.0), Vec3::new(0.0, 3.0, 0.0)];
         let f = alignment(vel, &neighbor_vels, 5.0);
         // Group moves in +y, entity moves in +x. Should steer toward +y, away from +x.
         assert!(f.y > 0.0, "should steer toward group velocity direction");

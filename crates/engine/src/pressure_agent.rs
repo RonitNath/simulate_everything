@@ -48,6 +48,12 @@ struct PlayerModel {
     threat_ratio: f32,
 }
 
+impl Default for PressureAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PressureAgent {
     pub fn new() -> Self {
         Self {
@@ -265,10 +271,8 @@ impl PressureAgent {
         let dist = Self::bfs_multi(obs, &[general_idx]);
         let mut max_threat = 0i32;
         for i in 0..w * h {
-            if dist[i] <= 5 && obs.visible[i] {
-                if obs.owners[i].is_some_and(|o| o != obs.player) {
-                    max_threat = max_threat.max(obs.armies[i]);
-                }
+            if dist[i] <= 5 && obs.visible[i] && obs.owners[i].is_some_and(|o| o != obs.player) {
+                max_threat = max_threat.max(obs.armies[i]);
             }
         }
         if max_threat >= 5 {
@@ -289,7 +293,7 @@ impl PressureAgent {
             if !obs.visible[i] || obs.armies[i] < 8 {
                 continue;
             }
-            if !obs.owners[i].is_some_and(|o| o != obs.player) {
+            if obs.owners[i].is_none_or(|o| o == obs.player) {
                 continue;
             }
             // Count how many passable neighbors are ours.

@@ -31,6 +31,12 @@ pub struct SwarmAgent {
     initialized: bool,
 }
 
+impl Default for SwarmAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SwarmAgent {
     pub fn new() -> Self {
         Self {
@@ -141,10 +147,10 @@ impl SwarmAgent {
     /// Find the best attack target: known enemy general, or centroid of visible enemy.
     fn best_attack_target(&self, obs: &Observation) -> Option<usize> {
         for entry in &self.enemy_generals {
-            if let Some(idx) = entry {
-                if self.memory_owner[*idx].is_some_and(|o| o != obs.player) {
-                    return Some(*idx);
-                }
+            if let Some(idx) = entry
+                && self.memory_owner[*idx].is_some_and(|o| o != obs.player)
+            {
+                return Some(*idx);
             }
         }
         let w = obs.width;
@@ -421,15 +427,15 @@ impl SwarmAgent {
                 }
             }
 
-            if let Some(dir) = best_dir {
-                if best_score > -500 {
-                    orders.push(Action::Move {
-                        row: march_row,
-                        col: march_col,
-                        dir,
-                        split: false,
-                    });
-                }
+            if let Some(dir) = best_dir
+                && best_score > -500
+            {
+                orders.push(Action::Move {
+                    row: march_row,
+                    col: march_col,
+                    dir,
+                    split: false,
+                });
             }
         }
 
@@ -492,16 +498,16 @@ impl SwarmAgent {
                         }
                     }
 
-                    if let Some(dir) = best_dir {
-                        if best_score >= 0 {
-                            orders.push(Action::Move {
-                                row,
-                                col,
-                                dir,
-                                split: false,
-                            });
-                            continue;
-                        }
+                    if let Some(dir) = best_dir
+                        && best_score >= 0
+                    {
+                        orders.push(Action::Move {
+                            row,
+                            col,
+                            dir,
+                            split: false,
+                        });
+                        continue;
                     }
 
                     // Frontier cells that can't expand hold position — don't

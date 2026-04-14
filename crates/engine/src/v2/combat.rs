@@ -1,8 +1,8 @@
 use slotmap::Key;
 use std::collections::HashMap;
 
-use super::hex;
 use super::gamelog::EngagementEndReason;
+use super::hex;
 use super::state::{GameState, UnitKey};
 use super::{DAMAGE_RATE, DISENGAGE_PENALTY};
 
@@ -153,7 +153,12 @@ pub fn disengage_all(state: &mut GameState, unit_id: UnitKey) -> bool {
     let engagements: Vec<_> = state.units[unit_id].engagements.clone();
 
     for eng in &engagements {
-        record_engagement_end(state, unit_id, eng.enemy_id, EngagementEndReason::DisengageAll);
+        record_engagement_end(
+            state,
+            unit_id,
+            eng.enemy_id,
+            EngagementEndReason::DisengageAll,
+        );
     }
     state.units[unit_id].engagements.clear();
 
@@ -250,9 +255,7 @@ pub fn cleanup_engagements(state: &mut GameState) {
 // ---------------------------------------------------------------------------
 
 use super::state::EntityKey;
-use super::{
-    DAMAGE_PER_TICK, FRONT_MODIFIER, REAR_MODIFIER, SHIELD_ARC_HALF, SIDE_MODIFIER,
-};
+use super::{DAMAGE_PER_TICK, FRONT_MODIFIER, REAR_MODIFIER, SHIELD_ARC_HALF, SIDE_MODIFIER};
 use std::f32::consts::PI;
 
 /// Normalize an angle difference to [0, PI].
@@ -338,10 +341,10 @@ pub fn entity_resolve_combat(state: &mut GameState) {
                 let (bx, by) = hex::axial_to_pixel(enemy.pos);
                 (by - ay).atan2(bx - ax)
             };
-            if let Some(entity) = state.entities.get_mut(snap.key) {
-                if let Some(combatant) = entity.combatant.as_mut() {
-                    combatant.facing = new_facing;
-                }
+            if let Some(entity) = state.entities.get_mut(snap.key)
+                && let Some(combatant) = entity.combatant.as_mut()
+            {
+                combatant.facing = new_facing;
             }
         }
     }
@@ -398,10 +401,10 @@ pub fn entity_resolve_combat(state: &mut GameState) {
 
     // Apply damage to Person.health.
     for (key, dmg) in &damage_map {
-        if let Some(entity) = state.entities.get_mut(*key) {
-            if let Some(person) = entity.person.as_mut() {
-                person.health = (person.health - dmg).max(0.0);
-            }
+        if let Some(entity) = state.entities.get_mut(*key)
+            && let Some(person) = entity.person.as_mut()
+        {
+            person.health = (person.health - dmg).max(0.0);
         }
     }
 }
@@ -421,14 +424,11 @@ pub fn entity_cleanup_dead(state: &mut GameState) {
 
     // Remove dead keys from container.contains lists.
     for &dead_key in &dead_keys {
-        let container_key = state
-            .entities
-            .get(dead_key)
-            .and_then(|e| e.contained_in);
-        if let Some(ck) = container_key {
-            if let Some(container) = state.entities.get_mut(ck) {
-                container.contains.retain(|&k| k != dead_key);
-            }
+        let container_key = state.entities.get(dead_key).and_then(|e| e.contained_in);
+        if let Some(ck) = container_key
+            && let Some(container) = state.entities.get_mut(ck)
+        {
+            container.contains.retain(|&k| k != dead_key);
         }
     }
 
@@ -441,8 +441,8 @@ pub fn entity_cleanup_dead(state: &mut GameState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v2::gamelog::{EngagementEndReason, GameEvent, GameLog};
     use crate::v2::INITIAL_STRENGTH;
+    use crate::v2::gamelog::{EngagementEndReason, GameEvent, GameLog};
     use crate::v2::hex::Axial;
     use crate::v2::spatial::SpatialIndex;
     use crate::v2::state::*;
@@ -875,8 +875,18 @@ mod tests {
             grid,
             units: SlotMap::with_key(),
             players: vec![
-                Player { id: 0, food: 0.0, material: 0.0, alive: true },
-                Player { id: 1, food: 0.0, material: 0.0, alive: true },
+                Player {
+                    id: 0,
+                    food: 0.0,
+                    material: 0.0,
+                    alive: true,
+                },
+                Player {
+                    id: 1,
+                    food: 0.0,
+                    material: 0.0,
+                    alive: true,
+                },
             ],
             population: SlotMap::with_key(),
             convoys: SlotMap::with_key(),

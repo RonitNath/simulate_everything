@@ -52,12 +52,7 @@ impl Ord for AStarEntry {
 /// `is_in_bounds` returns whether a hex coordinate is valid.
 ///
 /// Returns path excluding `from`, including `to`. Empty if unreachable or same.
-pub fn find_path_astar<F, B>(
-    from: Axial,
-    to: Axial,
-    edge_cost: F,
-    is_in_bounds: B,
-) -> Vec<Axial>
+pub fn find_path_astar<F, B>(from: Axial, to: Axial, edge_cost: F, is_in_bounds: B) -> Vec<Axial>
 where
     F: Fn(Axial, Axial) -> Option<f32>,
     B: Fn(Axial) -> bool,
@@ -190,6 +185,12 @@ impl Hash for PathCacheKey {
 #[derive(Clone)]
 pub struct PathCache {
     cache: Cache<PathCacheKey, Arc<Vec<Axial>>>,
+}
+
+impl Default for PathCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PathCache {

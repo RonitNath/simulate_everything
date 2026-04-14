@@ -2,7 +2,6 @@ use crate::action::Action;
 use crate::agent::Observation;
 use crate::event::{Event, PlayerAction, PlayerStats};
 use crate::state::{GameState, Tile};
-use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -218,7 +217,7 @@ impl Game {
         // Reinforcement wave: every WAVE_INTERVAL turns, all owned land gets +1
         // and structures get a bonus. Between waves, only structures grow (+1/turn).
         const WAVE_INTERVAL: u32 = 25;
-        let is_wave = (self.state.turn + 1) % WAVE_INTERVAL == 0;
+        let is_wave = (self.state.turn + 1).is_multiple_of(WAVE_INTERVAL);
 
         for cell in &mut self.state.grid {
             if cell.owner.is_none() {

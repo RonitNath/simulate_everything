@@ -276,11 +276,7 @@ fn sync_entity_roles(
         if remaining == 0 {
             break;
         }
-        if let Some(person) = state
-            .entities
-            .get_mut(key)
-            .and_then(|e| e.person.as_mut())
-        {
+        if let Some(person) = state.entities.get_mut(key).and_then(|e| e.person.as_mut()) {
             person.role = target_role;
             remaining -= 1;
         }

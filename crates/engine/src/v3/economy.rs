@@ -268,14 +268,13 @@ fn add_player_stockpile(
     if amount <= 0.0 {
         return;
     }
-    if let Some(key) = ensure_stockpile_resource(state, owner, resource_type) {
-        if let Some(resource) = state
+    if let Some(key) = ensure_stockpile_resource(state, owner, resource_type)
+        && let Some(resource) = state
             .entities
             .get_mut(key)
             .and_then(|entity| entity.resource.as_mut())
-        {
-            resource.amount += amount;
-        }
+    {
+        resource.amount += amount;
     }
 }
 
@@ -912,12 +911,14 @@ mod tests {
             EquipmentType::Sword
         ));
         assert!(player_stockpile_amount(&state, 0, ResourceType::Material) < 20.0);
-        assert!(state.entities[soldier]
-            .equipment
-            .as_ref()
-            .unwrap()
-            .weapon
-            .is_some());
+        assert!(
+            state.entities[soldier]
+                .equipment
+                .as_ref()
+                .unwrap()
+                .weapon
+                .is_some()
+        );
     }
 
     #[test]

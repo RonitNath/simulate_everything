@@ -655,7 +655,7 @@ fn run_bench_game(
         turn_count += 1;
 
         // Sample every 25 turns for scoring.
-        if game.state.turn % 25 == 0 || game.is_over() {
+        if game.state.turn.is_multiple_of(25) || game.is_over() {
             let land: Vec<usize> = (0..num_players).map(|p| game.state.land_count(p)).collect();
             let army: Vec<i32> = (0..num_players).map(|p| game.state.army_count(p)).collect();
             let alive: Vec<bool> = (0..num_players)
@@ -670,10 +670,10 @@ fn run_bench_game(
                 .max_by_key(|(_, l)| **l)
                 .map(|(i, _)| i as u8);
 
-            if let (Some(prev), Some(curr)) = (prev_leader, leader) {
-                if prev != curr {
-                    lead_changes += 1;
-                }
+            if let (Some(prev), Some(curr)) = (prev_leader, leader)
+                && prev != curr
+            {
+                lead_changes += 1;
             }
             prev_leader = leader;
 
@@ -765,9 +765,9 @@ fn run_bench_game(
 fn score_game(
     winner_idx: Option<u8>,
     turns: u32,
-    lead_changes: u32,
+    _lead_changes: u32,
     _max_army_ratio: f64,
-    was_behind: &[bool],
+    _was_behind: &[bool],
     snapshots: &[Snapshot],
     max_turns: u32,
 ) -> (f64, Vec<String>) {
@@ -787,11 +787,11 @@ fn score_game(
     }
 
     // Comeback: winner was behind at a late checkpoint (after turn 75).
-    if let Some(wi) = winner_idx {
-        if winner_was_behind_late(wi, snapshots, 75) {
-            score += 30.0;
-            tags.push("comeback".into());
-        }
+    if let Some(wi) = winner_idx
+        && winner_was_behind_late(wi, snapshots, 75)
+    {
+        score += 30.0;
+        tags.push("comeback".into());
     }
 
     // Draw: max turns reached without elimination.
@@ -841,11 +841,11 @@ fn score_game(
     // Upset: minority agent won (useful when one agent dominates overall).
     // Losses are inherently interesting when one agent is strong.
     // Tag it but don't score heavily — the user decides what matters.
-    if let Some(wi) = winner_idx {
-        if wi != 0 {
-            score += 5.0;
-            tags.push("upset".into());
-        }
+    if let Some(wi) = winner_idx
+        && wi != 0
+    {
+        score += 5.0;
+        tags.push("upset".into());
     }
 
     (score, tags)
@@ -865,12 +865,11 @@ fn count_late_lead_changes(snapshots: &[Snapshot], after_turn: u32) -> u32 {
             .max_by_key(|(_, l)| **l)
             .map(|(i, _)| i);
 
-        if snap.turn > after_turn {
-            if let (Some(prev), Some(curr)) = (prev_leader, leader) {
-                if prev != curr {
-                    changes += 1;
-                }
-            }
+        if snap.turn > after_turn
+            && let (Some(prev), Some(curr)) = (prev_leader, leader)
+            && prev != curr
+        {
+            changes += 1;
         }
         prev_leader = leader;
     }
@@ -958,8 +957,8 @@ fn print_interesting_games(results: &[GameResult], top_n: usize) {
 
     eprintln!("\n  Top {} interesting games:", top_n.min(ranked.len()));
     eprintln!(
-        "  {:>6} {:>6} {:>8} {:>14} {:>8}  {}",
-        "seed", "turns", "winner", "final_land", "score", "tags"
+        "  {:>6} {:>6} {:>8} {:>14} {:>8}  tags",
+        "seed", "turns", "winner", "final_land", "score"
     );
     for r in ranked.iter().take(top_n) {
         let winner_str = r.winner.as_deref().unwrap_or("draw");

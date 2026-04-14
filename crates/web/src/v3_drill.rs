@@ -5,7 +5,7 @@
 //! rendering, and returns JSON state + ASCII art from curl.
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::info;
 
 use simulate_everything_engine::v2::hex::Axial;
@@ -296,26 +296,17 @@ impl V3Drill {
         inner.state = state;
         inner.entity_keys = entity_keys;
 
-        let agent_names: Vec<String> = (0..ZOO_PLAYERS)
-            .map(|i| format!("zoo-{}", i))
-            .collect();
-        let agent_versions: Vec<String> = (0..ZOO_PLAYERS)
-            .map(|_| "0".to_string())
-            .collect();
+        let agent_names: Vec<String> = (0..ZOO_PLAYERS).map(|i| format!("zoo-{}", i)).collect();
+        let agent_versions: Vec<String> = (0..ZOO_PLAYERS).map(|_| "0".to_string()).collect();
 
-        let init = v3_protocol::build_init(
-            &inner.state,
-            &agent_names,
-            &agent_versions,
-            0,
-        );
+        let init = v3_protocol::build_init(&inner.state, &agent_names, &agent_versions, 0);
         let _ = self.spectator_tx.send(V3ServerToSpectator::Init {
             init,
             game_number: 0,
         });
-        let _ = self.spectator_tx.send(V3ServerToSpectator::Snapshot {
-            snapshot,
-        });
+        let _ = self
+            .spectator_tx
+            .send(V3ServerToSpectator::Snapshot { snapshot });
         info!("V3 drill pad zoo loaded");
     }
 }
@@ -361,10 +352,10 @@ fn create_drill_state() -> GameState {
             .weapon_props(weapon::iron_sword()),
     );
     contain(&mut state, soldier_a, sword_a);
-    if let Some(e) = state.entities.get_mut(soldier_a) {
-        if let Some(eq) = &mut e.equipment {
-            eq.weapon = Some(sword_a);
-        }
+    if let Some(e) = state.entities.get_mut(soldier_a)
+        && let Some(eq) = &mut e.equipment
+    {
+        eq.weapon = Some(sword_a);
     }
 
     // Spawn soldier B at hex (3,1), facing west.
@@ -397,10 +388,10 @@ fn create_drill_state() -> GameState {
             .weapon_props(weapon::iron_sword()),
     );
     contain(&mut state, soldier_b, sword_b);
-    if let Some(e) = state.entities.get_mut(soldier_b) {
-        if let Some(eq) = &mut e.equipment {
-            eq.weapon = Some(sword_b);
-        }
+    if let Some(e) = state.entities.get_mut(soldier_b)
+        && let Some(eq) = &mut e.equipment
+    {
+        eq.weapon = Some(sword_b);
     }
 
     state
@@ -415,12 +406,7 @@ const ZOO_HEIGHT: usize = 3;
 const ZOO_PLAYERS: u8 = 2;
 
 /// Spawn a soldier at a world position with a weapon, return the soldier key.
-fn zoo_spawn_soldier(
-    state: &mut GameState,
-    pos: Vec3,
-    owner: u8,
-    facing: f32,
-) -> EntityKey {
+fn zoo_spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, facing: f32) -> EntityKey {
     let soldier = spawn_entity(
         state,
         EntityBuilder::new()
@@ -446,10 +432,10 @@ fn zoo_spawn_soldier(
             .weapon_props(weapon::iron_sword()),
     );
     contain(state, soldier, sword);
-    if let Some(e) = state.entities.get_mut(soldier) {
-        if let Some(eq) = &mut e.equipment {
-            eq.weapon = Some(sword);
-        }
+    if let Some(e) = state.entities.get_mut(soldier)
+        && let Some(eq) = &mut e.equipment
+    {
+        eq.weapon = Some(sword);
     }
     soldier
 }
@@ -477,61 +463,86 @@ fn create_zoo_state() -> GameState {
     zoo_spawn_soldier(&mut state, Vec3::new(row_start_x, row_y, 0.0), 0, east);
 
     // 1: Windup — generic
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + spacing, row_y, 0.0), 0, east);
-    if let Some(e) = state.entities.get_mut(s) {
-        if let Some(c) = &mut e.combatant {
-            let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
-            let mut atk = weapon::AttackState::new(s, wk);
-            atk.progress = 1.0;
-            atk.motion = AttackMotion::Generic;
-            c.attack = Some(atk);
-        }
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + spacing, row_y, 0.0),
+        0,
+        east,
+    );
+    if let Some(e) = state.entities.get_mut(s)
+        && let Some(c) = &mut e.combatant
+    {
+        let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
+        let mut atk = weapon::AttackState::new(s, wk);
+        atk.progress = 1.0;
+        atk.motion = AttackMotion::Generic;
+        c.attack = Some(atk);
     }
 
     // 2: Windup — overhead
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 2.0 * spacing, row_y, 0.0), 0, east);
-    if let Some(e) = state.entities.get_mut(s) {
-        if let Some(c) = &mut e.combatant {
-            let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
-            let mut atk = weapon::AttackState::new(s, wk);
-            atk.progress = 2.0;
-            atk.motion = AttackMotion::Overhead;
-            c.attack = Some(atk);
-        }
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 2.0 * spacing, row_y, 0.0),
+        0,
+        east,
+    );
+    if let Some(e) = state.entities.get_mut(s)
+        && let Some(c) = &mut e.combatant
+    {
+        let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
+        let mut atk = weapon::AttackState::new(s, wk);
+        atk.progress = 2.0;
+        atk.motion = AttackMotion::Overhead;
+        c.attack = Some(atk);
     }
 
     // 3: Committed — forehand
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 3.0 * spacing, row_y, 0.0), 0, east);
-    if let Some(e) = state.entities.get_mut(s) {
-        if let Some(c) = &mut e.combatant {
-            let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
-            let mut atk = weapon::AttackState::new(s, wk);
-            atk.progress = 3.0;
-            atk.committed = true;
-            atk.motion = AttackMotion::Forehand;
-            c.attack = Some(atk);
-        }
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 3.0 * spacing, row_y, 0.0),
+        0,
+        east,
+    );
+    if let Some(e) = state.entities.get_mut(s)
+        && let Some(c) = &mut e.combatant
+    {
+        let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
+        let mut atk = weapon::AttackState::new(s, wk);
+        atk.progress = 3.0;
+        atk.committed = true;
+        atk.motion = AttackMotion::Forehand;
+        c.attack = Some(atk);
     }
 
     // 4: Committed — backhand
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 4.0 * spacing, row_y, 0.0), 0, east);
-    if let Some(e) = state.entities.get_mut(s) {
-        if let Some(c) = &mut e.combatant {
-            let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
-            let mut atk = weapon::AttackState::new(s, wk);
-            atk.progress = 3.0;
-            atk.committed = true;
-            atk.motion = AttackMotion::Backhand;
-            c.attack = Some(atk);
-        }
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 4.0 * spacing, row_y, 0.0),
+        0,
+        east,
+    );
+    if let Some(e) = state.entities.get_mut(s)
+        && let Some(c) = &mut e.combatant
+    {
+        let wk = e.equipment.as_ref().and_then(|eq| eq.weapon).unwrap();
+        let mut atk = weapon::AttackState::new(s, wk);
+        atk.progress = 3.0;
+        atk.committed = true;
+        atk.motion = AttackMotion::Backhand;
+        c.attack = Some(atk);
     }
 
     // 5: Recovery
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 5.0 * spacing, row_y, 0.0), 0, east);
-    if let Some(e) = state.entities.get_mut(s) {
-        if let Some(c) = &mut e.combatant {
-            c.cooldown = Some(weapon::CooldownState::new(3));
-        }
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 5.0 * spacing, row_y, 0.0),
+        0,
+        east,
+    );
+    if let Some(e) = state.entities.get_mut(s)
+        && let Some(c) = &mut e.combatant
+    {
+        c.cooldown = Some(weapon::CooldownState::new(3));
     }
 
     // --- Bottom row: wound variations, y offset +40 from hex center ---
@@ -542,71 +553,140 @@ fn create_zoo_state() -> GameState {
     if let Some(e) = state.entities.get_mut(s) {
         let wounds = e.wounds.get_or_insert_with(Default::default);
         wounds.push(Wound {
-            zone: BodyZone::Head, severity: Severity::Scratch, bleed_rate: 0.01,
-            damage_type: DamageType::Slash, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::Head,
+            severity: Severity::Scratch,
+            bleed_rate: 0.01,
+            damage_type: DamageType::Slash,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
     }
 
     // 1: Torso laceration, 70% blood
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + spacing, row_y, 0.0), 1, east);
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + spacing, row_y, 0.0),
+        1,
+        east,
+    );
     if let Some(e) = state.entities.get_mut(s) {
         let wounds = e.wounds.get_or_insert_with(Default::default);
         wounds.push(Wound {
-            zone: BodyZone::Torso, severity: Severity::Laceration, bleed_rate: 0.03,
-            damage_type: DamageType::Slash, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::Torso,
+            severity: Severity::Laceration,
+            bleed_rate: 0.03,
+            damage_type: DamageType::Slash,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
-        if let Some(v) = &mut e.vitals { v.blood = 0.7; }
+        if let Some(v) = &mut e.vitals {
+            v.blood = 0.7;
+        }
     }
 
     // 2: Left arm puncture, 40% blood
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 2.0 * spacing, row_y, 0.0), 1, east);
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 2.0 * spacing, row_y, 0.0),
+        1,
+        east,
+    );
     if let Some(e) = state.entities.get_mut(s) {
         let wounds = e.wounds.get_or_insert_with(Default::default);
         wounds.push(Wound {
-            zone: BodyZone::LeftArm, severity: Severity::Puncture, bleed_rate: 0.05,
-            damage_type: DamageType::Slash, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::LeftArm,
+            severity: Severity::Puncture,
+            bleed_rate: 0.05,
+            damage_type: DamageType::Slash,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
-        if let Some(v) = &mut e.vitals { v.blood = 0.4; }
+        if let Some(v) = &mut e.vitals {
+            v.blood = 0.4;
+        }
     }
 
     // 3: Multi-wound (head + torso + right arm), 25% blood, 30% stamina
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 3.0 * spacing, row_y, 0.0), 1, east);
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 3.0 * spacing, row_y, 0.0),
+        1,
+        east,
+    );
     if let Some(e) = state.entities.get_mut(s) {
         let wounds = e.wounds.get_or_insert_with(Default::default);
         wounds.push(Wound {
-            zone: BodyZone::Head, severity: Severity::Scratch, bleed_rate: 0.01,
-            damage_type: DamageType::Slash, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::Head,
+            severity: Severity::Scratch,
+            bleed_rate: 0.01,
+            damage_type: DamageType::Slash,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
         wounds.push(Wound {
-            zone: BodyZone::Torso, severity: Severity::Laceration, bleed_rate: 0.03,
-            damage_type: DamageType::Pierce, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::Torso,
+            severity: Severity::Laceration,
+            bleed_rate: 0.03,
+            damage_type: DamageType::Pierce,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
         wounds.push(Wound {
-            zone: BodyZone::RightArm, severity: Severity::Puncture, bleed_rate: 0.04,
-            damage_type: DamageType::Slash, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::RightArm,
+            severity: Severity::Puncture,
+            bleed_rate: 0.04,
+            damage_type: DamageType::Slash,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
-        if let Some(v) = &mut e.vitals { v.blood = 0.25; v.stamina = 0.3; }
+        if let Some(v) = &mut e.vitals {
+            v.blood = 0.25;
+            v.stamina = 0.3;
+        }
     }
 
     // 4: Low stamina only
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 4.0 * spacing, row_y, 0.0), 1, east);
-    if let Some(e) = state.entities.get_mut(s) {
-        if let Some(v) = &mut e.vitals { v.stamina = 0.15; }
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 4.0 * spacing, row_y, 0.0),
+        1,
+        east,
+    );
+    if let Some(e) = state.entities.get_mut(s)
+        && let Some(v) = &mut e.vitals
+    {
+        v.stamina = 0.15;
     }
 
     // 5: Near death — legs + torso punctures, 10% blood, 5% stamina
-    let s = zoo_spawn_soldier(&mut state, Vec3::new(row_start_x + 5.0 * spacing, row_y, 0.0), 1, east);
+    let s = zoo_spawn_soldier(
+        &mut state,
+        Vec3::new(row_start_x + 5.0 * spacing, row_y, 0.0),
+        1,
+        east,
+    );
     if let Some(e) = state.entities.get_mut(s) {
         let wounds = e.wounds.get_or_insert_with(Default::default);
         wounds.push(Wound {
-            zone: BodyZone::Legs, severity: Severity::Puncture, bleed_rate: 0.06,
-            damage_type: DamageType::Slash, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::Legs,
+            severity: Severity::Puncture,
+            bleed_rate: 0.06,
+            damage_type: DamageType::Slash,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
         wounds.push(Wound {
-            zone: BodyZone::Torso, severity: Severity::Puncture, bleed_rate: 0.05,
-            damage_type: DamageType::Pierce, attacker_id: dummy_key, created_at: 0,
+            zone: BodyZone::Torso,
+            severity: Severity::Puncture,
+            bleed_rate: 0.05,
+            damage_type: DamageType::Pierce,
+            attacker_id: dummy_key,
+            created_at: 0,
         });
-        if let Some(v) = &mut e.vitals { v.blood = 0.1; v.stamina = 0.05; }
+        if let Some(v) = &mut e.vitals {
+            v.blood = 0.1;
+            v.stamina = 0.05;
+        }
     }
 
     state
@@ -622,33 +702,31 @@ fn apply_drill_command(inner: &mut DrillInner, cmd: &DrillCommand) {
         None => return,
     };
 
-    if let Some(facing) = cmd.facing {
-        if let Some(e) = inner.state.entities.get_mut(key) {
-            if let Some(c) = &mut e.combatant {
-                c.facing = facing;
-            }
-        }
+    if let Some(facing) = cmd.facing
+        && let Some(e) = inner.state.entities.get_mut(key)
+        && let Some(c) = &mut e.combatant
+    {
+        c.facing = facing;
     }
 
-    if let Some([x, y]) = cmd.set_pos {
-        if let Some(e) = inner.state.entities.get_mut(key) {
-            let z = e.pos.map(|p| p.z).unwrap_or(0.0);
-            e.pos = Some(Vec3 { x, y, z });
-            // Update hex.
-            e.hex = Some(simulate_everything_engine::v3::hex::world_to_hex(Vec3 {
-                x,
-                y,
-                z,
-            }));
-        }
+    if let Some([x, y]) = cmd.set_pos
+        && let Some(e) = inner.state.entities.get_mut(key)
+    {
+        let z = e.pos.map(|p| p.z).unwrap_or(0.0);
+        e.pos = Some(Vec3 { x, y, z });
+        // Update hex.
+        e.hex = Some(simulate_everything_engine::v3::hex::world_to_hex(Vec3 {
+            x,
+            y,
+            z,
+        }));
     }
 
-    if let Some([x, y]) = cmd.move_to {
-        if let Some(e) = inner.state.entities.get_mut(key) {
-            if let Some(m) = &mut e.mobile {
-                m.waypoints = vec![Vec3 { x, y, z: 0.0 }];
-            }
-        }
+    if let Some([x, y]) = cmd.move_to
+        && let Some(e) = inner.state.entities.get_mut(key)
+        && let Some(m) = &mut e.mobile
+    {
+        m.waypoints = vec![Vec3 { x, y, z: 0.0 }];
     }
 
     if let Some(target_id) = cmd.attack {
@@ -661,16 +739,15 @@ fn apply_drill_command(inner: &mut DrillInner, cmd: &DrillCommand) {
                 .get(key)
                 .and_then(|e| e.equipment.as_ref())
                 .and_then(|eq| eq.weapon);
-            if let Some(wk) = weapon_key {
-                if let Some(e) = inner.state.entities.get_mut(key) {
-                    if let Some(c) = &mut e.combatant {
-                        c.target = Some(tk);
-                        // Directly initiate attack — bypasses agent/tactical layer.
-                        c.attack = Some(simulate_everything_engine::v3::weapon::AttackState::new(
-                            tk, wk,
-                        ));
-                    }
-                }
+            if let Some(wk) = weapon_key
+                && let Some(e) = inner.state.entities.get_mut(key)
+                && let Some(c) = &mut e.combatant
+            {
+                c.target = Some(tk);
+                // Directly initiate attack — bypasses agent/tactical layer.
+                c.attack = Some(simulate_everything_engine::v3::weapon::AttackState::new(
+                    tk, wk,
+                ));
             }
         }
     }

@@ -291,7 +291,7 @@ impl V2RoundRobin {
                 let tick_start = tokio::time::Instant::now();
                 let tick_ms = self.get_tick_ms();
 
-                if state.tick % AGENT_POLL_INTERVAL as u64 == 0 {
+                if state.tick.is_multiple_of(AGENT_POLL_INTERVAL as u64) {
                     for (player_id, agent) in agents.iter_mut().enumerate() {
                         let pid = player_id as u8;
                         if !state.players.iter().any(|p| p.id == pid && p.alive) {

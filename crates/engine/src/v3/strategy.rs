@@ -3,9 +3,7 @@
 /// Three strategy implementations differing only in posture transitions and
 /// priority weighting. All read the same StrategicView; personality is the
 /// policy applied to the view, not the perception.
-use super::agent::{
-    EconomicFocus, Posture, StackArchetype, StrategicDirective, StrategyLayer,
-};
+use super::agent::{EconomicFocus, Posture, StackArchetype, StrategicDirective, StrategyLayer};
 use super::perception::StrategicView;
 
 // ---------------------------------------------------------------------------
@@ -36,13 +34,19 @@ pub struct SpreadStrategy {
     thresholds: TransitionThresholds,
 }
 
+impl Default for SpreadStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpreadStrategy {
     pub fn new() -> Self {
         Self {
             posture: Posture::Expand,
             focus: EconomicFocus::Growth,
             thresholds: TransitionThresholds {
-                contested_ratio: 0.3,      // consolidate when 30%+ territory contested
+                contested_ratio: 0.3,       // consolidate when 30%+ territory contested
                 attack_strength_ratio: 3.0, // only attack at 3:1 advantage
                 defend_strength_ratio: 0.5, // defend below 0.5:1
                 economy_dominance: 0.0,     // not used by Spread
@@ -121,13 +125,19 @@ pub struct StrikerStrategy {
     thresholds: TransitionThresholds,
 }
 
+impl Default for StrikerStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StrikerStrategy {
     pub fn new() -> Self {
         Self {
             posture: Posture::Attack,
             focus: EconomicFocus::Military,
             thresholds: TransitionThresholds {
-                contested_ratio: 0.0,      // not used
+                contested_ratio: 0.0,       // not used
                 attack_strength_ratio: 0.8, // attack even at near-parity
                 defend_strength_ratio: 0.3, // only defend when critically weak
                 economy_dominance: 0.0,
@@ -192,6 +202,12 @@ pub struct TurtleStrategy {
     posture: Posture,
     focus: EconomicFocus,
     thresholds: TransitionThresholds,
+}
+
+impl Default for TurtleStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TurtleStrategy {
@@ -262,33 +278,43 @@ impl StrategyLayer for TurtleStrategy {
 fn strength_ratio(view: &StrategicView) -> f32 {
     let own = view.relative_strength.own_soldiers as f32;
     let enemy = view.relative_strength.enemy_soldiers as f32;
-    if enemy < 0.5 { return f32::MAX; }
+    if enemy < 0.5 {
+        return f32::MAX;
+    }
     own / enemy
 }
 
 /// Fraction of territory that is contested.
 fn contested_ratio(view: &StrategicView) -> f32 {
-    if view.territory.is_empty() { return 0.0; }
-    let contested: u32 = view.territory.iter()
+    if view.territory.is_empty() {
+        return 0.0;
+    }
+    let contested: u32 = view
+        .territory
+        .iter()
         .filter(|r| r.status == super::perception::TerritoryStatus::Contested)
         .map(|r| r.hex_count)
         .sum();
     let total: u32 = view.territory.iter().map(|r| r.hex_count).sum();
-    if total == 0 { return 0.0; }
+    if total == 0 {
+        return 0.0;
+    }
     contested as f32 / total as f32
 }
 
 /// Default region for threats (first threat position, or origin).
 fn default_threat_region(view: &StrategicView) -> crate::v2::hex::Axial {
     use super::hex::world_to_hex;
-    view.threats.first()
+    view.threats
+        .first()
         .map(|t| world_to_hex(t.position))
         .unwrap_or(crate::v2::hex::Axial::new(0, 0))
 }
 
 /// Default controlled region center.
 fn default_controlled_region(view: &StrategicView) -> crate::v2::hex::Axial {
-    view.territory.iter()
+    view.territory
+        .iter()
         .find(|r| r.status == super::perception::TerritoryStatus::Controlled)
         .map(|r| r.center)
         .unwrap_or(crate::v2::hex::Axial::new(0, 0))
@@ -296,7 +322,8 @@ fn default_controlled_region(view: &StrategicView) -> crate::v2::hex::Axial {
 
 /// Default expansion target.
 fn default_expansion_target(view: &StrategicView) -> crate::v2::hex::Axial {
-    view.territory.iter()
+    view.territory
+        .iter()
         .find(|r| r.status == super::perception::TerritoryStatus::Unknown)
         .map(|r| r.center)
         .unwrap_or(crate::v2::hex::Axial::new(5, 5))
@@ -333,16 +360,18 @@ impl StrategyLayer for NullStrategy {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::perception::*;
     use super::super::state::StackId;
+    use super::*;
     use crate::v2::hex::Axial;
 
     fn base_view() -> StrategicView {
         StrategicView {
-            territory: vec![
-                Region { center: Axial::new(0, 0), hex_count: 20, status: TerritoryStatus::Controlled },
-            ],
+            territory: vec![Region {
+                center: Axial::new(0, 0),
+                hex_count: 20,
+                status: TerritoryStatus::Controlled,
+            }],
             relative_strength: StrengthAssessment {
                 own_stacks: 2,
                 enemy_stacks: 2,
@@ -371,8 +400,16 @@ mod tests {
     fn view_with_contested(contested_count: u32, controlled_count: u32) -> StrategicView {
         let mut v = base_view();
         v.territory = vec![
-            Region { center: Axial::new(0, 0), hex_count: controlled_count, status: TerritoryStatus::Controlled },
-            Region { center: Axial::new(5, 5), hex_count: contested_count, status: TerritoryStatus::Contested },
+            Region {
+                center: Axial::new(0, 0),
+                hex_count: controlled_count,
+                status: TerritoryStatus::Controlled,
+            },
+            Region {
+                center: Axial::new(5, 5),
+                hex_count: contested_count,
+                status: TerritoryStatus::Contested,
+            },
         ];
         v
     }
@@ -469,7 +506,10 @@ mod tests {
         let directives = s.plan(&view);
 
         assert_eq!(extract_posture(&directives), Some(Posture::Defend));
-        assert_eq!(extract_focus(&directives), Some(EconomicFocus::Infrastructure));
+        assert_eq!(
+            extract_focus(&directives),
+            Some(EconomicFocus::Infrastructure)
+        );
     }
 
     #[test]
@@ -496,13 +536,28 @@ mod tests {
     fn all_personalities_emit_posture_and_focus() {
         let view = base_view();
         for (name, mut strategy) in [
-            ("Spread", Box::new(SpreadStrategy::new()) as Box<dyn StrategyLayer>),
-            ("Striker", Box::new(StrikerStrategy::new()) as Box<dyn StrategyLayer>),
-            ("Turtle", Box::new(TurtleStrategy::new()) as Box<dyn StrategyLayer>),
+            (
+                "Spread",
+                Box::new(SpreadStrategy::new()) as Box<dyn StrategyLayer>,
+            ),
+            (
+                "Striker",
+                Box::new(StrikerStrategy::new()) as Box<dyn StrategyLayer>,
+            ),
+            (
+                "Turtle",
+                Box::new(TurtleStrategy::new()) as Box<dyn StrategyLayer>,
+            ),
         ] {
             let directives = strategy.plan(&view);
-            assert!(extract_posture(&directives).is_some(), "{name} must emit posture");
-            assert!(extract_focus(&directives).is_some(), "{name} must emit focus");
+            assert!(
+                extract_posture(&directives).is_some(),
+                "{name} must emit posture"
+            );
+            assert!(
+                extract_focus(&directives).is_some(),
+                "{name} must emit focus"
+            );
         }
     }
 

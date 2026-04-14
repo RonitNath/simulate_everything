@@ -9,7 +9,7 @@ use super::runner;
 use super::sim;
 use super::spatial::SpatialIndex;
 use super::state::{
-    Biome, CargoType, Cell, Convoy, Entity, EntityKey, Engagement, GameState, Person, Player,
+    Biome, CargoType, Cell, Convoy, Engagement, Entity, EntityKey, GameState, Person, Player,
     Population, Resource, Role, Settlement, SettlementType, Structure, Unit, Vision,
 };
 
@@ -231,9 +231,7 @@ fn snapshot_entities(state: &GameState) -> Vec<EntitySnapshot> {
             q: e.pos.map(|p| p.q),
             r: e.pos.map(|p| p.r),
             owner: e.owner,
-            contained_in_id: e
-                .contained_in
-                .and_then(|key| key_to_id.get(&key).copied()),
+            contained_in_id: e.contained_in.and_then(|key| key_to_id.get(&key).copied()),
             contains_ids: e
                 .contains
                 .iter()
@@ -502,7 +500,7 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
                 _ => None,
             },
             owner: es.owner,
-            contained_in: None, // filled in pass 2
+            contained_in: None,   // filled in pass 2
             contains: Vec::new(), // filled in pass 2
             person: es.person.clone(),
             mobile,
@@ -520,7 +518,9 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
             continue;
         };
         let entity = &mut entities[key];
-        entity.contained_in = es.contained_in_id.and_then(|id| id_to_key.get(&id).copied());
+        entity.contained_in = es
+            .contained_in_id
+            .and_then(|id| id_to_key.get(&id).copied());
         entity.contains = es
             .contains_ids
             .iter()

@@ -433,10 +433,10 @@ impl GameState {
         if let Some(pos) = entity.pos {
             return Some(pos);
         }
-        if let Some(container_key) = entity.contained_in {
-            if let Some(container) = self.entities.get(container_key) {
-                return container.pos;
-            }
+        if let Some(container_key) = entity.contained_in
+            && let Some(container) = self.entities.get(container_key)
+        {
+            return container.pos;
         }
         None
     }

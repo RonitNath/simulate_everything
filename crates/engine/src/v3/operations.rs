@@ -9,12 +9,9 @@ use super::agent::{
 };
 use super::armor::{ArmorConstruction, DamageType, MaterialType};
 use super::damage_table::{DamageEstimateTable, MatchupKey};
-use super::formation::FormationType;
-use super::state::{GameState, Role, Stack, StackId, StructureType};
+use super::state::{GameState, Role, Stack, StructureType};
 use crate::v2::hex::Axial;
 use crate::v2::state::EntityKey;
-
-use smallvec::SmallVec;
 
 // ---------------------------------------------------------------------------
 // Tunable constants
@@ -48,6 +45,12 @@ pub struct SharedOperationsLayer {
     stack_requests: Vec<(StackArchetype, Axial)>,
     /// Per-agent damage estimate table for loadout decisions.
     pub damage_table: DamageEstimateTable,
+}
+
+impl Default for SharedOperationsLayer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SharedOperationsLayer {
@@ -198,7 +201,7 @@ impl SharedOperationsLayer {
         }
 
         // Form stacks for each request.
-        for &(archetype, region) in &self.stack_requests {
+        for &(archetype, _region) in &self.stack_requests {
             if available.len() < MIN_STACK_SIZE {
                 break;
             }
@@ -325,11 +328,11 @@ impl SharedOperationsLayer {
                 armor_construction: ac,
                 armor_material: am,
             };
-            if let Some(est) = self.damage_table.get(&key) {
-                if est.wound_rate > best_rate {
-                    best_rate = est.wound_rate;
-                    best = eq;
-                }
+            if let Some(est) = self.damage_table.get(&key)
+                && est.wound_rate > best_rate
+            {
+                best_rate = est.wound_rate;
+                best = eq;
             }
         }
 
@@ -482,11 +485,13 @@ impl OperationsLayer for NullOperationsLayer {
 
 #[cfg(test)]
 mod tests {
+    use super::super::formation::FormationType;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
-    use super::super::state::{Combatant, EntityBuilder, Person, Structure};
+    use super::super::state::{Combatant, EntityBuilder, Person, StackId, Structure};
     use super::*;
+    use smallvec::SmallVec;
 
     fn test_state() -> GameState {
         let hf = Heightfield::new(30, 30, 0.0, GeoMaterial::Soil);

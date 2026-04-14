@@ -347,7 +347,10 @@ mod tests {
     #[test]
     fn wound_factor_laceration_slowed() {
         let f = wound_factor(0.4); // laceration weight
-        assert!((f - 0.6).abs() < EPS, "laceration should reduce to 0.6: {f}");
+        assert!(
+            (f - 0.6).abs() < EPS,
+            "laceration should reduce to 0.6: {f}"
+        );
     }
 
     #[test]
@@ -456,14 +459,8 @@ mod tests {
         // Check that max speed occurs in the first half.
         if speeds.len() > 4 {
             let mid = speeds.len() / 2;
-            let max_first_half = speeds[..mid]
-                .iter()
-                .copied()
-                .fold(0.0f32, f32::max);
-            let max_second_half = speeds[mid..]
-                .iter()
-                .copied()
-                .fold(0.0f32, f32::max);
+            let max_first_half = speeds[..mid].iter().copied().fold(0.0f32, f32::max);
+            let max_second_half = speeds[mid..].iter().copied().fold(0.0f32, f32::max);
             assert!(
                 max_first_half >= max_second_half - 0.5,
                 "should decelerate: first_half_max={max_first_half}, second_half_max={max_second_half}"

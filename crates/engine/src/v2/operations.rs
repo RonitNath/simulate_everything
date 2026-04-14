@@ -28,6 +28,12 @@ pub struct SharedOperationsLayer {
     next_stack_id: u32,
 }
 
+impl Default for SharedOperationsLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SharedOperationsLayer {
     pub fn new() -> Self {
         Self {
@@ -47,7 +53,10 @@ impl SharedOperationsLayer {
                 StrategicDirective::SetEconomicFocus(f) => self.economic_focus = *f,
                 StrategicDirective::PrioritizeRegion { center, priority } => {
                     // Replace existing priority for same region or add new.
-                    if let Some(entry) = self.priority_regions.iter_mut().find(|(c, _)| *c == *center)
+                    if let Some(entry) = self
+                        .priority_regions
+                        .iter_mut()
+                        .find(|(c, _)| *c == *center)
                     {
                         entry.1 = *priority;
                     } else {
@@ -116,12 +125,12 @@ impl SharedOperationsLayer {
         let settlements = Self::settlement_hexes(obs);
         for hex in &settlements {
             // Check food surplus at this hex.
-            if let Some(idx) = cell_index(obs, *hex) {
-                if obs.food_stockpiles[idx] > 10.0 {
-                    commands.push(OperationalCommand::ProducePerson {
-                        settlement_hex: *hex,
-                    });
-                }
+            if let Some(idx) = cell_index(obs, *hex)
+                && obs.food_stockpiles[idx] > 10.0
+            {
+                commands.push(OperationalCommand::ProducePerson {
+                    settlement_hex: *hex,
+                });
             }
         }
         commands
@@ -155,9 +164,8 @@ impl SharedOperationsLayer {
                     if road_level == 0 {
                         for (target, _) in &self.priority_regions {
                             let neighbors = hex::neighbors(*hex);
-                            if let Some(toward) = neighbors
-                                .iter()
-                                .min_by_key(|n| hex::distance(**n, *target))
+                            if let Some(toward) =
+                                neighbors.iter().min_by_key(|n| hex::distance(**n, *target))
                             {
                                 commands.push(OperationalCommand::BuildStructure {
                                     hex: *toward,
@@ -171,15 +179,14 @@ impl SharedOperationsLayer {
                     // Build farms on fertile adjacent hexes.
                     let neighbors = hex::neighbors(*hex);
                     for n in &neighbors {
-                        if let Some(n_idx) = cell_index(obs, *n) {
-                            if obs.terrain[n_idx] > 0.5
-                                && obs.stockpile_owner[n_idx] == Some(obs.player)
-                            {
-                                commands.push(OperationalCommand::BuildStructure {
-                                    hex: *n,
-                                    structure_type: StructureType::Farm,
-                                });
-                            }
+                        if let Some(n_idx) = cell_index(obs, *n)
+                            && obs.terrain[n_idx] > 0.5
+                            && obs.stockpile_owner[n_idx] == Some(obs.player)
+                        {
+                            commands.push(OperationalCommand::BuildStructure {
+                                hex: *n,
+                                structure_type: StructureType::Farm,
+                            });
                         }
                     }
                 }
@@ -253,12 +260,7 @@ impl SharedOperationsLayer {
         // that aren't in stacks get grouped with the nearest stack.
         let unstacked: Vec<&UnitInfo> = available
             .iter()
-            .filter(|u| {
-                !self
-                    .stacks
-                    .iter()
-                    .any(|s| s.entities.contains(&u.id))
-            })
+            .filter(|u| !self.stacks.iter().any(|s| s.entities.contains(&u.id)))
             .copied()
             .collect();
 
@@ -293,9 +295,8 @@ impl SharedOperationsLayer {
                 }
                 Posture::Expand => {
                     // Route scouts toward unexplored territory.
-                    self.expansion_target.or_else(|| {
-                        find_unexplored_direction(obs, stack.hex)
-                    })
+                    self.expansion_target
+                        .or_else(|| find_unexplored_direction(obs, stack.hex))
                 }
                 Posture::Defend => {
                     // Route garrison toward nearest settlement.
@@ -315,13 +316,13 @@ impl SharedOperationsLayer {
                 }
             };
 
-            if let Some(dest) = destination {
-                if hex::distance(stack.hex, dest) > 1 {
-                    commands.push(OperationalCommand::RouteStack {
-                        stack: stack.id,
-                        destination: dest,
-                    });
-                }
+            if let Some(dest) = destination
+                && hex::distance(stack.hex, dest) > 1
+            {
+                commands.push(OperationalCommand::RouteStack {
+                    stack: stack.id,
+                    destination: dest,
+                });
             }
         }
 
@@ -362,16 +363,15 @@ impl SharedOperationsLayer {
                     .unwrap_or(false)
             });
 
-            if needs_supply {
-                if let Some(source) = surplus_settlements
+            if needs_supply
+                && let Some(source) = surplus_settlements
                     .iter()
                     .min_by_key(|s| hex::distance(**s, stack.hex))
-                {
-                    commands.push(OperationalCommand::EstablishSupplyRoute {
-                        from: *source,
-                        to: stack.hex,
-                    });
-                }
+            {
+                commands.push(OperationalCommand::EstablishSupplyRoute {
+                    from: *source,
+                    to: stack.hex,
+                });
             }
         }
 
@@ -399,21 +399,19 @@ impl SharedOperationsLayer {
         }
 
         // Find the target from strategy, or pick one.
-        let target = self.expansion_target.or_else(|| {
-            find_best_settlement_site(obs, &settlements)
-        });
+        let target = self
+            .expansion_target
+            .or_else(|| find_best_settlement_site(obs, &settlements));
 
         if let Some(target_hex) = target {
             // Find the largest settlement to dispatch from.
-            let source = settlements
-                .iter()
-                .max_by_key(|hex| {
-                    obs.own_population
-                        .iter()
-                        .filter(|p| p.q == hex.q && p.r == hex.r)
-                        .map(|p| p.count)
-                        .sum::<u16>()
-                });
+            let source = settlements.iter().max_by_key(|hex| {
+                obs.own_population
+                    .iter()
+                    .filter(|p| p.q == hex.q && p.r == hex.r)
+                    .map(|p| p.count)
+                    .sum::<u16>()
+            });
 
             if let Some(source_hex) = source {
                 commands.push(OperationalCommand::ProducePerson {
@@ -539,7 +537,7 @@ fn find_best_settlement_site(obs: &Observation, existing: &[Axial]) -> Option<Ax
             .unwrap_or(i32::MAX);
 
         // Too close or too far.
-        if min_dist < 3 || min_dist > 10 {
+        if !(3..=10).contains(&min_dist) {
             continue;
         }
 
@@ -869,7 +867,12 @@ mod tests {
                 SharedOperationsLayer::population_mix(&obs, *hex);
             let total = idle + farmers + workers + trained + untrained;
             // Settlement must have population.
-            assert!(total >= SETTLEMENT_THRESHOLD, "Settlement at {:?} has only {} pop", hex, total);
+            assert!(
+                total >= SETTLEMENT_THRESHOLD,
+                "Settlement at {:?} has only {} pop",
+                hex,
+                total
+            );
         }
     }
 }

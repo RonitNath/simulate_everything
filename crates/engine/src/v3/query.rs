@@ -1,5 +1,5 @@
-use super::collision::{ray_geometry, Geometry, Hit};
-use super::hex::{hexes_along_ray, hexes_in_radius, HEX_RADIUS};
+use super::collision::{Geometry, Hit, ray_geometry};
+use super::hex::{HEX_RADIUS, hexes_along_ray, hexes_in_radius};
 use super::index::SpatialIndex;
 use super::spatial::Vec2;
 use crate::v2::hex::{self, Axial};
@@ -90,18 +90,23 @@ where
 
     for hex in candidate_hexes {
         for &key in index.entities_at(hex) {
-            if let Some(geom) = entity_geom(key) {
-                if let Some(hit) = ray_geometry(origin, dir, &geom) {
-                    if hit.t <= max_dist && hit.t >= 0.0 {
-                        hits.push(EntityHit { key, hit });
-                    }
-                }
+            if let Some(geom) = entity_geom(key)
+                && let Some(hit) = ray_geometry(origin, dir, &geom)
+                && hit.t <= max_dist
+                && hit.t >= 0.0
+            {
+                hits.push(EntityHit { key, hit });
             }
         }
     }
 
     // Sort by distance
-    hits.sort_by(|a, b| a.hit.t.partial_cmp(&b.hit.t).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        a.hit
+            .t
+            .partial_cmp(&b.hit.t)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Deduplicate (entity might appear in multiple hex cells along the ray)
     hits.dedup_by_key(|h| h.key);
@@ -157,10 +162,7 @@ where
         let seg_norm = seg_dir * (1.0 / seg_len);
 
         // Check hexes near this segment
-        let mid = Vec2::new(
-            (prev.x + current.x) / 2.0,
-            (prev.y + current.y) / 2.0,
-        );
+        let mid = Vec2::new((prev.x + current.x) / 2.0, (prev.y + current.y) / 2.0);
         let candidate_hexes = hexes_in_radius(mid, seg_len / 2.0 + HEX_RADIUS);
 
         for hex in candidate_hexes {
@@ -168,20 +170,19 @@ where
                 if seen.contains(&key) {
                     continue;
                 }
-                if let Some(geom) = entity_geom(key) {
-                    if let Some(hit) = ray_geometry(prev, seg_norm, &geom) {
-                        if hit.t <= seg_len {
-                            seen.insert(key);
-                            hits.push(EntityHit {
-                                key,
-                                hit: Hit {
-                                    t: arc_dist + hit.t,
-                                    point: hit.point,
-                                    normal: hit.normal,
-                                },
-                            });
-                        }
-                    }
+                if let Some(geom) = entity_geom(key)
+                    && let Some(hit) = ray_geometry(prev, seg_norm, &geom)
+                    && hit.t <= seg_len
+                {
+                    seen.insert(key);
+                    hits.push(EntityHit {
+                        key,
+                        hit: Hit {
+                            t: arc_dist + hit.t,
+                            point: hit.point,
+                            normal: hit.normal,
+                        },
+                    });
                 }
             }
         }
@@ -191,15 +192,20 @@ where
     }
 
     // Sort by arc distance
-    hits.sort_by(|a, b| a.hit.t.partial_cmp(&b.hit.t).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        a.hit
+            .t
+            .partial_cmp(&b.hit.t)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     hits
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::collision::{Circle, LineSegment};
     use super::super::hex::hex_to_world;
+    use super::*;
     use slotmap::SlotMap;
 
     fn setup_index_with_entities(
@@ -221,11 +227,14 @@ mod tests {
     #[test]
     fn query_radius_finds_nearby() {
         let mut sm = SlotMap::<EntityKey, Vec2>::with_key();
-        let (index, keys) = setup_index_with_entities(&mut sm, &[
-            (0.0, 0.0),
-            (10.0, 0.0),
-            (500.0, 500.0), // far away
-        ]);
+        let (index, keys) = setup_index_with_entities(
+            &mut sm,
+            &[
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (500.0, 500.0), // far away
+            ],
+        );
 
         let result = query_radius(&index, Vec2::ZERO, 50.0, |k| sm.get(k).copied());
         assert!(result.contains(&keys[0]));
@@ -261,19 +270,9 @@ mod tests {
             thickness: 1.0,
         });
 
-        let hits = query_ray(
-            &index,
-            Vec2::ZERO,
-            Vec2::new(1.0, 0.0),
-            200.0,
-            |k| {
-                if k == wall_key {
-                    Some(wall_geom)
-                } else {
-                    None
-                }
-            },
-        );
+        let hits = query_ray(&index, Vec2::ZERO, Vec2::new(1.0, 0.0), 200.0, |k| {
+            if k == wall_key { Some(wall_geom) } else { None }
+        });
 
         assert!(!hits.is_empty());
         assert_eq!(hits[0].key, wall_key);
@@ -311,8 +310,8 @@ mod tests {
             &index,
             Vec2::ZERO,
             Vec2::new(100.0, 0.0), // horizontal velocity
-            0.0,                    // no gravity (flat trajectory)
-            2.0,                    // 2 seconds
+            0.0,                   // no gravity (flat trajectory)
+            2.0,                   // 2 seconds
             |k| {
                 if k == w1_key {
                     Some(w1_geom)
@@ -327,6 +326,9 @@ mod tests {
         assert_eq!(hits.len(), 2, "should hit both walls");
         assert_eq!(hits[0].key, w1_key, "first wall should be hit first");
         assert_eq!(hits[1].key, w2_key, "second wall should be hit second");
-        assert!(hits[0].hit.t < hits[1].hit.t, "hits should be in distance order");
+        assert!(
+            hits[0].hit.t < hits[1].hit.t,
+            "hits should be in distance order"
+        );
     }
 }

@@ -61,12 +61,11 @@ impl SubprocessAgent {
     }
 
     fn send_line(&mut self, line: &str) -> bool {
-        if let Some(ref mut handle) = self.child {
-            if let Some(ref mut stdin) = handle.child.stdin {
-                if writeln!(stdin, "{}", line).is_ok() {
-                    return stdin.flush().is_ok();
-                }
-            }
+        if let Some(ref mut handle) = self.child
+            && let Some(ref mut stdin) = handle.child.stdin
+            && writeln!(stdin, "{}", line).is_ok()
+        {
+            return stdin.flush().is_ok();
         }
         false
     }

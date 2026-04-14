@@ -16,12 +16,10 @@ pub fn next_step(state: &GameState, from: Axial, to: Axial) -> Option<Axial> {
         return None;
     }
 
-    let best = neighbors(from)
+    neighbors(from)
         .into_iter()
         .filter(|&n| state.in_bounds(n))
-        .min_by_key(|&n| distance(n, to));
-
-    best
+        .min_by_key(|&n| distance(n, to))
 }
 
 /// Full shortest path from `from` to `to` via BFS.

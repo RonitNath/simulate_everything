@@ -32,8 +32,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use simulate_everything_web::v3_protocol;
@@ -648,7 +648,7 @@ impl ArenaConfigFile {
                 .or(defaults.side_b_center)
                 .unwrap_or([200.0, 50.0]),
         );
-        let cluster_radius_m = self.cluster_radius_m.unwrap_or_else(|| {
+        let cluster_radius_m = self.cluster_radius_m.unwrap_or({
             if side_a.soldiers > 1 || side_b.soldiers > 1 {
                 30.0
             } else {
@@ -1551,7 +1551,7 @@ fn run_bench_game(
         total_deaths += tick_result.deaths;
         tick_count += 1;
 
-        if state.tick % SNAP_INTERVAL == 0 || is_game_over(&state).is_some() {
+        if state.tick.is_multiple_of(SNAP_INTERVAL) || is_game_over(&state).is_some() {
             let snap = take_snapshot(&state, state.tick, num_players);
 
             // Track lead changes by entity count.
@@ -1563,10 +1563,10 @@ fn run_bench_game(
                 .max_by_key(|(_, e)| *e)
                 .map(|(i, _)| i as u8);
 
-            if let (Some(prev), Some(curr)) = (prev_leader, leader) {
-                if prev != curr {
-                    lead_changes += 1;
-                }
+            if let (Some(prev), Some(curr)) = (prev_leader, leader)
+                && prev != curr
+            {
+                lead_changes += 1;
             }
             prev_leader = leader;
 
@@ -1664,7 +1664,7 @@ fn run_arena(config: &ArenaConfigFile, replay_path: Option<&str>) {
         &mut rng,
     );
 
-    let mut agents = vec![
+    let mut agents = [
         make_agent(&scenario.side_a.agent, 0),
         make_agent(&scenario.side_b.agent, 1),
     ];
@@ -2158,17 +2158,15 @@ fn mechanics_high_ground_head_bias() -> MechanicsScenarioResult {
 
         if let ImpactResult::Wounded { wound, .. } =
             damage::resolve_impact(&uphill, &defender_state)
+            && wound.zone == BodyZone::Head
         {
-            if wound.zone == BodyZone::Head {
-                high_head_hits += 1;
-            }
+            high_head_hits += 1;
         }
         if let ImpactResult::Wounded { wound, .. } =
             damage::resolve_impact(&downhill, &defender_state)
+            && wound.zone == BodyZone::Head
         {
-            if wound.zone == BodyZone::Head {
-                low_head_hits += 1;
-            }
+            low_head_hits += 1;
         }
     }
 
@@ -2769,10 +2767,10 @@ fn apply_side_post_setup(
         if let Some(pos) = entity.pos.as_mut() {
             pos.z += z_offset;
         }
-        if let Some(skill) = skill {
-            if let Some(person) = entity.person.as_mut() {
-                person.combat_skill = skill;
-            }
+        if let Some(skill) = skill
+            && let Some(person) = entity.person.as_mut()
+        {
+            person.combat_skill = skill;
         }
         if let Some(vitals) = entity.vitals.as_mut() {
             if let Some(blood) = blood {
@@ -2938,10 +2936,10 @@ fn players_alive(state: &GameState) -> Vec<bool> {
         if is_dead {
             continue;
         }
-        if let Some(owner) = entity.owner {
-            if (owner as usize) < alive.len() {
-                alive[owner as usize] = true;
-            }
+        if let Some(owner) = entity.owner
+            && (owner as usize) < alive.len()
+        {
+            alive[owner as usize] = true;
         }
     }
     alive
@@ -2961,10 +2959,10 @@ fn player_entity_counts(state: &GameState, num_players: u8) -> Vec<usize> {
         if is_dead {
             continue;
         }
-        if let Some(owner) = entity.owner {
-            if (owner as usize) < counts.len() {
-                counts[owner as usize] += 1;
-            }
+        if let Some(owner) = entity.owner
+            && (owner as usize) < counts.len()
+        {
+            counts[owner as usize] += 1;
         }
     }
     counts
@@ -2988,10 +2986,10 @@ fn player_soldier_counts(state: &GameState, num_players: u8) -> Vec<usize> {
         if is_dead {
             continue;
         }
-        if let Some(owner) = entity.owner {
-            if (owner as usize) < counts.len() {
-                counts[owner as usize] += 1;
-            }
+        if let Some(owner) = entity.owner
+            && (owner as usize) < counts.len()
+        {
+            counts[owner as usize] += 1;
         }
     }
     counts
@@ -3008,24 +3006,24 @@ fn estimate_territory(state: &GameState, num_players: u8) -> Vec<usize> {
         if is_dead {
             continue;
         }
-        if let Some(owner) = entity.owner {
-            if let Some(hex) = entity.hex {
-                hex_owners.entry((hex.q, hex.r)).or_default().push(owner);
-            }
+        if let Some(owner) = entity.owner
+            && let Some(hex) = entity.hex
+        {
+            hex_owners.entry((hex.q, hex.r)).or_default().push(owner);
         }
     }
     let mut territory = vec![0usize; num_players as usize];
-    for (_, owners) in &hex_owners {
+    for owners in hex_owners.values() {
         let mut counts = vec![0u32; num_players as usize];
         for &o in owners {
             if (o as usize) < counts.len() {
                 counts[o as usize] += 1;
             }
         }
-        if let Some((player, &count)) = counts.iter().enumerate().max_by_key(|(_, c)| **c) {
-            if count > 0 {
-                territory[player] += 1;
-            }
+        if let Some((player, &count)) = counts.iter().enumerate().max_by_key(|(_, c)| **c)
+            && count > 0
+        {
+            territory[player] += 1;
         }
     }
     territory
@@ -3068,11 +3066,11 @@ fn score_game(
     }
 
     // Comeback: winner was behind late.
-    if let Some(wi) = winner_idx {
-        if winner_was_behind_late(wi, snapshots, max_ticks / 4) {
-            score += 30.0;
-            tags.push("comeback".into());
-        }
+    if let Some(wi) = winner_idx
+        && winner_was_behind_late(wi, snapshots, max_ticks / 4)
+    {
+        score += 30.0;
+        tags.push("comeback".into());
     }
 
     // Draw.
@@ -3129,11 +3127,11 @@ fn score_game(
     }
 
     // Upset: non-first player wins.
-    if let Some(wi) = winner_idx {
-        if wi != 0 {
-            score += 5.0;
-            tags.push("upset".into());
-        }
+    if let Some(wi) = winner_idx
+        && wi != 0
+    {
+        score += 5.0;
+        tags.push("upset".into());
     }
 
     (score, tags)
@@ -3152,12 +3150,11 @@ fn count_late_lead_changes(snapshots: &[V3Snapshot], after_tick: u64) -> u32 {
             .max_by_key(|(_, e)| *e)
             .map(|(i, _)| i);
 
-        if snap.tick > after_tick {
-            if let (Some(prev), Some(curr)) = (prev_leader, leader) {
-                if prev != curr {
-                    changes += 1;
-                }
-            }
+        if snap.tick > after_tick
+            && let (Some(prev), Some(curr)) = (prev_leader, leader)
+            && prev != curr
+        {
+            changes += 1;
         }
         prev_leader = leader;
     }
@@ -3707,8 +3704,8 @@ fn print_interesting_games(results: &[V3GameResult], top_n: usize) {
 
     eprintln!("\n  Top {} interesting games:", top_n.min(ranked.len()));
     eprintln!(
-        "  {:>6} {:>6} {:>10} {:>12} {:>8}  {}",
-        "seed", "ticks", "winner", "final_ents", "score", "tags"
+        "  {:>6} {:>6} {:>10} {:>12} {:>8}  tags",
+        "seed", "ticks", "winner", "final_ents", "score"
     );
     for r in ranked.iter().take(top_n) {
         let winner_str = r.winner.as_deref().unwrap_or("draw");
@@ -3754,10 +3751,10 @@ fn print_ascii(state: &GameState) {
                 // Find dominant owner.
                 let mut owner_counts = [0u32; 8];
                 for e in &entities {
-                    if let Some(o) = e.owner {
-                        if (o as usize) < owner_counts.len() {
-                            owner_counts[o as usize] += 1;
-                        }
+                    if let Some(o) = e.owner
+                        && (o as usize) < owner_counts.len()
+                    {
+                        owner_counts[o as usize] += 1;
                     }
                 }
                 let dominant = owner_counts

@@ -1,4 +1,4 @@
-use crate::v2::hex::{axial_to_offset, offset_to_axial, Axial};
+use crate::v2::hex::{Axial, axial_to_offset, offset_to_axial};
 
 use super::state::{GameState, ResourceType, Role, StructureType};
 

@@ -9,7 +9,7 @@ use super::damage_table::{DamageEstimateTable, MatchupKey};
 use super::formation::FormationType;
 use super::hex::world_to_hex;
 use super::index::ring_hexes;
-use super::state::{GameState, Stack, StackId};
+use super::state::{GameState, Stack};
 use crate::v2::state::EntityKey;
 
 // ---------------------------------------------------------------------------
@@ -110,7 +110,7 @@ impl SharedTacticalLayer {
             let best_target = nearby_enemies
                 .iter()
                 .filter_map(|&enemy_key| {
-                    let enemy = state.entities.get(enemy_key)?;
+                    let _enemy = state.entities.get(enemy_key)?;
                     let score = self.score_target(weapon_dt, enemy_key, state);
                     Some((enemy_key, score))
                 })
@@ -181,14 +181,12 @@ impl SharedTacticalLayer {
                 if eq.shield.is_some() {
                     has_shield = true;
                 }
-                if let Some(wk) = eq.weapon {
-                    if let Some(we) = state.entities.get(wk) {
-                        if let Some(wp) = &we.weapon_props {
-                            if wp.is_ranged() {
-                                has_ranged = true;
-                            }
-                        }
-                    }
+                if let Some(wk) = eq.weapon
+                    && let Some(we) = state.entities.get(wk)
+                    && let Some(wp) = &we.weapon_props
+                    && wp.is_ranged()
+                {
+                    has_ranged = true;
                 }
             }
         }
@@ -226,12 +224,12 @@ impl SharedTacticalLayer {
         // Find centroid of enemies.
         let (mut cx, mut cy, mut count) = (0.0f32, 0.0f32, 0u32);
         for &ek in &nearby_enemies {
-            if let Some(e) = state.entities.get(ek) {
-                if let Some(pos) = e.pos {
-                    cx += pos.x;
-                    cy += pos.y;
-                    count += 1;
-                }
+            if let Some(e) = state.entities.get(ek)
+                && let Some(pos) = e.pos
+            {
+                cx += pos.x;
+                cy += pos.y;
+                count += 1;
             }
         }
         if count == 0 {
@@ -352,12 +350,12 @@ fn retreat_direction(state: &GameState, stack: &Stack) -> super::spatial::Vec3 {
     // Stack centroid.
     let (mut sx, mut sy, mut sc) = (0.0f32, 0.0f32, 0u32);
     for &mk in &stack.members {
-        if let Some(e) = state.entities.get(mk) {
-            if let Some(pos) = e.pos {
-                sx += pos.x;
-                sy += pos.y;
-                sc += 1;
-            }
+        if let Some(e) = state.entities.get(mk)
+            && let Some(pos) = e.pos
+        {
+            sx += pos.x;
+            sy += pos.y;
+            sc += 1;
         }
     }
     if sc == 0 {
@@ -370,12 +368,12 @@ fn retreat_direction(state: &GameState, stack: &Stack) -> super::spatial::Vec3 {
     let enemies = find_nearby_enemies(state, stack, ENGAGEMENT_RADIUS);
     let (mut ex, mut ey, mut ec) = (0.0f32, 0.0f32, 0u32);
     for &ek in &enemies {
-        if let Some(e) = state.entities.get(ek) {
-            if let Some(pos) = e.pos {
-                ex += pos.x;
-                ey += pos.y;
-                ec += 1;
-            }
+        if let Some(e) = state.entities.get(ek)
+            && let Some(pos) = e.pos
+        {
+            ex += pos.x;
+            ey += pos.y;
+            ec += 1;
         }
     }
     if ec == 0 {
@@ -414,7 +412,7 @@ mod tests {
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
-    use super::super::state::{Combatant, EntityBuilder, Person, Role};
+    use super::super::state::{Combatant, EntityBuilder, Person, Role, StackId};
     use super::super::weapon;
     use super::*;
     use smallvec::SmallVec;

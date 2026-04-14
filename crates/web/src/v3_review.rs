@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use simulate_everything_engine::v3::{
-    agent::AgentTrace,
-    combat_log::CombatObservation,
-    state::GameState,
+    agent::AgentTrace, combat_log::CombatObservation, state::GameState,
 };
 use std::{
     collections::VecDeque,
@@ -152,9 +150,7 @@ impl V3ReviewRecorder {
         tick: u64,
         annotation: String,
     ) -> Result<FlagResponse, String> {
-        let gn = self
-            .game_number
-            .ok_or("no game in progress")?;
+        let gn = self.game_number.ok_or("no game in progress")?;
         if game_number != gn {
             return Err(format!(
                 "game number mismatch: expected {}, got {}",
@@ -163,16 +159,8 @@ impl V3ReviewRecorder {
         }
 
         // Check tick is within buffer range.
-        let buffer_start = self
-            .buffer
-            .front()
-            .map(|r| r.tick)
-            .unwrap_or(0);
-        let buffer_end = self
-            .buffer
-            .back()
-            .map(|r| r.tick)
-            .unwrap_or(0);
+        let buffer_start = self.buffer.front().map(|r| r.tick).unwrap_or(0);
+        let _buffer_end = self.buffer.back().map(|r| r.tick).unwrap_or(0);
 
         if tick < buffer_start {
             return Err(format!(
@@ -203,10 +191,7 @@ impl V3ReviewRecorder {
     }
 
     /// Start a segment capture.
-    pub fn start_capture(
-        &mut self,
-        game_number: u64,
-    ) -> Result<FlagResponse, String> {
+    pub fn start_capture(&mut self, game_number: u64) -> Result<FlagResponse, String> {
         let gn = self.game_number.ok_or("no game in progress")?;
         if game_number != gn {
             return Err("game number mismatch".to_string());
@@ -215,11 +200,7 @@ impl V3ReviewRecorder {
             return Err("segment capture already active".to_string());
         }
 
-        let current_tick = self
-            .buffer
-            .back()
-            .map(|r| r.tick)
-            .unwrap_or(0);
+        let current_tick = self.buffer.back().map(|r| r.tick).unwrap_or(0);
 
         self.active_segment = Some(ActiveSegment {
             start_tick: current_tick,
@@ -237,10 +218,7 @@ impl V3ReviewRecorder {
     }
 
     /// Stop a segment capture and persist the bundle.
-    pub async fn stop_capture(
-        &mut self,
-        game_number: u64,
-    ) -> Result<FlagResponse, String> {
+    pub async fn stop_capture(&mut self, game_number: u64) -> Result<FlagResponse, String> {
         let gn = self.game_number.ok_or("no game in progress")?;
         if game_number != gn {
             return Err("game number mismatch".to_string());
@@ -278,7 +256,11 @@ impl V3ReviewRecorder {
         .await
         .map_err(|e| format!("failed to write bundle: {}", e))?;
 
-        info!("V3 segment capture stopped: {} ({} ticks)", id, segment.records.len());
+        info!(
+            "V3 segment capture stopped: {} ({} ticks)",
+            id,
+            segment.records.len()
+        );
 
         Ok(FlagResponse {
             id,
@@ -289,11 +271,7 @@ impl V3ReviewRecorder {
 
     /// Collect ready flag bundles (flags where we have enough post-ticks).
     pub async fn collect_ready_flags(&mut self) {
-        let buffer_end = self
-            .buffer
-            .back()
-            .map(|r| r.tick)
-            .unwrap_or(0);
+        let buffer_end = self.buffer.back().map(|r| r.tick).unwrap_or(0);
 
         let game_number = match self.game_number {
             Some(gn) => gn,
@@ -323,7 +301,10 @@ impl V3ReviewRecorder {
                 .collect();
 
             if records.is_empty() {
-                warn!("V3 review flag at tick {} has no records in window", flag.tick);
+                warn!(
+                    "V3 review flag at tick {} has no records in window",
+                    flag.tick
+                );
                 continue;
             }
 

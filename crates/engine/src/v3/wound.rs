@@ -270,14 +270,23 @@ mod tests {
         let wound = make_wound(BodyZone::Torso, Severity::Laceration, 0);
         let bleed_0 = effective_bleed(&wound, 0);
         let bleed_100 = effective_bleed(&wound, 100);
-        assert!(bleed_100 < bleed_0, "bleed should decrease: {bleed_0} → {bleed_100}");
+        assert!(
+            bleed_100 < bleed_0,
+            "bleed should decrease: {bleed_0} → {bleed_100}"
+        );
     }
 
     #[test]
     fn wound_severity_weight_ordering() {
-        assert!(wound_severity_weight(Severity::Scratch) < wound_severity_weight(Severity::Laceration));
-        assert!(wound_severity_weight(Severity::Laceration) < wound_severity_weight(Severity::Puncture));
-        assert!(wound_severity_weight(Severity::Puncture) < wound_severity_weight(Severity::Fracture));
+        assert!(
+            wound_severity_weight(Severity::Scratch) < wound_severity_weight(Severity::Laceration)
+        );
+        assert!(
+            wound_severity_weight(Severity::Laceration) < wound_severity_weight(Severity::Puncture)
+        );
+        assert!(
+            wound_severity_weight(Severity::Puncture) < wound_severity_weight(Severity::Fracture)
+        );
     }
 
     #[test]
