@@ -82,3 +82,9 @@ pub const INITIAL_UNITS: usize = 5;
 pub const TICKS_PER_SECOND: u32 = 10;
 pub const AGENT_POLL_INTERVAL: u32 = 5;
 pub const MAX_RATIONS: f32 = 50.0;
+/// Food consumed per person entity per tick.
+pub const PERSON_FOOD_RATE: f32 = 0.005;
+/// Build progress per builder entity per tick.
+pub const BUILD_RATE: f32 = 0.02;
+/// Health lost per person entity per tick when starving.
+pub const STARVATION_HEALTH_DAMAGE: f32 = 0.01;

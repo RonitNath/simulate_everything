@@ -239,6 +239,52 @@ fn assign_role(state: &mut GameState, player_id: u8, hex: Axial, role: Role, cou
         remaining -= take;
     }
     merge_population(state);
+
+    // Sync entity Person roles at this hex for the same owner.
+    sync_entity_roles(state, player_id, hex, role, count);
+}
+
+/// Update entity Person roles to match a legacy AssignRole directive.
+fn sync_entity_roles(
+    state: &mut GameState,
+    player_id: u8,
+    hex: Axial,
+    target_role: Role,
+    count: u16,
+) {
+    use super::state::EntityKey;
+
+    // Find entity persons at this hex owned by this player that can change role
+    let candidates: Vec<EntityKey> = state
+        .entities
+        .iter()
+        .filter(|(_, e)| {
+            e.owner == Some(player_id)
+                && e.person.is_some()
+                && e.combatant.is_none() // Don't touch military entities
+                && e.person.as_ref().is_some_and(|p| p.role != target_role && p.role != Role::Soldier)
+        })
+        .filter(|(_, e)| {
+            // Entity is at the target hex (directly or via container)
+            state.entity_hex(e) == Some(hex)
+        })
+        .map(|(k, _)| k)
+        .collect();
+
+    let mut remaining = count;
+    for key in candidates {
+        if remaining == 0 {
+            break;
+        }
+        if let Some(person) = state
+            .entities
+            .get_mut(key)
+            .and_then(|e| e.person.as_mut())
+        {
+            person.role = target_role;
+            remaining -= 1;
+        }
+    }
 }
 
 fn train_soldiers(state: &mut GameState, player_id: u8, hex: Axial) {
@@ -267,6 +313,8 @@ fn train_soldiers(state: &mut GameState, player_id: u8, hex: Axial) {
     state.record_material_consumed(take as f32 * SOLDIER_EQUIP_COST);
     split_population(state, key, take, Role::Soldier, 0.0);
     merge_population(state);
+    // Sync: change entity Idle persons to Soldier at this hex
+    sync_entity_roles(state, player_id, hex, Role::Soldier, take);
 }
 
 fn produce_unit(state: &mut GameState, player_id: u8, production_hex: Axial) {
