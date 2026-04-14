@@ -19,3 +19,4 @@ replays/
 docker/replays/
 var/
 *.png
+v3behavior_output/
