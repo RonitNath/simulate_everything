@@ -1,8 +1,7 @@
 use super::armor::{ArmorProperties, BodyZone, DamageType};
 use super::body::{surface_angle, zone_for_location};
-use super::martial::{self, AttackMotion, BlockManeuver};
 use super::vitals::Vitals;
-use super::wound::{Wound, WoundList, severity_for_depth};
+use super::wound::{severity_for_depth, Wound, WoundList};
 use crate::v2::state::EntityKey;
 
 // ---------------------------------------------------------------------------
@@ -22,8 +21,6 @@ const HEIGHT_BIAS_FACTOR: f32 = 0.1;
 
 /// Height modifier for block cost when defending against height-advantaged attacker.
 const HEIGHT_BLOCK_MODIFIER: f32 = 0.3;
-/// Convert impact energy into manageable stamina drain for active blocks.
-const BLOCK_COST_SCALE: f32 = 0.035;
 
 /// Torso organ damage multiplier on bleed rate.
 const TORSO_BLEED_MULTIPLIER: f32 = 1.5;
@@ -44,8 +41,6 @@ pub struct Impact {
     pub cross_section: f32,
     /// How the weapon delivers force.
     pub damage_type: DamageType,
-    /// Explicit melee motion for swordplay semantics.
-    pub attack_motion: AttackMotion,
     /// Direction the attack comes from (radians).
     pub attack_direction: f32,
     /// Who is attacking (for kill attribution).
@@ -75,10 +70,6 @@ pub struct BlockCapability {
     pub arc: f32,
     /// Stamina cost multiplier (0.0–1.0). Lower = more efficient.
     pub efficiency: f32,
-    /// Selected response to the incoming attack.
-    pub maneuver: BlockManeuver,
-    /// Defender training used for timing and guard selection.
-    pub read_skill: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -91,20 +82,17 @@ pub enum ImpactResult {
     /// Attack was blocked. Defender's stamina drained by `stamina_cost`.
     Blocked {
         stamina_cost: f32,
-        maneuver: BlockManeuver,
     },
     /// Attack was deflected by armor. May still cause stagger.
     Deflected {
         /// Force transmitted through armor (for stamina drain / stagger).
         transmitted_force: f32,
-        block_maneuver: Option<BlockManeuver>,
     },
     /// Attack penetrated. Wound should be applied to defender.
     Wounded {
         wound: Wound,
         /// Residual force that may cause stagger even on penetration.
         transmitted_force: f32,
-        block_maneuver: Option<BlockManeuver>,
     },
 }
 
@@ -154,39 +142,21 @@ pub fn resolve_impact(impact: &Impact, defender: &DefenderState) -> ImpactResult
     let zone = zone_for_location(biased_hit);
 
     // Step 2: Block check
-    let mut attempted_block = None;
     if let Some(block) = &defender.block {
         if defender.vitals.stamina > 0.0 && !defender.vitals.is_staggered() {
             // Check if attack is within block arc (centered on defender's front).
             // "Front" is defender_facing + π (the direction attacks come from head-on).
             let front = defender.facing + std::f32::consts::PI;
             let deviation = angle_diff(impact.attack_direction, front).abs();
-            let effectiveness = martial::block_effectiveness(
-                block.maneuver,
-                impact.attack_motion,
-                impact.height_diff,
-            );
-            let effective_arc = block.arc
-                * (0.65 + 0.55 * block.read_skill.clamp(0.0, 1.0))
-                * (0.45 + 0.55 * effectiveness);
-            if deviation <= effective_arc / 2.0 && effectiveness > 0.2 {
-                attempted_block = Some(block.maneuver);
+            if deviation <= block.arc / 2.0 {
                 // Block cost: KE * efficiency, modified by height
                 let height_mod = 1.0 + impact.height_diff.max(0.0) * HEIGHT_BLOCK_MODIFIER;
-                let read_discount = 1.1 - 0.45 * block.read_skill.clamp(0.0, 1.0);
-                let maneuver_discount = 1.3 - 0.75 * effectiveness;
-                let cost = impact.kinetic_energy
-                    * block.efficiency
-                    * BLOCK_COST_SCALE
-                    * height_mod
-                    * read_discount
-                    * maneuver_discount;
+                let cost = impact.kinetic_energy * block.efficiency * height_mod;
 
                 if defender.vitals.stamina >= cost {
                     // Full block
                     return ImpactResult::Blocked {
                         stamina_cost: cost,
-                        maneuver: block.maneuver,
                     };
                 }
                 // Partial block: residual force passes through.
@@ -246,7 +216,6 @@ pub fn resolve_impact(impact: &Impact, defender: &DefenderState) -> ImpactResult
         ImpactResult::Wounded {
             wound,
             transmitted_force: impact.kinetic_energy,
-            block_maneuver: attempted_block,
         }
     } else {
         // Step 7b: Deflection
@@ -259,7 +228,6 @@ pub fn resolve_impact(impact: &Impact, defender: &DefenderState) -> ImpactResult
 
         ImpactResult::Deflected {
             transmitted_force: transmitted,
-            block_maneuver: attempted_block,
         }
     }
 }
@@ -270,14 +238,16 @@ pub fn resolve_impact(impact: &Impact, defender: &DefenderState) -> ImpactResult
 
 /// Apply the result of `resolve_impact` to the defender's mutable state.
 /// Separated from resolve_impact so the pipeline itself is pure (no mutation).
-pub fn apply_impact_result(result: ImpactResult, vitals: &mut Vitals, wounds: &mut WoundList) {
+pub fn apply_impact_result(
+    result: ImpactResult,
+    vitals: &mut Vitals,
+    wounds: &mut WoundList,
+) {
     match result {
-        ImpactResult::Blocked { stamina_cost, .. } => {
+        ImpactResult::Blocked { stamina_cost } => {
             vitals.drain_stamina(stamina_cost);
         }
-        ImpactResult::Deflected {
-            transmitted_force, ..
-        } => {
+        ImpactResult::Deflected { transmitted_force } => {
             if transmitted_force > 0.0 {
                 // Crush deflection: stamina drain + potential stagger
                 vitals.drain_stamina(transmitted_force * 0.1);
@@ -289,7 +259,6 @@ pub fn apply_impact_result(result: ImpactResult, vitals: &mut Vitals, wounds: &m
         ImpactResult::Wounded {
             wound,
             transmitted_force,
-            ..
         } => {
             wounds.push(wound);
             if transmitted_force > STAGGER_FORCE_THRESHOLD {
@@ -346,9 +315,9 @@ fn zone_to_index(zone: BodyZone) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::super::armor::{ArmorConstruction, ArmorProperties, MaterialType};
     use super::super::vitals::Vitals;
-    use super::*;
     use slotmap::SlotMap;
     use std::f32::consts::PI;
 
@@ -389,7 +358,6 @@ mod tests {
             sharpness: 0.8,
             cross_section: 0.5,
             damage_type: DamageType::Slash,
-            attack_motion: AttackMotion::Forehand,
             attack_direction: direction,
             attacker_id: attacker,
             height_diff: 0.0,
@@ -403,7 +371,6 @@ mod tests {
             sharpness: 0.1,
             cross_section: 1.0,
             damage_type: DamageType::Crush,
-            attack_motion: AttackMotion::Overhead,
             attack_direction: direction,
             attacker_id: attacker,
             height_diff: 0.0,
@@ -417,7 +384,6 @@ mod tests {
             sharpness: 0.9,
             cross_section: 0.05,
             damage_type: DamageType::Pierce,
-            attack_motion: AttackMotion::Generic,
             attack_direction: direction,
             attacker_id: attacker,
             height_diff: 0.0,
@@ -492,10 +458,7 @@ mod tests {
         let result = resolve_impact(&impact, &def);
         match result {
             ImpactResult::Deflected { transmitted_force } => {
-                assert!(
-                    transmitted_force > 0.0,
-                    "crush should transmit force on deflection"
-                );
+                assert!(transmitted_force > 0.0, "crush should transmit force on deflection");
             }
             ImpactResult::Wounded { .. } => {
                 // If coverage roll missed, the impact hits skin → wound
@@ -591,13 +554,11 @@ mod tests {
         def.block = Some(BlockCapability {
             arc: PI, // wide arc
             efficiency: 0.3,
-            maneuver: BlockManeuver::HighGuard,
-            read_skill: 1.0,
         });
 
         let result = resolve_impact(&impact, &def);
         match result {
-            ImpactResult::Blocked { stamina_cost, .. } => {
+            ImpactResult::Blocked { stamina_cost } => {
                 // cost = KE * efficiency * height_mod = 1.0 * 0.3 * 1.0 = 0.3
                 assert!(
                     (stamina_cost - 0.3).abs() < 0.01,
@@ -619,8 +580,6 @@ mod tests {
         def.block = Some(BlockCapability {
             arc: PI,
             efficiency: 0.3,
-            maneuver: BlockManeuver::HighGuard,
-            read_skill: 1.0,
         });
 
         let result = resolve_impact(&impact, &def);
@@ -678,10 +637,7 @@ mod tests {
         let mut vitals = Vitals::new();
         let mut wounds = WoundList::new();
         apply_impact_result(
-            ImpactResult::Blocked {
-                stamina_cost: 0.3,
-                maneuver: BlockManeuver::HighGuard,
-            },
+            ImpactResult::Blocked { stamina_cost: 0.3 },
             &mut vitals,
             &mut wounds,
         );
@@ -706,7 +662,6 @@ mod tests {
             ImpactResult::Wounded {
                 wound,
                 transmitted_force: 1.0,
-                block_maneuver: None,
             },
             &mut vitals,
             &mut wounds,
@@ -722,16 +677,12 @@ mod tests {
         apply_impact_result(
             ImpactResult::Deflected {
                 transmitted_force: 20.0,
-                block_maneuver: None,
             },
             &mut vitals,
             &mut wounds,
         );
         assert!(vitals.is_staggered());
-        assert!(
-            vitals.stamina < 1.0,
-            "should drain stamina on crush deflection"
-        );
+        assert!(vitals.stamina < 1.0, "should drain stamina on crush deflection");
     }
 
     #[test]

@@ -7,7 +7,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::armor::{ArmorConstruction, BodyZone, DamageType, MaterialType};
-use super::martial::{AttackMotion, BlockManeuver};
 use super::wound::Severity;
 use crate::v2::state::EntityKey;
 
@@ -38,11 +37,9 @@ pub struct CombatObservation {
     pub hit_zone: BodyZone,
     pub angle_of_incidence: f32,
     pub impact_force: f32,
-    pub attack_motion: AttackMotion,
 
     // -- Resolution results --
     pub blocked: bool,
-    pub block_maneuver: Option<BlockManeuver>,
     pub block_stamina_cost: f32,
     pub penetrated: bool,
     pub penetration_depth: f32,
@@ -56,7 +53,6 @@ pub struct CombatObservation {
     pub distance: f32,
     pub height_diff: f32,
     pub attacker_skill: f32,
-    pub defender_skill: f32,
     pub defender_stamina: f32,
     /// 0 = defender facing attacker, PI = rear attack.
     pub defender_facing_offset: f32,
@@ -126,9 +122,7 @@ mod tests {
             hit_zone: BodyZone::Torso,
             angle_of_incidence: 0.5,
             impact_force: 30.0,
-            attack_motion: AttackMotion::Forehand,
             blocked: false,
-            block_maneuver: None,
             block_stamina_cost: 0.0,
             penetrated: true,
             penetration_depth: 1.5,
@@ -140,7 +134,6 @@ mod tests {
             distance: 1.0,
             height_diff: 0.0,
             attacker_skill: 0.5,
-            defender_skill: 0.5,
             defender_stamina: 0.8,
             defender_facing_offset: 0.0,
         }

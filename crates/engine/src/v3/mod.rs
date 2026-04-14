@@ -11,7 +11,6 @@ pub mod hex;
 pub mod index;
 pub mod lifecycle;
 pub mod mapgen;
-pub mod martial;
 pub mod movement;
 pub mod operations;
 pub mod pathfinding;

@@ -22,7 +22,7 @@ import Inspector from "./v3/Inspector";
 import LayerToggles, { type V3RenderLayer } from "./v3/LayerToggles";
 import PlaybackControls from "./v3/PlaybackControls";
 import ScoreBar from "./v3/ScoreBar";
-import type { HexRegion } from "./v3/render/grid";
+import { pixelToHex, type HexRegion, worldToCanvas, HEX_SIZE } from "./v3/render/grid";
 import * as css from "./styles/v3.css";
 
 interface ReplayFileEntry {
@@ -73,8 +73,8 @@ const V3ReplayApp: Component = () => {
 
     for (const frame of replayFrames) {
       for (const entity of frame.entities) {
-        const row = entity.hex_r;
-        const col = entity.hex_q + Math.floor((entity.hex_r - (entity.hex_r & 1)) / 2);
+        const [x, y] = worldToCanvas(entity.x, entity.y);
+        const [row, col] = pixelToHex(x, y, HEX_SIZE);
         minRow = Math.min(minRow, row);
         maxRow = Math.max(maxRow, row);
         minCol = Math.min(minCol, col);

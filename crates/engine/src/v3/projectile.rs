@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use super::armor::DamageType;
 use super::damage::Impact;
-use super::martial::AttackMotion;
 use super::spatial::Vec3;
 use super::weapon::WeaponProperties;
 use crate::v2::state::EntityKey;
@@ -35,9 +34,9 @@ impl Projectile {
     pub fn arrow(weapon: &WeaponProperties, owner: u8) -> Self {
         Self {
             damage_type: weapon.damage_type,
-            sharpness: 0.7, // iron arrowhead
-            hardness: 5.0,  // iron
-            mass: 0.05,     // ~50g arrow
+            sharpness: 0.7,  // iron arrowhead
+            hardness: 5.0,   // iron
+            mass: 0.05,      // ~50g arrow
             arc: weapon.projectile_arc,
             source_owner: owner,
         }
@@ -72,7 +71,10 @@ const PROJECTILE_CROSS_SECTION: f32 = 0.05;
 #[derive(Debug)]
 pub enum ProjectileTick {
     /// Projectile is still in flight after this tick.
-    InFlight { pos: Vec3, vel: Vec3 },
+    InFlight {
+        pos: Vec3,
+        vel: Vec3,
+    },
     /// Projectile hit an entity. Includes the Impact for D2 pipeline.
     EntityHit {
         pos: Vec3,
@@ -80,7 +82,9 @@ pub enum ProjectileTick {
         impact: Impact,
     },
     /// Projectile hit the ground. Becomes inert at this position.
-    GroundHit { pos: Vec3 },
+    GroundHit {
+        pos: Vec3,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +123,11 @@ pub fn compute_aim_pos(
 ///
 /// Uses the standard projectile motion formula. If the target is unreachable
 /// (too far for the given speed), aims at maximum range angle (45°).
-pub fn compute_launch_velocity(origin: Vec3, aim_pos: Vec3, speed: f32) -> Vec3 {
+pub fn compute_launch_velocity(
+    origin: Vec3,
+    aim_pos: Vec3,
+    speed: f32,
+) -> Vec3 {
     let dx = aim_pos.x - origin.x;
     let dy = aim_pos.y - origin.y;
     let dz = aim_pos.z - origin.z;
@@ -226,7 +234,6 @@ where
                 sharpness: projectile.sharpness,
                 cross_section: PROJECTILE_CROSS_SECTION,
                 damage_type: projectile.damage_type,
-                attack_motion: AttackMotion::Generic,
                 attack_direction: cur_vel.xy().y.atan2(cur_vel.xy().x),
                 attacker_id,
                 height_diff: 0.0, // projectile → no height advantage concept
@@ -255,8 +262,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::weapon::wooden_bow;
     use super::*;
+    use super::super::weapon::wooden_bow;
     use slotmap::SlotMap;
 
     fn make_keys() -> (EntityKey, EntityKey) {
@@ -393,7 +400,7 @@ mod tests {
         };
 
         let pos = Vec3::new(0.0, 0.0, 100.0); // high up
-        let vel = Vec3::new(10.0, 0.0, 0.0); // horizontal
+        let vel = Vec3::new(10.0, 0.0, 0.0);   // horizontal
 
         let result = tick_projectile(
             pos,
@@ -401,15 +408,12 @@ mod tests {
             &proj,
             attacker,
             0,
-            |_, _| 0.0, // flat ground at z=0
-            |_| None,   // no entities
+            |_, _| 0.0,      // flat ground at z=0
+            |_| None,         // no entities
         );
 
         match result {
-            ProjectileTick::InFlight {
-                pos: new_pos,
-                vel: new_vel,
-            } => {
+            ProjectileTick::InFlight { pos: new_pos, vel: new_vel } => {
                 assert!(new_pos.z < pos.z, "should fall due to gravity");
                 assert!(new_vel.z < vel.z, "z velocity should decrease");
                 assert!(new_pos.x > pos.x, "should move horizontally");
@@ -430,10 +434,18 @@ mod tests {
             source_owner: 0,
         };
 
-        let pos = Vec3::new(0.0, 0.0, 0.5); // just above ground
+        let pos = Vec3::new(0.0, 0.0, 0.5);  // just above ground
         let vel = Vec3::new(10.0, 0.0, -5.0); // heading down
 
-        let result = tick_projectile(pos, vel, &proj, attacker, 0, |_, _| 0.0, |_| None);
+        let result = tick_projectile(
+            pos,
+            vel,
+            &proj,
+            attacker,
+            0,
+            |_, _| 0.0,
+            |_| None,
+        );
 
         match result {
             ProjectileTick::GroundHit { pos } => {
