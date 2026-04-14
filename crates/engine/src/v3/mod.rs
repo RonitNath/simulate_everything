@@ -1,6 +1,7 @@
 pub mod armor;
 pub mod body;
 pub mod collision;
+pub mod damage;
 pub mod equipment;
 pub mod hex;
 pub mod index;
