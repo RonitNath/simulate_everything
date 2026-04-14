@@ -369,6 +369,11 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     });
     canvasRef.appendChild(app.canvas);
 
+    // Disable PixiJS event system — we handle wheel/pointer on the raw canvas.
+    // Without this, PixiJS hit-testing crashes on synthetic WheelEvents
+    // (e.isInteractive is not a function) and swallows real events.
+    app.stage.eventMode = "none";
+
     world = new Container();
     app.stage.addChild(world);
 
