@@ -9,6 +9,15 @@ interface InspectorProps {
 }
 
 const Inspector: Component<InspectorProps> = (props) => {
+  function siteLabel(e: SpectatorEntityInfo): string | null {
+    const tags = e.physical?.tags ?? [];
+    if (!e.site) return null;
+    if (tags.includes("Farm")) return "Farm";
+    if (tags.includes("Workshop")) return "Workshop";
+    if (tags.includes("Settlement")) return "Settlement";
+    return "Site";
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") props.onClose();
   }
@@ -158,13 +167,18 @@ const Inspector: Component<InspectorProps> = (props) => {
                 </div>
               </Show>
 
-              {/* Structure / Resource */}
-              <Show when={e.structure_type}>
+              <Show when={siteLabel(e)}>
                 <div class={css.v3InspectorSection}>
                   <div class={css.v3InspectorRow}>
-                    <span class={css.v3InspectorLabel}>Structure</span>
-                    <span>{e.structure_type}</span>
+                    <span class={css.v3InspectorLabel}>Site</span>
+                    <span>{siteLabel(e)}</span>
                   </div>
+                  <Show when={e.site}>
+                    <div class={css.v3InspectorRow}>
+                      <span class={css.v3InspectorLabel}>Build</span>
+                      <span>{(e.site!.build_progress * 100).toFixed(0)}%</span>
+                    </div>
+                  </Show>
                   <Show when={e.contains_count > 0}>
                     <div class={css.v3InspectorRow}>
                       <span class={css.v3InspectorLabel}>Population</span>
@@ -174,11 +188,41 @@ const Inspector: Component<InspectorProps> = (props) => {
                 </div>
               </Show>
 
-              <Show when={e.resource_type}>
+              <Show when={e.matter}>
                 <div class={css.v3InspectorSection}>
                   <div class={css.v3InspectorRow}>
-                    <span class={css.v3InspectorLabel}>Resource</span>
-                    <span>{e.resource_type}: {e.resource_amount?.toFixed(0)}</span>
+                    <span class={css.v3InspectorLabel}>Matter</span>
+                    <span>{e.matter!.commodity}: {e.matter!.amount.toFixed(0)}</span>
+                  </div>
+                </div>
+              </Show>
+
+              <Show when={e.physical}>
+                <div class={css.v3InspectorSection}>
+                  <div class={css.v3InspectorRow}>
+                    <span class={css.v3InspectorLabel}>Material</span>
+                    <span>{e.physical!.material}</span>
+                  </div>
+                  <div class={css.v3InspectorRow}>
+                    <span class={css.v3InspectorLabel}>State</span>
+                    <span>{e.physical!.matter_state}</span>
+                  </div>
+                  <div class={css.v3InspectorRow}>
+                    <span class={css.v3InspectorLabel}>Tags</span>
+                    <span>{e.physical!.tags.join(", ") || "none"}</span>
+                  </div>
+                </div>
+              </Show>
+
+              <Show when={e.tool}>
+                <div class={css.v3InspectorSection}>
+                  <div class={css.v3InspectorRow}>
+                    <span class={css.v3InspectorLabel}>Tool Force</span>
+                    <span>{e.tool!.force_mult.toFixed(1)}x</span>
+                  </div>
+                  <div class={css.v3InspectorRow}>
+                    <span class={css.v3InspectorLabel}>Durability</span>
+                    <span>{(e.tool!.durability * 100).toFixed(0)}%</span>
                   </div>
                 </div>
               </Show>

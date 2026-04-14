@@ -4,14 +4,15 @@
 /// archetypes and priorities; operations translates to concrete entity tasks,
 /// equipment loadouts, and stack management using the damage estimate table.
 use super::agent::{
-    EconomicFocus, EquipmentType, OperationalCommand, OperationsLayer, Posture, StackArchetype,
-    StrategicDirective,
+    EconomicFocus, EntityTask, EquipmentType, OperationalCommand, OperationsLayer, Posture,
+    StackArchetype, StrategicDirective,
 };
 use super::armor::{ArmorConstruction, DamageType, MaterialType};
 use super::damage_table::{DamageEstimateTable, MatchupKey};
-use super::state::{GameState, Role, Stack, StructureType};
+use super::state::{GameState, Role, Stack};
 use crate::v2::hex::Axial;
 use crate::v2::state::EntityKey;
+use simulate_everything_protocol::PropertyTag;
 
 // ---------------------------------------------------------------------------
 // Tunable constants
@@ -93,9 +94,85 @@ impl SharedOperationsLayer {
         self.priority_regions.retain(|(_, p)| *p > 0.05);
     }
 
+    /// Assign idle entities to tasks based on economic focus weights.
     fn assign_tasks(&self, state: &GameState, player: u8) -> Vec<OperationalCommand> {
-        let _ = (state, player, role_weights(self.economic_focus));
-        Vec::new()
+        let mut commands = Vec::new();
+        let (farm_w, work_w, _soldier_w) = role_weights(self.economic_focus);
+
+        // Count current role distribution.
+        let mut farmers = 0u32;
+        let mut workers = 0u32;
+        let mut soldiers = 0u32;
+        let mut idle_entities: Vec<EntityKey> = Vec::new();
+
+        for (key, entity) in &state.entities {
+            if entity.owner != Some(player) {
+                continue;
+            }
+            let person = match &entity.person {
+                Some(p) => p,
+                None => continue,
+            };
+            match person.role {
+                Role::Farmer => farmers += 1,
+                Role::Worker | Role::Builder => workers += 1,
+                Role::Soldier => soldiers += 1,
+                Role::Idle => idle_entities.push(key),
+            }
+        }
+
+        let total = (farmers + workers + soldiers + idle_entities.len() as u32) as f32;
+        if total < 1.0 {
+            return commands;
+        }
+
+        // Assign idle entities toward the target distribution.
+        for entity_key in idle_entities {
+            let farm_ratio = farmers as f32 / total;
+            let work_ratio = workers as f32 / total;
+
+            // Find nearest workshop or farm for the task.
+            let task = if farm_ratio < farm_w {
+                // Need more farmers. Find a farm structure.
+                find_nearest_site(state, entity_key, player, PropertyTag::Farm)
+                    .map(|field| EntityTask::Farm { field })
+                    .unwrap_or(EntityTask::Idle)
+            } else if work_ratio < work_w {
+                // Need more workers. Find a workshop.
+                find_nearest_site(state, entity_key, player, PropertyTag::Workshop)
+                    .map(|workshop| EntityTask::Build { site: workshop })
+                    .unwrap_or(EntityTask::Idle)
+            } else {
+                // Default to soldiering — train.
+                EntityTask::Train
+            };
+
+            if !matches!(task, EntityTask::Idle) {
+                commands.push(OperationalCommand::AssignTask {
+                    entity: entity_key,
+                    task,
+                });
+            }
+
+            // Update counts for next iteration.
+            match &commands.last() {
+                Some(OperationalCommand::AssignTask {
+                    task: EntityTask::Farm { .. },
+                    ..
+                }) => farmers += 1,
+                Some(OperationalCommand::AssignTask {
+                    task: EntityTask::Build { .. },
+                    ..
+                }) => workers += 1,
+                Some(OperationalCommand::AssignTask {
+                    task: EntityTask::Train,
+                    ..
+                }) => soldiers += 1,
+                _ => {}
+            }
+        }
+
+        commands
     }
 
     /// Form stacks from available soldiers based on strategic requests.
@@ -273,8 +350,11 @@ impl SharedOperationsLayer {
             .iter()
             .filter(|(_, e)| {
                 e.owner == Some(player)
-                    && e.structure.as_ref().map(|s| s.structure_type)
-                        == Some(StructureType::Workshop)
+                    && e.site.is_some()
+                    && e.physical
+                        .as_ref()
+                        .map(|p| p.has_tag(PropertyTag::Workshop))
+                        .unwrap_or(false)
             })
             .map(|(k, _)| k)
             .collect();
@@ -332,11 +412,11 @@ impl OperationsLayer for SharedOperationsLayer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn find_nearest_structure(
+fn find_nearest_site(
     state: &GameState,
     entity_key: EntityKey,
     player: u8,
-    structure_type: StructureType,
+    required_tag: PropertyTag,
 ) -> Option<EntityKey> {
     let entity_pos = state.entities.get(entity_key)?.pos?;
 
@@ -345,7 +425,11 @@ fn find_nearest_structure(
         .iter()
         .filter(|(_, e)| {
             e.owner == Some(player)
-                && e.structure.as_ref().map(|s| s.structure_type) == Some(structure_type)
+                && e.site.is_some()
+                && e.physical
+                    .as_ref()
+                    .map(|physical| physical.has_tag(required_tag))
+                    .unwrap_or(false)
         })
         .filter_map(|(k, e)| {
             let pos = e.pos?;
@@ -365,14 +449,10 @@ fn find_nearest_settlement_hex(state: &GameState, stack: &Stack, player: u8) -> 
         .iter()
         .filter(|(_, e)| {
             e.owner == Some(player)
-                && e.structure
+                && e.site.is_some()
+                && e.physical
                     .as_ref()
-                    .map(|s| {
-                        matches!(
-                            s.structure_type,
-                            StructureType::Village | StructureType::City
-                        )
-                    })
+                    .map(|physical| physical.has_tag(PropertyTag::Settlement))
                     .unwrap_or(false)
         })
         .filter_map(|(_, e)| e.hex)
@@ -412,9 +492,11 @@ mod tests {
     use super::super::formation::FormationType;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
+    use super::super::physical::{PhysicalProperties, SiteProperties};
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
-    use super::super::state::{Combatant, EntityBuilder, Person, StackId, Structure};
+    use super::super::state::{Combatant, EntityBuilder, Person, StackId};
     use super::*;
+    use simulate_everything_protocol::{MaterialKind, MatterState, PropertyTag};
     use smallvec::SmallVec;
 
     fn test_state() -> GameState {
@@ -431,6 +513,7 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new()),
@@ -446,6 +529,7 @@ mod tests {
                 .person(Person {
                     role: Role::Idle,
                     combat_skill: 0.0,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0)),
         )
@@ -457,12 +541,19 @@ mod tests {
             EntityBuilder::new()
                 .pos(pos)
                 .owner(owner)
-                .structure(Structure {
-                    structure_type: StructureType::Farm,
+                .physical(
+                    PhysicalProperties::new(800.0, 0.35, MaterialKind::Wood, MatterState::Solid)
+                        .with_tags(&[
+                            PropertyTag::Farm,
+                            PropertyTag::Structural,
+                            PropertyTag::Container,
+                            PropertyTag::Harvestable,
+                        ]),
+                )
+                .site(SiteProperties {
                     build_progress: 1.0,
                     integrity: 100.0,
-                    capacity: 5,
-                    material: MaterialType::Wood,
+                    occupancy_capacity: 5,
                 }),
         )
     }
@@ -479,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn idle_entities_no_longer_receive_assign_task_commands() {
+    fn assign_tasks_to_idle_entities() {
         let mut state = test_state();
         let _idle1 = spawn_idle(&mut state, Vec3::new(50.0, 50.0, 0.0), 0);
         let _idle2 = spawn_idle(&mut state, Vec3::new(60.0, 50.0, 0.0), 0);
@@ -496,7 +587,8 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, OperationalCommand::AssignTask { .. }))
             .count();
-        assert_eq!(task_count, 0, "entity work is autonomous in Stream E");
+        // With Growth focus and a farm available, idle entities should get Farm tasks.
+        assert!(task_count > 0, "should assign tasks to idle entities");
     }
 
     #[test]

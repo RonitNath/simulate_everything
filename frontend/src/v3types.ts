@@ -1,23 +1,21 @@
 // V3 wire protocol types — mirrors crates/web/src/v3_protocol.rs
 
-export type EntityKind = "Person" | "Structure";
+export type EntityKind = "Person" | "Site" | "Object";
 export type TimeMode = "Strategic" | "Tactical" | "Cinematic";
 export type WoundSeverity = "Light" | "Serious" | "Critical";
 export type DamageType = "Slash" | "Pierce" | "Crush";
 export type FormationType = "Column" | "Line" | "Wedge" | "Square" | "Skirmish";
 export type Role = "Idle" | "Farmer" | "Worker" | "Soldier" | "Builder";
-export type ResourceType = "Food" | "Material" | "Ore" | "Wood" | "Stone";
-export type StructureType =
-  | "Farm" | "Village" | "City" | "Depot" | "Wall" | "Tower" | "Workshop";
 export type BodyZone = "Head" | "Torso" | "LeftArm" | "RightArm" | "Legs";
-export interface EntityNeedsInfo {
-  hunger: number;
-  safety: number;
-  duty: number;
-  rest: number;
-  social: number;
-  shelter: number;
-}
+export type MaterialKind =
+  | "Iron" | "Steel" | "Bronze" | "Leather" | "Wood" | "Bone" | "Cloth" | "Stone"
+  | "Soil" | "Sand" | "Clay" | "Flesh" | "Plant";
+export type MatterState = "Solid" | "Liquid" | "Gas" | "Powder";
+export type CommodityKind = "Food" | "Material" | "Ore" | "Wood" | "Stone";
+export type PropertyTag =
+  | "Harvestable" | "Edible" | "Fuel" | "HeatSource" | "Tool" | "Container"
+  | "Shelter" | "Workable" | "Structural" | "Stockpile" | "Settlement"
+  | "Farm" | "Workshop";
 
 // ---------------------------------------------------------------------------
 // Init — sent once on spectator connect
@@ -40,6 +38,35 @@ export interface V3Init {
 // Entity info
 // ---------------------------------------------------------------------------
 
+export interface PhysicalInfo {
+  material: MaterialKind;
+  matter_state: MatterState;
+  temperature_k: number;
+  mass_kg: number;
+  hardness: number;
+  tags: PropertyTag[];
+}
+
+export interface ToolInfo {
+  force_mult: number;
+  precision: number;
+  cutting_edge: number;
+  heat_output_k: number;
+  capacity_l: number;
+  durability: number;
+}
+
+export interface MatterInfo {
+  commodity: CommodityKind;
+  amount: number;
+}
+
+export interface SiteInfo {
+  build_progress: number;
+  integrity: number;
+  occupancy_capacity: number;
+}
+
 export interface SpectatorEntityInfo {
   id: number;
   owner?: number | null;
@@ -56,17 +83,13 @@ export interface SpectatorEntityInfo {
   wounds?: [BodyZone, WoundSeverity][];
   weapon_type?: string;
   armor_type?: string;
-  resource_type?: ResourceType;
-  resource_amount?: number;
-  structure_type?: StructureType;
-  build_progress?: number;
+  physical?: PhysicalInfo;
+  tool?: ToolInfo;
+  matter?: MatterInfo;
+  site?: SiteInfo;
   contains_count: number;
   stack_id?: number;
-  needs?: EntityNeedsInfo;
-  current_goal?: string;
-  current_action?: string;
-  action_queue_preview?: string[];
-  decision_reason?: string;
+  current_task?: string;
   // Swordplay visual state
   attack_phase?: string;   // "idle" | "windup" | "committed" | "recovery"
   attack_motion?: string;  // "overhead" | "forehand" | "backhand" | "thrust"
@@ -91,13 +114,13 @@ export interface EntityUpdate {
   wounds?: [BodyZone, WoundSeverity][];
   weapon_type?: string;
   armor_type?: string;
+  physical?: PhysicalInfo | null;
+  tool?: ToolInfo | null;
+  matter?: MatterInfo | null;
+  site?: SiteInfo | null;
   contains_count?: number;
   stack_id?: number | null;
-  needs?: EntityNeedsInfo | null;
-  current_goal?: string | null;
-  current_action?: string | null;
-  action_queue_preview?: string[];
-  decision_reason?: string | null;
+  current_task?: string | null;
   attack_phase?: string | null;
   attack_motion?: string | null;
   weapon_angle?: number | null;
@@ -332,11 +355,7 @@ export function applyDelta(state: V3GameState, delta: V3SnapshotDelta): void {
     if (u.armor_type !== undefined) e.armor_type = u.armor_type ?? undefined;
     if (u.contains_count !== undefined) e.contains_count = u.contains_count;
     if (u.stack_id !== undefined) e.stack_id = u.stack_id ?? undefined;
-    if (u.needs !== undefined) e.needs = u.needs ?? undefined;
-    if (u.current_goal !== undefined) e.current_goal = u.current_goal ?? undefined;
-    if (u.current_action !== undefined) e.current_action = u.current_action ?? undefined;
-    if (u.action_queue_preview !== undefined) e.action_queue_preview = u.action_queue_preview;
-    if (u.decision_reason !== undefined) e.decision_reason = u.decision_reason ?? undefined;
+    if (u.current_task !== undefined) e.current_task = u.current_task ?? undefined;
     if (u.attack_phase !== undefined) e.attack_phase = u.attack_phase ?? undefined;
     if (u.attack_motion !== undefined) e.attack_motion = u.attack_motion ?? undefined;
     if (u.weapon_angle !== undefined) e.weapon_angle = u.weapon_angle ?? undefined;

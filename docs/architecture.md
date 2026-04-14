@@ -537,7 +537,7 @@ V3 uses a three-layer dispatch: Strategy (every ~50 game-seconds), Operations (e
 
 **In progress (Stream E)**: Replacing flat task assignments with autonomous entity behavior. Entities have needs (hunger, safety, duty, rest, social, shelter) that drive utility scoring → HTN goal decomposition → action queue execution. Strategy adjusts need weights instead of commanding directly. Operations injects HTN methods instead of assigning tasks. See `docs/plans/v3-streamE-agent-behavior.md`.
 
-**In progress (Stream F)**: Replacing typed entity components (Structure, Resource) with physical properties. Affordance queries replace type checks. Material transformation through tool-property interaction. See `docs/plans/v3-streamF-compositional-world.md`.
+**Current (Stream F core)**: V3 entity/world state now uses a compositional model: `physical`, `tool_props`, `matter`, and `site` replace V3 `Structure`/`Resource`. Economy and operations still use the pre-Stream-E task runtime, but all V3 world lookups route through compositional tags and affordance-style predicates. The V3 spectator protocol/frontend expose `physical`, `tool`, `matter`, and `site` directly. See `docs/plans/v3-streamF-compositional-world.md`.
 
 **Future (post-V3)**: NEAT-evolved neural networks at five insertion points: utility scoring, HTN method selection, body control, tactical coordination, social reasoning. See `docs/plans/future-neural-evolution.md`.
 

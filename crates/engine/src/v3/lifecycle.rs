@@ -66,7 +66,9 @@ pub fn contain(state: &mut GameState, container: EntityKey, contained: EntityKey
                 .map(|p| p.role == super::state::Role::Soldier)
                 .unwrap_or(false);
             state.fine_index.remove(pos, contained);
-            state.coarse_index.remove(pos, contained, e.owner, is_soldier);
+            state
+                .coarse_index
+                .remove(pos, contained, e.owner, is_soldier);
         }
     }
 
@@ -223,8 +225,8 @@ pub fn cleanup_inert_projectiles(state: &mut GameState) {
             // Entity has no person, no structure, no resource — it was a projectile.
             // And now has no projectile component (already impacted).
             if entity.person.is_none()
-                && entity.structure.is_none()
-                && entity.resource.is_none()
+                && entity.site.is_none()
+                && entity.matter.is_none()
                 && entity.weapon_props.is_none()
                 && entity.armor_props.is_none()
                 && entity.projectile.is_none()
@@ -284,13 +286,14 @@ pub fn check_elimination(state: &GameState) -> SmallVec<[u8; 4]> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::armor::MaterialType;
     use super::super::equipment::Equipment;
     use super::super::movement::Mobile;
+    use super::super::physical::{PhysicalProperties, SiteProperties};
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
-    use super::super::state::{Combatant, Person, Role, Structure, StructureType};
+    use super::super::state::{Combatant, Person, Role};
     use super::super::vitals::Vitals;
     use super::*;
+    use simulate_everything_protocol::{MaterialKind, MatterState, PropertyTag};
 
     fn test_state() -> GameState {
         let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
@@ -332,12 +335,18 @@ mod tests {
             EntityBuilder::new()
                 .pos(Vec3::new(100.0, 100.0, 0.0))
                 .owner(0)
-                .structure(Structure {
-                    structure_type: StructureType::Depot,
+                .physical(
+                    PhysicalProperties::new(700.0, 0.4, MaterialKind::Wood, MatterState::Solid)
+                        .with_tags(&[
+                            PropertyTag::Container,
+                            PropertyTag::Structural,
+                            PropertyTag::Settlement,
+                        ]),
+                )
+                .site(SiteProperties {
                     build_progress: 1.0,
                     integrity: 100.0,
-                    capacity: 10,
-                    material: MaterialType::Wood,
+                    occupancy_capacity: 10,
                 }),
         );
         let item = spawn_entity(

@@ -1,3 +1,4 @@
+pub mod affordance;
 pub mod agent;
 pub mod action_queue;
 pub mod armor;
@@ -29,6 +30,7 @@ pub mod needs;
 pub mod operations;
 pub mod pathfinding;
 pub mod perception;
+pub mod physical;
 pub mod projectile;
 pub mod query;
 pub mod resolution;

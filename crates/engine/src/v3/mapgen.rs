@@ -7,14 +7,13 @@ use super::equipment::{self, Equipment};
 use super::hex::hex_to_world;
 use super::lifecycle::{contain, spawn_entity};
 use super::movement::Mobile;
+use super::physical::{MatterStack, PhysicalProperties, SiteProperties, ToolProperties};
 use super::spatial::{GeoMaterial, Heightfield, Vec3, Vertex};
-use super::state::{
-    Combatant, EntityBuilder, GameState, Person, Resource, ResourceType, Role, Structure,
-    StructureType,
-};
+use super::state::{Combatant, CommodityKind, EntityBuilder, GameState, Person, Role};
 use super::weapon;
 use crate::v2::hex::{Axial, offset_to_axial};
 use crate::v2::state::EntityKey;
+use simulate_everything_protocol::{MaterialKind, MatterState, PropertyTag};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -120,6 +119,18 @@ fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, skill: f32) -> Ent
         state,
         EntityBuilder::new()
             .owner(owner)
+            .physical(
+                PhysicalProperties::new(1.8, 0.75, MaterialKind::Iron, MatterState::Solid)
+                    .with_tags(&[PropertyTag::Tool, PropertyTag::Workable]),
+            )
+            .tool_props(ToolProperties {
+                force_mult: 2.5,
+                precision: 0.6,
+                cutting_edge: 0.8,
+                heat_output_k: 0.0,
+                capacity_l: 0.0,
+                durability: 1.0,
+            })
             .weapon_props(weapon::iron_sword()),
     );
     contain(state, soldier, sword);
@@ -133,6 +144,12 @@ fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, skill: f32) -> Ent
         state,
         EntityBuilder::new()
             .owner(owner)
+            .physical(PhysicalProperties::new(
+                3.0,
+                0.35,
+                MaterialType::Leather.into(),
+                MatterState::Solid,
+            ))
             .armor_props(cuirass_props.clone()),
     );
     contain(state, soldier, cuirass);
@@ -150,12 +167,56 @@ fn spawn_civilian(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> En
         EntityBuilder::new()
             .pos(pos)
             .owner(owner)
+            .physical(PhysicalProperties::new(
+                75.0,
+                0.15,
+                MaterialKind::Flesh,
+                MatterState::Solid,
+            ))
             .person(Person {
                 role,
                 combat_skill: 0.1,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS)),
     )
+}
+
+fn settlement_physical() -> PhysicalProperties {
+    PhysicalProperties::new(1_200.0, 0.4, MaterialKind::Wood, MatterState::Solid).with_tags(&[
+        PropertyTag::Structural,
+        PropertyTag::Shelter,
+        PropertyTag::Container,
+        PropertyTag::Settlement,
+    ])
+}
+
+fn stockpile_physical(commodity: CommodityKind) -> PhysicalProperties {
+    let mut physical = match commodity {
+        CommodityKind::Food => {
+            PhysicalProperties::new(50.0, 0.1, MaterialKind::Plant, MatterState::Solid)
+                .with_tags(&[PropertyTag::Edible, PropertyTag::Stockpile])
+        }
+        CommodityKind::Material => {
+            PhysicalProperties::new(80.0, 0.35, MaterialKind::Wood, MatterState::Solid)
+                .with_tags(&[PropertyTag::Workable, PropertyTag::Stockpile])
+        }
+        CommodityKind::Ore => {
+            PhysicalProperties::new(80.0, 0.6, MaterialKind::Stone, MatterState::Powder)
+                .with_tags(&[PropertyTag::Workable, PropertyTag::Stockpile])
+        }
+        CommodityKind::Wood => {
+            PhysicalProperties::new(80.0, 0.3, MaterialKind::Wood, MatterState::Solid)
+                .with_tags(&[PropertyTag::Workable, PropertyTag::Stockpile])
+        }
+        CommodityKind::Stone => {
+            PhysicalProperties::new(80.0, 0.8, MaterialKind::Stone, MatterState::Solid)
+                .with_tags(&[PropertyTag::Workable, PropertyTag::Stockpile])
+        }
+    };
+    if matches!(commodity, CommodityKind::Food) {
+        physical.insert_tag(PropertyTag::Harvestable);
+    }
+    physical
 }
 
 // ---------------------------------------------------------------------------
@@ -165,10 +226,10 @@ fn spawn_civilian(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> En
 /// Generate a complete V3 game state: terrain + entity populations for all players.
 ///
 /// Each player receives:
-/// - 1 settlement structure (Village)
+/// - 1 settlement site
 /// - STARTING_SOLDIERS soldiers with sword + leather armor
 /// - STARTING_CIVILIANS civilian persons (mix of Farmer, Worker, Idle)
-/// - Starting food + material resource entities in the settlement
+/// - Starting food + material matter-stack entities in the settlement
 pub fn generate(width: usize, height: usize, num_players: u8, seed: u64) -> GameState {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
@@ -191,31 +252,36 @@ pub fn generate(width: usize, height: usize, num_players: u8, seed: u64) -> Game
             EntityBuilder::new()
                 .pos(center)
                 .owner(owner)
-                .structure(Structure {
-                    structure_type: StructureType::Village,
+                .physical(settlement_physical())
+                .site(SiteProperties {
                     build_progress: 1.0,
                     integrity: 100.0,
-                    capacity: 50,
-                    material: MaterialType::Wood,
+                    occupancy_capacity: 50,
                 }),
         );
 
         // Starting resources inside the settlement
         let food = spawn_entity(
             &mut state,
-            EntityBuilder::new().owner(owner).resource(Resource {
-                resource_type: ResourceType::Food,
-                amount: STARTING_FOOD,
-            }),
+            EntityBuilder::new()
+                .owner(owner)
+                .physical(stockpile_physical(CommodityKind::Food))
+                .matter(MatterStack {
+                    commodity: CommodityKind::Food,
+                    amount: STARTING_FOOD,
+                }),
         );
         contain(&mut state, settlement, food);
 
         let material = spawn_entity(
             &mut state,
-            EntityBuilder::new().owner(owner).resource(Resource {
-                resource_type: ResourceType::Material,
-                amount: STARTING_MATERIAL,
-            }),
+            EntityBuilder::new()
+                .owner(owner)
+                .physical(stockpile_physical(CommodityKind::Material))
+                .matter(MatterStack {
+                    commodity: CommodityKind::Material,
+                    amount: STARTING_MATERIAL,
+                }),
         );
         contain(&mut state, settlement, material);
 
@@ -297,9 +363,10 @@ mod tests {
                 .values()
                 .filter(|e| {
                     e.owner == Some(player)
-                        && e.structure
+                        && e.site.is_some()
+                        && e.physical
                             .as_ref()
-                            .map(|s| s.structure_type == StructureType::Village)
+                            .map(|p| p.has_tag(PropertyTag::Settlement))
                             .unwrap_or(false)
                 })
                 .collect();
@@ -368,7 +435,14 @@ mod tests {
             let settlement = state
                 .entities
                 .iter()
-                .find(|(_, e)| e.owner == Some(player) && e.structure.is_some())
+                .find(|(_, e)| {
+                    e.owner == Some(player)
+                        && e.site.is_some()
+                        && e.physical
+                            .as_ref()
+                            .map(|p| p.has_tag(PropertyTag::Settlement))
+                            .unwrap_or(false)
+                })
                 .map(|(k, _)| k)
                 .expect("player has settlement");
 
@@ -382,8 +456,8 @@ mod tests {
                 state
                     .entities
                     .get(k)
-                    .and_then(|e| e.resource.as_ref())
-                    .map(|r| r.resource_type == ResourceType::Food)
+                    .and_then(|e| e.matter.as_ref())
+                    .map(|r| r.commodity == CommodityKind::Food)
                     .unwrap_or(false)
             });
             assert!(has_food, "settlement should contain food");

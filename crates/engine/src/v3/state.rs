@@ -2,24 +2,20 @@ use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 use smallvec::SmallVec;
 
-use super::action_queue::ActionQueue;
-use super::armor::{ArmorProperties, MaterialType};
+use super::armor::ArmorProperties;
 use super::body_model::BodyModel;
 use super::coarse_index::CoarseIndex;
 use super::combat_log::CombatLog;
 use super::equipment::Equipment;
 use super::fine_index::FineIndex;
 use super::formation::FormationType;
-use super::htn::{DomainRegistry, MethodTraversalRecord};
 use super::hex_mapping::HexMapping;
 use super::index::SpatialIndex;
 use super::movement::Mobile;
-use super::needs::{EntityNeeds, NeedWeights};
+use super::physical::{MatterStack, PhysicalProperties, SiteProperties, ToolProperties};
 use super::projectile::Projectile;
-use super::social::SocialState;
 use super::spatial::{Heightfield, Vec3};
 use super::terrain_ops::TerrainOpLog;
-use super::utility::Goal;
 use super::vitals::Vitals;
 use super::weapon::{AttackState, CooldownState, WeaponProperties};
 use super::wound::WoundList;
@@ -49,7 +45,18 @@ pub struct Stack {
 // Shared enums — canonical definitions in protocol crate
 // ---------------------------------------------------------------------------
 
-pub use simulate_everything_protocol::{ResourceType, Role, StructureType};
+pub use simulate_everything_protocol::{CommodityKind, Role};
+
+/// Persistent task assignment for per-tick economy and spectator state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskAssignment {
+    Farm { site: EntityKey },
+    Workshop { site: EntityKey },
+    Patrol,
+    Garrison,
+    Train,
+    Idle,
+}
 
 // ---------------------------------------------------------------------------
 // Person component
@@ -61,42 +68,8 @@ pub struct Person {
     pub role: Role,
     /// Training level 0.0–1.0. Affects aim, block timing, target leading.
     pub combat_skill: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DecisionRecord {
-    pub tick: u64,
-    pub goal: Goal,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BehaviorState {
-    pub needs: EntityNeeds,
-    pub current_goal: Option<Goal>,
-    pub decision_reason: Option<String>,
-    pub action_queue: ActionQueue,
-    pub mtr: MethodTraversalRecord,
-    pub decision_history: SmallVec<[DecisionRecord; 4]>,
-    pub next_decision_tick: u64,
-    pub last_decision_tick: u64,
-    pub social: SocialState,
-}
-
-impl Default for BehaviorState {
-    fn default() -> Self {
-        Self {
-            needs: EntityNeeds::default(),
-            current_goal: None,
-            decision_reason: None,
-            action_queue: ActionQueue::default(),
-            mtr: MethodTraversalRecord::default(),
-            decision_history: SmallVec::new(),
-            next_decision_tick: 0,
-            last_decision_tick: 0,
-            social: SocialState::default(),
-        }
-    }
+    /// Current long-lived assignment used by the economy/runtime layers.
+    pub task: Option<TaskAssignment>,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,36 +108,6 @@ impl Combatant {
 }
 
 // ---------------------------------------------------------------------------
-// Structure component
-// ---------------------------------------------------------------------------
-
-/// A building or fortification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Structure {
-    pub structure_type: StructureType,
-    /// 0.0 = foundation, 1.0 = complete.
-    pub build_progress: f32,
-    /// Structural health. Material-dependent.
-    pub integrity: f32,
-    /// Maximum number of contained entities.
-    pub capacity: usize,
-    /// What the structure is built from.
-    pub material: MaterialType,
-}
-
-// ---------------------------------------------------------------------------
-// Resource component
-// ---------------------------------------------------------------------------
-
-/// A material or food quantity. Can exist as a standalone entity (on ground,
-/// in stockpile) or be contained within a structure/person.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Resource {
-    pub resource_type: ResourceType,
-    pub amount: f32,
-}
-
-// ---------------------------------------------------------------------------
 // Entity
 // ---------------------------------------------------------------------------
 
@@ -197,9 +140,10 @@ pub struct Entity {
     pub weapon_props: Option<WeaponProperties>,
     pub armor_props: Option<ArmorProperties>,
     pub projectile: Option<Projectile>,
-    pub structure: Option<Structure>,
-    pub resource: Option<Resource>,
-    pub behavior: Option<BehaviorState>,
+    pub physical: Option<PhysicalProperties>,
+    pub tool_props: Option<ToolProperties>,
+    pub matter: Option<MatterStack>,
+    pub site: Option<SiteProperties>,
     /// Verlet skeletal body model. Active when entity is performing physical
     /// actions at sufficient tick resolution. None for idle/aggregate entities.
     /// Boxed to keep Entity small — most entities don't have a body model.
@@ -225,9 +169,10 @@ impl Entity {
             weapon_props: None,
             armor_props: None,
             projectile: None,
-            structure: None,
-            resource: None,
-            behavior: None,
+            physical: None,
+            tool_props: None,
+            matter: None,
+            site: None,
             body: None,
         }
     }
@@ -249,8 +194,10 @@ pub struct EntityBuilder {
     pub(crate) weapon_props: Option<WeaponProperties>,
     pub(crate) armor_props: Option<ArmorProperties>,
     pub(crate) projectile: Option<Projectile>,
-    pub(crate) structure: Option<Structure>,
-    pub(crate) resource: Option<Resource>,
+    pub(crate) physical: Option<PhysicalProperties>,
+    pub(crate) tool_props: Option<ToolProperties>,
+    pub(crate) matter: Option<MatterStack>,
+    pub(crate) site: Option<SiteProperties>,
     pub(crate) body: Option<Box<BodyModel>>,
 }
 
@@ -273,8 +220,10 @@ impl EntityBuilder {
             weapon_props: None,
             armor_props: None,
             projectile: None,
-            structure: None,
-            resource: None,
+            physical: None,
+            tool_props: None,
+            matter: None,
+            site: None,
             body: None,
         }
     }
@@ -329,13 +278,23 @@ impl EntityBuilder {
         self
     }
 
-    pub fn structure(mut self, structure: Structure) -> Self {
-        self.structure = Some(structure);
+    pub fn physical(mut self, physical: PhysicalProperties) -> Self {
+        self.physical = Some(physical);
         self
     }
 
-    pub fn resource(mut self, resource: Resource) -> Self {
-        self.resource = Some(resource);
+    pub fn tool_props(mut self, tool_props: ToolProperties) -> Self {
+        self.tool_props = Some(tool_props);
+        self
+    }
+
+    pub fn matter(mut self, matter: MatterStack) -> Self {
+        self.matter = Some(matter);
+        self
+    }
+
+    pub fn site(mut self, site: SiteProperties) -> Self {
+        self.site = Some(site);
         self
     }
 
@@ -362,11 +321,10 @@ impl EntityBuilder {
         e.weapon_props = self.weapon_props;
         e.armor_props = self.armor_props;
         e.projectile = self.projectile;
-        e.structure = self.structure;
-        e.resource = self.resource;
-        if e.person.is_some() {
-            e.behavior = Some(BehaviorState::default());
-        }
+        e.physical = self.physical;
+        e.tool_props = self.tool_props;
+        e.matter = self.matter;
+        e.site = self.site;
         e.body = self.body;
         e
     }
@@ -390,9 +348,6 @@ pub struct GameState {
     pub map_width: usize,
     pub map_height: usize,
     pub num_players: u8,
-    pub faction_need_weights: Vec<NeedWeights>,
-    #[serde(skip)]
-    pub domain_registry: DomainRegistry,
     pub game_time: f64,
     pub tick: u64,
     /// Combat observation log. Drained by the protocol layer after each tick.
@@ -421,8 +376,6 @@ impl GameState {
             map_width,
             map_height,
             num_players,
-            faction_need_weights: vec![NeedWeights::default(); num_players as usize],
-            domain_registry: DomainRegistry::for_players(num_players),
             game_time: 0.0,
             tick: 0,
             combat_log: CombatLog::new(),
@@ -500,6 +453,7 @@ mod tests {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.6,
+                task: None,
             })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())
@@ -533,7 +487,7 @@ mod tests {
         // AoS with all optional components. Plan E.1 says profile and switch
         // to SoA if cache misses measured. Alert at 1024 bytes.
         assert!(
-            size <= 1536,
+            size <= 1024,
             "Entity struct is {size} bytes — profile cache misses and consider SoA"
         );
     }

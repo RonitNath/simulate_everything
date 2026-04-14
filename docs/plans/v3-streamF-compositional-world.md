@@ -1,8 +1,8 @@
 # Stream F: Compositional World Model
 
-Status: **ready for implementation** (E2 prerequisite for F1, E3 for F2+)
-Depends on: Stream E (agent behavior — HTN engine + action queue)
-Integrates with: Stream D (terrain ops), Stream A (body model), economy system
+Status: **implemented (F-core hard cut)**
+Depends on: none for F-core; Stream E still required for HTN/action-queue migration
+Integrates with: Stream D (terrain ops), Stream A (body model), economy system, V3 protocol/frontend
 
 ## Goal
 
@@ -175,31 +175,24 @@ Method: ForgeIronSword
 The same `ApplyTool { action: Shape }` primitive works for pottery, woodworking,
 stonecutting — the material properties determine what happens.
 
-### Transition strategy
+### Hard-cut implementation
 
-The existing typed components (`Structure`, `Resource`) remain as convenience
-wrappers during the transition. They're not deleted in V3 — they're augmented
-with physical properties:
+V3 now uses a hard cut, not a dual-path transition. `Entity::structure` and
+`Entity::resource` are removed from the V3 engine model and replaced by:
 
 ```rust
-// Phase 1: Add properties alongside existing types
 pub struct Entity {
-    // Existing (kept for backward compat during transition)
-    pub structure: Option<Structure>,
-    pub resource: Option<Resource>,
-    // New
     pub physical: Option<PhysicalProperties>,
     pub tool_props: Option<ToolProperties>,
+    pub matter: Option<MatterStack>,
+    pub site: Option<SiteProperties>,
 }
 ```
 
-HTN methods can query EITHER the typed components (for existing behavior) or
-physical properties (for new compositional behavior). Over time, more methods
-migrate to property-based preconditions and the typed components become
-vestigial.
-
-Full decomposition (removing Structure/Resource entirely) happens post-V3
-when all methods have been migrated.
+Current V3 economy/operations code still uses the pre-Stream-E task runtime,
+but all world lookups are routed through compositional properties and tags.
+The V3 spectator protocol and frontend also consume `physical`, `tool`,
+`matter`, and `site` directly rather than typed structure/resource fields.
 
 ## Waves
 
