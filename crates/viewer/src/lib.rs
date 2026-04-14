@@ -676,7 +676,7 @@ fn upload_live_state(state: &mut ViewerState) {
                 owner: entity.owner.unwrap_or(0) as u32,
                 entity_kind: match entity.entity_kind {
                     EntityKind::Person => 0,
-                    EntityKind::Structure => 1,
+                    _ => 1,
                 },
                 health_frac: entity.blood.unwrap_or(1.0).clamp(0.0, 1.0),
                 stamina_frac: entity.stamina.unwrap_or(1.0).clamp(0.0, 1.0),

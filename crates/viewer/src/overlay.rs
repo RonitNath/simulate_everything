@@ -1,6 +1,6 @@
 use crate::camera::Camera;
 use glam::Vec3;
-use simulate_everything_protocol::{EntityKind, Role, SpectatorEntityInfo, StructureType};
+use simulate_everything_protocol::{EntityKind, Role, SpectatorEntityInfo};
 use std::collections::HashMap;
 
 pub struct OverlayUi {
@@ -146,13 +146,8 @@ fn entity_title(entity: &SpectatorEntityInfo) -> String {
             let role = entity.role.map(role_label).unwrap_or("Person");
             format!("P{owner} {role}")
         }
-        EntityKind::Structure => {
-            let structure = entity
-                .structure_type
-                .map(structure_label)
-                .unwrap_or("Structure");
-            format!("P{owner} {structure}")
-        }
+        EntityKind::Site => format!("P{owner} Site"),
+        EntityKind::Object => format!("P{owner} Object"),
     }
 }
 
@@ -184,18 +179,6 @@ fn role_label(role: Role) -> &'static str {
         Role::Worker => "Worker",
         Role::Soldier => "Soldier",
         Role::Builder => "Builder",
-    }
-}
-
-fn structure_label(structure: StructureType) -> &'static str {
-    match structure {
-        StructureType::Farm => "Farm",
-        StructureType::Village => "Village",
-        StructureType::City => "City",
-        StructureType::Depot => "Depot",
-        StructureType::Wall => "Wall",
-        StructureType::Tower => "Tower",
-        StructureType::Workshop => "Workshop",
     }
 }
 
