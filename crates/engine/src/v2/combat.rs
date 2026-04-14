@@ -256,6 +256,8 @@ mod tests {
             next_pop_id: 0,
             next_convoy_id: 0,
             next_settlement_id: 0,
+            entities: SlotMap::with_key(),
+            next_entity_id: 0,
             scouted: vec![vec![true; total_cells]; 2],
             spatial: SpatialIndex::new(width, height),
             dirty_hexes: BitVec::repeat(false, total_cells),

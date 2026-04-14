@@ -10,6 +10,7 @@ new_key_type! {
     pub struct PopKey;
     pub struct ConvoyKey;
     pub struct SettlementKey;
+    pub struct EntityKey;
 }
 
 /// Settlement tier determines radius of territory claim.
@@ -101,6 +102,77 @@ pub enum Role {
     Farmer,
     Worker,
     Soldier,
+    Builder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResourceType {
+    Food,
+    Material,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StructureType {
+    Farm,
+    Village,
+    City,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Person {
+    pub health: f32,
+    pub combat_skill: f32,
+    pub role: Role,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Mobile {
+    pub speed: f32,
+    pub move_cooldown: u8,
+    pub destination: Option<Axial>,
+    pub route: Vec<Axial>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vision {
+    pub radius: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Combatant {
+    pub engaged_with: Vec<EntityKey>,
+    pub facing: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resource {
+    pub resource_type: ResourceType,
+    pub amount: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Structure {
+    pub structure_type: StructureType,
+    pub build_progress: f32,
+    pub health: f32,
+    pub capacity: usize,
+}
+
+/// A unified entity that carries optional component bags for any combination of
+/// Person, Mobile, Vision, Combatant, Resource, and Structure behaviours.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Entity {
+    pub id: u32,
+    pub pos: Option<Axial>,
+    pub owner: Option<u8>,
+    pub contained_in: Option<EntityKey>,
+    pub contains: Vec<EntityKey>,
+    pub person: Option<Person>,
+    pub mobile: Option<Mobile>,
+    pub vision: Option<Vision>,
+    pub combatant: Option<Combatant>,
+    pub resource: Option<Resource>,
+    pub structure: Option<Structure>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +246,8 @@ pub struct GameState {
     pub next_pop_id: u32,
     pub next_convoy_id: u32,
     pub next_settlement_id: u32,
+    pub entities: SlotMap<EntityKey, Entity>,
+    pub next_entity_id: u32,
     pub scouted: Vec<Vec<bool>>,
     #[serde(skip)]
     pub spatial: SpatialIndex,
@@ -197,6 +271,46 @@ pub struct GameState {
 impl GameState {
     pub fn rebuild_spatial(&mut self) {
         self.spatial.rebuild(&self.units);
+        self.spatial.rebuild_entities(&self.entities);
+    }
+
+    /// Entities that can act as military units (have person + mobile + combatant).
+    pub fn entity_units(&self) -> impl Iterator<Item = (EntityKey, &Entity)> {
+        self.entities
+            .iter()
+            .filter(|(_, e)| e.person.is_some() && e.mobile.is_some() && e.combatant.is_some())
+    }
+
+    /// Entities with Structure component.
+    pub fn entity_structures(&self) -> impl Iterator<Item = (EntityKey, &Entity)> {
+        self.entities.iter().filter(|(_, e)| e.structure.is_some())
+    }
+
+    /// Resource entities at a specific hex.
+    pub fn resources_at(&self, hex: Axial) -> impl Iterator<Item = (EntityKey, &Entity)> {
+        self.entities
+            .iter()
+            .filter(move |(_, e)| e.resource.is_some() && e.pos == Some(hex))
+    }
+
+    /// All entities at a specific hex.
+    pub fn entities_at(&self, hex: Axial) -> impl Iterator<Item = (EntityKey, &Entity)> {
+        self.entities
+            .iter()
+            .filter(move |(_, e)| e.pos == Some(hex))
+    }
+
+    /// Entities contained in another entity.
+    pub fn contained_in(&self, key: EntityKey) -> impl Iterator<Item = (EntityKey, &Entity)> {
+        self.entities
+            .iter()
+            .filter(move |(_, e)| e.contained_in == Some(key))
+    }
+
+    pub fn spawn_entity(&mut self, mut entity: Entity) -> EntityKey {
+        entity.id = self.next_entity_id;
+        self.next_entity_id += 1;
+        self.entities.insert(entity)
     }
 
     pub fn index(&self, row: usize, col: usize) -> usize {
@@ -370,4 +484,246 @@ pub struct TickAccumulator {
     pub material_produced: f32,
     pub material_consumed: f32,
     pub material_destroyed: f32,
+}
+
+#[cfg(test)]
+mod entity_tests {
+    use super::super::mapgen::{MapConfig, generate};
+    use super::*;
+
+    fn make_empty_state() -> GameState {
+        GameState {
+            width: 10,
+            height: 10,
+            grid: vec![],
+            units: SlotMap::with_key(),
+            players: vec![],
+            population: SlotMap::with_key(),
+            convoys: SlotMap::with_key(),
+            settlements: SlotMap::with_key(),
+            regions: vec![],
+            tick: 0,
+            next_unit_id: 0,
+            next_pop_id: 0,
+            next_convoy_id: 0,
+            next_settlement_id: 0,
+            entities: SlotMap::with_key(),
+            next_entity_id: 0,
+            scouted: vec![],
+            spatial: super::super::spatial::SpatialIndex::new(10, 10),
+            dirty_hexes: bitvec::prelude::BitVec::new(),
+            hex_revisions: vec![],
+            next_hex_revision: 0,
+            territory_cache: vec![],
+            #[cfg(debug_assertions)]
+            tick_accumulator: None,
+            game_log: None,
+        }
+    }
+
+    #[test]
+    fn entity_creation_with_components() {
+        let mut state = make_empty_state();
+        let entity = Entity {
+            id: 0,
+            pos: Some(super::super::hex::Axial { q: 0, r: 0 }),
+            owner: Some(0),
+            contained_in: None,
+            contains: vec![],
+            person: Some(Person {
+                health: 1.0,
+                combat_skill: 0.6,
+                role: Role::Soldier,
+            }),
+            mobile: Some(Mobile {
+                speed: 1.0,
+                move_cooldown: 0,
+                destination: None,
+                route: vec![],
+            }),
+            vision: Some(Vision { radius: 5 }),
+            combatant: Some(Combatant {
+                engaged_with: vec![],
+                facing: 0.0,
+            }),
+            resource: None,
+            structure: None,
+        };
+        let key = state.spawn_entity(entity);
+        let e = state.entities.get(key).unwrap();
+        assert!(e.person.is_some());
+        assert!(e.mobile.is_some());
+        assert!(e.combatant.is_some());
+        assert!(e.structure.is_none());
+        assert_eq!(e.id, 0);
+        assert_eq!(state.next_entity_id, 1);
+    }
+
+    #[test]
+    fn containment_works() {
+        let mut state = make_empty_state();
+        let settlement_key = state.spawn_entity(Entity {
+            id: 0,
+            pos: Some(super::super::hex::Axial { q: 1, r: 1 }),
+            owner: Some(0),
+            contained_in: None,
+            contains: vec![],
+            person: None,
+            mobile: None,
+            vision: None,
+            combatant: None,
+            resource: None,
+            structure: Some(Structure {
+                structure_type: StructureType::Village,
+                build_progress: 1.0,
+                health: 1.0,
+                capacity: 100,
+            }),
+        });
+        let person_key = state.spawn_entity(Entity {
+            id: 0,
+            pos: None,
+            owner: Some(0),
+            contained_in: Some(settlement_key),
+            contains: vec![],
+            person: Some(Person {
+                health: 1.0,
+                combat_skill: 0.1,
+                role: Role::Idle,
+            }),
+            mobile: Some(Mobile {
+                speed: 1.0,
+                move_cooldown: 0,
+                destination: None,
+                route: vec![],
+            }),
+            vision: Some(Vision { radius: 3 }),
+            combatant: None,
+            resource: None,
+            structure: None,
+        });
+        state
+            .entities
+            .get_mut(settlement_key)
+            .unwrap()
+            .contains
+            .push(person_key);
+
+        let settlement = state.entities.get(settlement_key).unwrap();
+        assert_eq!(settlement.contains.len(), 1);
+        assert_eq!(settlement.contains[0], person_key);
+
+        let person = state.entities.get(person_key).unwrap();
+        assert_eq!(person.contained_in, Some(settlement_key));
+    }
+
+    #[test]
+    fn query_methods_return_correct_subsets() {
+        let state = generate(&MapConfig {
+            width: 30,
+            height: 30,
+            num_players: 2,
+            seed: 7,
+        });
+
+        let units: Vec<_> = state.entity_units().collect();
+        let structures: Vec<_> = state.entity_structures().collect();
+
+        // All entity_units have all three components
+        for (_, e) in &units {
+            assert!(e.person.is_some());
+            assert!(e.mobile.is_some());
+            assert!(e.combatant.is_some());
+        }
+        // All entity_structures have structure component
+        for (_, e) in &structures {
+            assert!(e.structure.is_some());
+        }
+        // Structures are not units
+        for (k, _) in &structures {
+            assert!(!units.iter().any(|(uk, _)| uk == k));
+        }
+    }
+
+    #[test]
+    fn mapgen_produces_valid_entities() {
+        use super::super::INITIAL_UNITS;
+        let state = generate(&MapConfig {
+            width: 30,
+            height: 30,
+            num_players: 2,
+            seed: 42,
+        });
+
+        let settlement_count = state.entity_structures().count();
+        assert_eq!(settlement_count, 2, "expected 2 settlement entities");
+
+        let soldier_count = state.entity_units().count();
+        // (INITIAL_UNITS + 1) soldiers per player
+        assert_eq!(
+            soldier_count,
+            (INITIAL_UNITS + 1) * 2,
+            "expected {} soldiers",
+            (INITIAL_UNITS + 1) * 2
+        );
+
+        // population persons (28 per player): Idle 20 + Farmer 5 + Worker 3
+        let person_only: Vec<_> = state
+            .entities
+            .iter()
+            .filter(|(_, e)| e.person.is_some() && e.combatant.is_none())
+            .collect();
+        assert_eq!(
+            person_only.len(),
+            28 * 2,
+            "expected {} population persons",
+            28 * 2
+        );
+    }
+
+    #[test]
+    fn mapgen_containment_valid() {
+        let state = generate(&MapConfig {
+            width: 30,
+            height: 30,
+            num_players: 2,
+            seed: 42,
+        });
+
+        for (skey, settlement) in state.entity_structures() {
+            // Every key in contains must point back to this settlement
+            for &child_key in &settlement.contains {
+                let child = state
+                    .entities
+                    .get(child_key)
+                    .expect("child entity must exist");
+                assert_eq!(
+                    child.contained_in,
+                    Some(skey),
+                    "child entity does not point back to settlement"
+                );
+            }
+        }
+
+        // Every population person must be contained in some settlement
+        for (_, entity) in state
+            .entities
+            .iter()
+            .filter(|(_, e)| e.person.is_some() && e.combatant.is_none())
+        {
+            assert!(
+                entity.contained_in.is_some(),
+                "population person has no container"
+            );
+            let container_key = entity.contained_in.unwrap();
+            let container = state
+                .entities
+                .get(container_key)
+                .expect("container must exist");
+            assert!(
+                container.structure.is_some(),
+                "container must be a structure"
+            );
+        }
+    }
 }

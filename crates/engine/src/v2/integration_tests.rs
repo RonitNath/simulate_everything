@@ -127,6 +127,8 @@ fn blank_state(width: usize, height: usize, num_players: u8) -> GameState {
         next_pop_id,
         next_convoy_id: 0,
         next_settlement_id,
+        entities: SlotMap::with_key(),
+        next_entity_id: 0,
         scouted: vec![vec![true; width * height]; num_players as usize],
         spatial: SpatialIndex::new(width, height),
         dirty_hexes: BitVec::repeat(false, width * height),

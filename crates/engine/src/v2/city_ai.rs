@@ -575,6 +575,7 @@ fn population_mix(state: &GameState, player_id: u8, hex: Axial) -> (u16, u16, u1
             Role::Idle => idle += pop.count,
             Role::Farmer => farmers += pop.count,
             Role::Worker => workers += pop.count,
+            Role::Builder => idle += pop.count,
             Role::Soldier => {
                 if pop.training >= super::SOLDIER_READY_THRESHOLD {
                     trained += pop.count;

@@ -7,8 +7,9 @@ use slotmap::SlotMap;
 use super::hex::{axial_to_offset, distance, offset_to_axial, within_radius};
 use super::spatial::SpatialIndex;
 use super::state::{
-    Biome, Cell, GameState, Player, Population, Region, RegionArchetype, Role, Settlement,
-    SettlementType, Unit,
+    Biome, Cell, Combatant, Entity, EntityKey, GameState, Mobile, Person, Player, Population,
+    Region, RegionArchetype, Role, Settlement, SettlementType, Structure, StructureType, Unit,
+    Vision,
 };
 use super::{INITIAL_STRENGTH, INITIAL_UNITS, MAX_RATIONS};
 
@@ -118,6 +119,8 @@ pub fn generate(config: &MapConfig) -> GameState {
     let mut next_id: u32 = 0;
     let mut next_pop_id: u32 = 0;
     let mut next_settlement_id: u32 = 0;
+    let mut entities: SlotMap<EntityKey, Entity> = SlotMap::with_key();
+    let mut next_entity_id: u32 = 0;
 
     for (player_idx, &start_pos) in start_positions.iter().enumerate() {
         let owner = player_idx as u8;
@@ -135,6 +138,35 @@ pub fn generate(config: &MapConfig) -> GameState {
             destination: None,
             rations: MAX_RATIONS,
             half_rations: false,
+        });
+
+        // Entity: soldier for the starting unit
+        let eid = next_entity_id;
+        next_entity_id += 1;
+        entities.insert(Entity {
+            id: eid,
+            pos: Some(start_pos),
+            owner: Some(owner),
+            contained_in: None,
+            contains: Vec::new(),
+            person: Some(Person {
+                health: 1.0,
+                combat_skill: 0.6,
+                role: Role::Soldier,
+            }),
+            mobile: Some(Mobile {
+                speed: 1.0,
+                move_cooldown: 0,
+                destination: None,
+                route: Vec::new(),
+            }),
+            vision: Some(Vision { radius: 5 }),
+            combatant: Some(Combatant {
+                engaged_with: Vec::new(),
+                facing: 0.0,
+            }),
+            resource: None,
+            structure: None,
         });
 
         // Spawn INITIAL_UNITS nearby units
@@ -167,6 +199,36 @@ pub fn generate(config: &MapConfig) -> GameState {
                 half_rations: false,
             });
             next_id += 1;
+
+            // Entity: soldier for each additional unit
+            let eid = next_entity_id;
+            next_entity_id += 1;
+            entities.insert(Entity {
+                id: eid,
+                pos: Some(candidate),
+                owner: Some(owner),
+                contained_in: None,
+                contains: Vec::new(),
+                person: Some(Person {
+                    health: 1.0,
+                    combat_skill: 0.6,
+                    role: Role::Soldier,
+                }),
+                mobile: Some(Mobile {
+                    speed: 1.0,
+                    move_cooldown: 0,
+                    destination: None,
+                    route: Vec::new(),
+                }),
+                vision: Some(Vision { radius: 5 }),
+                combatant: Some(Combatant {
+                    engaged_with: Vec::new(),
+                    facing: 0.0,
+                }),
+                resource: None,
+                structure: None,
+            });
+
             placed += 1;
         }
 
@@ -207,6 +269,63 @@ pub fn generate(config: &MapConfig) -> GameState {
             settlement_type: SettlementType::Village,
         });
         next_settlement_id += 1;
+
+        // Entity: settlement structure
+        let settlement_eid = next_entity_id;
+        next_entity_id += 1;
+        let settlement_entity_key = entities.insert(Entity {
+            id: settlement_eid,
+            pos: Some(start_pos),
+            owner: Some(owner),
+            contained_in: None,
+            contains: Vec::new(),
+            person: None,
+            mobile: None,
+            vision: None,
+            combatant: None,
+            resource: None,
+            structure: Some(Structure {
+                structure_type: StructureType::Village,
+                build_progress: 1.0,
+                health: 1.0,
+                capacity: 100,
+            }),
+        });
+
+        // Entity: population persons (Idle x20, Farmer x5, Worker x3) contained in settlement
+        let pop_groups: &[(u16, Role)] = &[(20, Role::Idle), (5, Role::Farmer), (3, Role::Worker)];
+        let mut person_keys: Vec<EntityKey> = Vec::new();
+        for &(count, role) in pop_groups {
+            for _ in 0..count {
+                let eid = next_entity_id;
+                next_entity_id += 1;
+                let person_key = entities.insert(Entity {
+                    id: eid,
+                    pos: None,
+                    owner: Some(owner),
+                    contained_in: Some(settlement_entity_key),
+                    contains: Vec::new(),
+                    person: Some(Person {
+                        health: 1.0,
+                        combat_skill: 0.1,
+                        role,
+                    }),
+                    mobile: Some(Mobile {
+                        speed: 1.0,
+                        move_cooldown: 0,
+                        destination: None,
+                        route: Vec::new(),
+                    }),
+                    vision: Some(Vision { radius: 3 }),
+                    combatant: None,
+                    resource: None,
+                    structure: None,
+                });
+                person_keys.push(person_key);
+            }
+        }
+        // Update the settlement entity's contains vec
+        entities.get_mut(settlement_entity_key).unwrap().contains = person_keys;
     }
 
     let total_cells = config.width * config.height;
@@ -225,6 +344,8 @@ pub fn generate(config: &MapConfig) -> GameState {
         next_pop_id,
         next_convoy_id: 0,
         next_settlement_id,
+        entities,
+        next_entity_id,
         scouted: vec![vec![false; total_cells]; config.num_players as usize],
         spatial: SpatialIndex::new(config.width, config.height),
         dirty_hexes: BitVec::repeat(false, total_cells),
