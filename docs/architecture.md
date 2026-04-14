@@ -136,6 +136,16 @@ simulate_everything_cli v3bench [flags]
 ```
 V3 agent benchmark and arena harness. Supports fixed-seed matchups, profiling, ASCII dumps, and config-driven arena scenarios.
 
+**Report flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--personality-report` | — | Run the full 3x3 ordered matrix for `spread`, `striker`, and `turtle`, then write raw + aggregate report artifacts |
+| `--report-out PATH` | `docs/v3-personality-report.md` | Markdown report destination used by `--personality-report` |
+| `--report-data-dir DIR` | `var/v3_personality_report` | Directory for `games.jsonl` and `summary.json` written by `--personality-report` |
+
+When `--personality-report` is set, `v3bench` defaults to seeds `0-99`, ticks `2000`, size `20x20`, and runs the full 3x3 ordered matrix:
+`spread/spread`, `spread/striker`, `spread/turtle`, `striker/spread`, `striker/striker`, `striker/turtle`, `turtle/spread`, `turtle/striker`, `turtle/turtle`.
+
 **Mechanics flags:**
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -192,6 +202,11 @@ formation = "line"
 **Arena example:**
 ```bash
 simulate_everything_cli v3bench --arena --arena-config examples/v3-arena-10v10-mixed.toml
+```
+
+**Personality report example:**
+```bash
+simulate_everything_cli v3bench --personality-report
 ```
 
 ## Replay Binary (`simulate_everything_replay`)
