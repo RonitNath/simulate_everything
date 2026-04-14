@@ -375,8 +375,11 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     });
     canvasRef.appendChild(app.canvas);
 
+    // All pointer/wheel events are handled via raw canvas listeners.
+    // Disable PixiJS hit-testing to avoid isInteractive errors on Graphics.
+    app.stage.interactiveChildren = false;
+
     world = new Container();
-    world.interactiveChildren = false;
     app.stage.addChild(world);
 
     // Rendering layers (bottom to top per spec)
