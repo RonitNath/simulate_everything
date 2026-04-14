@@ -46,6 +46,14 @@ docs/            — detailed documentation
 | All HTTP routes | `crates/web/src/main.rs` |
 | WS protocol types | `crates/web/src/protocol.rs` |
 | V2 WS protocol | `crates/web/src/v2_protocol.rs` |
+| V3 engine modules | `crates/engine/src/v3/` |
+| V3 entity model + state | `crates/engine/src/v3/state.rs` |
+| V3 sim tick | `crates/engine/src/v3/sim.rs` |
+| V3 agent architecture | `crates/engine/src/v3/agent.rs` |
+| V3 WS protocol types | `crates/web/src/v3_protocol.rs` |
+| V3 RR loop | `crates/web/src/v3_roundrobin.rs` |
+| V3 review system | `crates/web/src/v3_review.rs` |
+| V3 frontend types | `frontend/src/v3types.ts` |
 | Replay exporter + viewer | `crates/replay/src/main.rs` |
 | Systemd service template | `simulate_everything.service.example` |
 | Python agent example | `examples/agent.py` |
@@ -61,6 +69,7 @@ docs/            — detailed documentation
 | `SIMEV_TICK_MS` | (varies) | Tick interval in milliseconds |
 | `SIMEV_SEED` | (random) | RNG seed |
 | `SIMEV_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Directory for persisted flagged V2 RR review bundles |
+| `SIMEV_V3_RR_REVIEW_DIR` | `var/v3_reviews` | Directory for persisted V3 review bundles |
 | `RUST_LOG` | `info` | Tracing filter (e.g. `simulate_everything_engine::v2=debug`) |
 
 ## Frontend
@@ -114,4 +123,18 @@ curl -s -X POST http://localhost:3333/api/v2/rr/resume
 curl -s -X POST http://localhost:3333/api/v2/rr/reset
 curl -s -X POST http://localhost:3333/api/v2/rr/flags -H 'Content-Type: application/json' -d '{"game_number":1,"tick":123}'
 curl -s http://localhost:3333/api/v2/rr/reviews
+```
+
+## V3 RR control
+
+```bash
+curl -s http://localhost:3333/api/v3/rr/status
+curl -s -X POST http://localhost:3333/api/v3/rr/config -H 'Content-Type: application/json' -d '{"tick_ms":100,"mode":"tactical","autoplay":true}'
+curl -s -X POST http://localhost:3333/api/v3/rr/pause
+curl -s -X POST http://localhost:3333/api/v3/rr/resume
+curl -s -X POST http://localhost:3333/api/v3/rr/reset
+curl -s -X POST http://localhost:3333/api/v3/rr/flags -H 'Content-Type: application/json' -d '{"game_number":1,"tick":100,"annotation":"test"}'
+curl -s -X POST http://localhost:3333/api/v3/rr/capture/start -H 'Content-Type: application/json' -d '{"game_number":1}'
+curl -s -X POST http://localhost:3333/api/v3/rr/capture/stop -H 'Content-Type: application/json' -d '{"game_number":1}'
+curl -s http://localhost:3333/api/v3/rr/reviews
 ```
