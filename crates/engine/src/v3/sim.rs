@@ -70,9 +70,16 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     tick_vitals(state, dt_f32);
 
     // --- Phase 7: Cleanup ---
-    let count_before = state.entities.len();
+    // Count newly dead before cleanup strips their mobile/combatant
+    result.deaths = state
+        .entities
+        .values()
+        .filter(|e| {
+            e.vitals.as_ref().map(|v| v.is_dead()).unwrap_or(false)
+                && (e.mobile.is_some() || e.combatant.is_some())
+        })
+        .count();
     cleanup_dead(state);
-    result.deaths = count_before - state.entities.len();
     cleanup_inert_projectiles(state);
 
     // --- Phase 8: Elimination ---
@@ -720,15 +727,15 @@ mod tests {
     }
 
     #[test]
-    fn tick_removes_dead_entity() {
+    fn tick_makes_dead_entity_inert() {
         let mut state = mapgen::generate(15, 15, 2, 42);
 
-        // Find an entity with vitals and kill it
+        // Find an entity with vitals + mobile and kill it
         let key = state
             .entities
             .iter()
             .find_map(|(k, e)| {
-                if e.vitals.is_some() {
+                if e.vitals.is_some() && e.mobile.is_some() {
                     Some(k)
                 } else {
                     None
@@ -740,7 +747,10 @@ mod tests {
 
         tick(&mut state, 1.0);
 
-        assert!(!state.entities.contains_key(key), "dead entity should be removed");
+        // Entity persists as inert corpse
+        assert!(state.entities.contains_key(key), "dead entity should persist");
+        assert!(state.entities[key].mobile.is_none(), "dead entity loses mobile");
+        assert!(state.entities[key].pos.is_some(), "dead entity keeps position");
     }
 
     #[test]

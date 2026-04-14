@@ -118,25 +118,23 @@ fn eject_contained(state: &mut GameState, dying_key: EntityKey) {
 // Death and cleanup
 // ---------------------------------------------------------------------------
 
-/// Remove dead entities (vitals.blood <= 0) from the game.
+/// Transition dead entities (vitals.blood <= 0) to inert corpses.
 ///
-/// For each dead entity:
-/// 1. Eject all contained entities to the dead entity's position.
-/// 2. Remove from any container's contains list.
-/// 3. Remove from spatial index.
-/// 4. Remove from SlotMap.
-///
-/// Also removes projectile entities that have lost their projectile component
-/// (already impacted — marked for cleanup by the projectile system).
+/// Dead entities persist in the SlotMap at their position as inert corpses.
+/// Equipment remains contained_in the corpse. For each newly dead entity:
+/// 1. Strip Mobile component (can't move).
+/// 2. Strip Combatant component (can't fight).
+/// 3. Entity stays in the SlotMap with position, equipment, and wounds intact.
 pub fn cleanup_dead(state: &mut GameState) {
-    // Collect keys of dead entities
+    // Collect keys of newly dead entities (have vitals.dead but still have mobile/combatant)
     let dead_keys: SmallVec<[EntityKey; 16]> = state
         .entities
         .iter()
         .filter_map(|(key, entity)| {
-            // Dead persons
             if let Some(ref vitals) = entity.vitals {
-                if vitals.is_dead() {
+                if vitals.is_dead()
+                    && (entity.mobile.is_some() || entity.combatant.is_some())
+                {
                     return Some(key);
                 }
             }
@@ -145,7 +143,10 @@ pub fn cleanup_dead(state: &mut GameState) {
         .collect();
 
     for key in dead_keys {
-        remove_entity(state, key);
+        if let Some(entity) = state.entities.get_mut(key) {
+            entity.mobile = None;
+            entity.combatant = None;
+        }
     }
 }
 
@@ -201,13 +202,23 @@ pub fn cleanup_inert_projectiles(state: &mut GameState) {
 // Elimination check
 // ---------------------------------------------------------------------------
 
-/// Check if any player has been eliminated (no person entities remaining).
+/// Check if any player has been eliminated (no living person entities remaining).
+/// Dead persons (inert corpses) do not count as alive.
 /// Returns a list of eliminated player IDs.
 pub fn check_elimination(state: &GameState) -> SmallVec<[u8; 4]> {
     let mut alive = [false; 16]; // supports up to 16 players
 
     for (_, entity) in &state.entities {
         if entity.person.is_some() {
+            // Dead persons don't count
+            let is_dead = entity
+                .vitals
+                .as_ref()
+                .map(|v| v.is_dead())
+                .unwrap_or(false);
+            if is_dead {
+                continue;
+            }
             if let Some(owner) = entity.owner {
                 if (owner as usize) < alive.len() {
                     alive[owner as usize] = true;
@@ -316,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_dead_removes_dead_entities() {
+    fn cleanup_dead_makes_entity_inert() {
         let mut gs = test_state();
         let alive = spawn_entity(
             &mut gs,
@@ -324,6 +335,8 @@ mod tests {
                 .pos(Vec3::new(10.0, 10.0, 0.0))
                 .owner(0)
                 .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
                 .vitals(),
         );
         let dead = spawn_entity(
@@ -332,6 +345,8 @@ mod tests {
                 .pos(Vec3::new(20.0, 20.0, 0.0))
                 .owner(0)
                 .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
                 .vitals(),
         );
 
@@ -340,12 +355,22 @@ mod tests {
 
         cleanup_dead(&mut gs);
 
+        // Both still in SlotMap
         assert!(gs.entities.contains_key(alive));
-        assert!(!gs.entities.contains_key(dead));
+        assert!(gs.entities.contains_key(dead));
+        // Dead entity is inert: no mobile, no combatant
+        assert!(gs.entities[dead].mobile.is_none(), "dead entity should lose mobile");
+        assert!(gs.entities[dead].combatant.is_none(), "dead entity should lose combatant");
+        // Dead entity retains position and person
+        assert!(gs.entities[dead].pos.is_some(), "dead entity keeps position");
+        assert!(gs.entities[dead].person.is_some(), "dead entity keeps person");
+        // Alive entity unchanged
+        assert!(gs.entities[alive].mobile.is_some());
+        assert!(gs.entities[alive].combatant.is_some());
     }
 
     #[test]
-    fn dead_entity_ejects_equipment() {
+    fn dead_entity_retains_equipment() {
         let mut gs = test_state();
         let soldier = spawn_entity(
             &mut gs,
@@ -353,6 +378,8 @@ mod tests {
                 .pos(Vec3::new(50.0, 50.0, 0.0))
                 .owner(0)
                 .person(Person { role: Role::Soldier, combat_skill: 0.5 })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
                 .vitals()
                 .equipment(Equipment::empty()),
         );
@@ -364,19 +391,24 @@ mod tests {
         );
 
         contain(&mut gs, soldier, sword);
+        gs.entities[soldier].equipment.as_mut().unwrap().weapon = Some(sword);
 
         // Kill the soldier
         gs.entities[soldier].vitals.as_mut().unwrap().blood = 0.0;
-        let soldier_pos = gs.entities[soldier].pos;
 
         cleanup_dead(&mut gs);
 
-        // Soldier is gone
-        assert!(!gs.entities.contains_key(soldier));
-        // Sword is ejected to soldier's position
+        // Soldier persists as inert corpse
+        assert!(gs.entities.contains_key(soldier));
+        // Equipment still contained in the corpse
         assert!(gs.entities.contains_key(sword));
-        assert_eq!(gs.entities[sword].pos, soldier_pos);
-        assert_eq!(gs.entities[sword].contained_in, None);
+        assert_eq!(gs.entities[sword].contained_in, Some(soldier));
+        assert!(gs.entities[soldier].contains.contains(&sword));
+        // Equipment slot still references the sword
+        assert_eq!(
+            gs.entities[soldier].equipment.as_ref().unwrap().weapon,
+            Some(sword)
+        );
     }
 
     #[test]
