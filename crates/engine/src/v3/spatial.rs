@@ -4,7 +4,7 @@ use std::ops::{Add, Mul, Sub};
 use serde::{Deserialize, Serialize};
 
 /// 3D world-space position. f32 gives sub-mm precision at 30km map extent.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Vec3 {
     pub x: f32,
     pub y: f32,

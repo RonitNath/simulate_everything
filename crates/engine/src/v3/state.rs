@@ -3,6 +3,7 @@ use slotmap::SlotMap;
 use smallvec::SmallVec;
 
 use super::armor::{ArmorProperties, MaterialType};
+use super::body_model::BodyModel;
 use super::coarse_index::CoarseIndex;
 use super::combat_log::CombatLog;
 use super::equipment::Equipment;
@@ -169,6 +170,10 @@ pub struct Entity {
     pub projectile: Option<Projectile>,
     pub structure: Option<Structure>,
     pub resource: Option<Resource>,
+    /// Verlet skeletal body model. Active when entity is performing physical
+    /// actions at sufficient tick resolution. None for idle/aggregate entities.
+    /// Boxed to keep Entity small — most entities don't have a body model.
+    pub body: Option<Box<BodyModel>>,
 }
 
 impl Entity {
@@ -192,6 +197,7 @@ impl Entity {
             projectile: None,
             structure: None,
             resource: None,
+            body: None,
         }
     }
 }
@@ -214,6 +220,7 @@ pub struct EntityBuilder {
     pub(crate) projectile: Option<Projectile>,
     pub(crate) structure: Option<Structure>,
     pub(crate) resource: Option<Resource>,
+    pub(crate) body: Option<Box<BodyModel>>,
 }
 
 impl Default for EntityBuilder {
@@ -237,6 +244,7 @@ impl EntityBuilder {
             projectile: None,
             structure: None,
             resource: None,
+            body: None,
         }
     }
 
@@ -300,6 +308,11 @@ impl EntityBuilder {
         self
     }
 
+    pub fn body(mut self, body: BodyModel) -> Self {
+        self.body = Some(Box::new(body));
+        self
+    }
+
     /// Build into an Entity with the given ID. Used by `spawn_entity`.
     pub(crate) fn build(self, id: u32) -> Entity {
         let mut e = Entity::bare(id);
@@ -320,6 +333,7 @@ impl EntityBuilder {
         e.projectile = self.projectile;
         e.structure = self.structure;
         e.resource = self.resource;
+        e.body = self.body;
         e
     }
 }

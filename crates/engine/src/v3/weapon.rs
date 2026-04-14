@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use super::armor::DamageType;
 use super::armor::MaterialType;
+use super::body_model::BodyModel;
 use super::damage::Impact;
+use super::kinetic_chain;
 use super::martial::{self, AttackMotion};
 use super::spatial::Vec3;
 use crate::v2::state::EntityKey;
@@ -251,6 +253,7 @@ pub fn resolve_melee(
     target_radius: f32,
     attack_state: &AttackState,
     stagger_penalties: Option<&StaggerResult>,
+    attacker_body: Option<&BodyModel>,
     tick: u64,
 ) -> Option<Impact> {
     // Range check at resolution time (target may have moved during windup)
@@ -261,11 +264,16 @@ pub fn resolve_melee(
         return None; // whiff
     }
 
-    // Compute swing speed from weapon weight
+    // Compute swing speed: body-derived when available, fallback to formula
     let profile = martial::attack_motion_profile(attack_state.motion);
     let skill = attack_state.attacker_skill.clamp(0.0, 1.0);
-    let mut swing_speed = BASE_SWING_SPEED / (weapon.weight / WEIGHT_REF);
-    swing_speed *= profile.force_scale * (0.75 + skill * 0.45);
+    let mut swing_speed = if let Some(body) = attacker_body {
+        let body_speed = kinetic_chain::tip_speed(body);
+        body_speed.max(1.0) * profile.force_scale
+    } else {
+        let base = BASE_SWING_SPEED / (weapon.weight / WEIGHT_REF);
+        base * profile.force_scale * (0.75 + skill * 0.45)
+    };
 
     // Apply stagger penalties if committed-staggered
     let mut dispersion_mult = profile.precision_scale * (1.15 - skill * 0.65).clamp(0.45, 1.15);
@@ -461,6 +469,7 @@ mod tests {
             0.0,
             &state,
             None,
+            None,
             100,
         );
         assert!(impact.is_some(), "should resolve within reach");
@@ -488,6 +497,7 @@ mod tests {
             0.0,
             &state,
             None,
+            None,
             100,
         );
         assert!(impact.is_none(), "should whiff when out of reach");
@@ -510,6 +520,7 @@ mod tests {
             target_pos,
             0.0,
             &state,
+            None,
             None,
             100,
         );
@@ -563,6 +574,7 @@ mod tests {
             0.0,
             &state,
             None,
+            None,
             100,
         )
         .unwrap();
@@ -580,6 +592,7 @@ mod tests {
             0.0,
             &state,
             Some(&stagger),
+            None,
             100,
         )
         .unwrap();
@@ -663,6 +676,7 @@ mod tests {
             target_pos,
             0.0,
             &state,
+            None,
             None,
             100,
         )

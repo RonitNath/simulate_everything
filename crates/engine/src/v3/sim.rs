@@ -1,6 +1,7 @@
 use smallvec::SmallVec;
 
 use super::agent::{AgentOutput, LayeredAgent};
+use super::body_physics;
 use super::combat_log::CombatObservation;
 use super::commands::{CommandApplySummary, apply_agent_output};
 use super::damage::{self, BlockCapability, DefenderState, Impact, ImpactResult};
@@ -95,6 +96,9 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
 
     // --- Phase 3: Movement ---
     compute_steering_and_move(state, dt_f32);
+
+    // --- Phase 3.5: Body physics ---
+    body_physics::tick_body_physics(state, dt_f32);
 
     // --- Phase 4: Melee combat ---
     let melee_impacts = resolve_melee_attacks(state);
@@ -422,6 +426,11 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
                     .and_then(|c| c.attack.as_ref())
                     .cloned();
 
+                let attacker_body = state
+                    .entities
+                    .get(attacker_key)
+                    .and_then(|e| e.body.as_deref());
+
                 if let Some(impact) = attack_state.as_ref().and_then(|attack| {
                     weapon::resolve_melee(
                         &weapon_props,
@@ -432,6 +441,7 @@ fn resolve_melee_attacks(state: &mut GameState) -> Vec<PendingImpact> {
                         target_radius,
                         attack,
                         stagger.as_ref(),
+                        attacker_body,
                         state.tick,
                     )
                 }) {

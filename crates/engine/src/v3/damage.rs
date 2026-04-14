@@ -1,6 +1,9 @@
 use super::armor::{ArmorProperties, BodyZone, DamageType};
 use super::body::{surface_angle, zone_for_location};
+use super::body_model::BodyModel;
+use super::hitbox::{self, Disc, GeometricHitOutcome};
 use super::martial::{self, AttackMotion, BlockManeuver};
+use super::spatial::Vec3;
 use super::vitals::Vitals;
 use super::wound::{Wound, WoundList, severity_for_depth};
 use crate::v2::state::EntityKey;
@@ -258,6 +261,98 @@ pub fn resolve_impact(impact: &Impact, defender: &DefenderState) -> ImpactResult
         ImpactResult::Deflected {
             transmitted_force: transmitted,
             block_maneuver: attempted_block,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Geometric impact resolution (body-model path)
+// ---------------------------------------------------------------------------
+
+/// Resolve an impact using geometric hit detection from body models.
+/// Steps 1 and 2 use actual body/shield geometry; steps 3-7 are unchanged.
+///
+/// Returns `None` if the sword sweep missed entirely.
+pub fn resolve_impact_geometric(
+    impact: &Impact,
+    defender: &DefenderState,
+    sword_prev: Vec3,
+    sword_pos: Vec3,
+    defender_body: &BodyModel,
+    shield: Option<&Disc>,
+) -> Option<ImpactResult> {
+    let outcome = hitbox::test_hit_with_shield(sword_prev, sword_pos, defender_body, shield);
+
+    match outcome {
+        GeometricHitOutcome::Miss => None,
+
+        GeometricHitOutcome::ShieldBlock {
+            deflection_angle, ..
+        } => {
+            let block_effectiveness = 1.0 - (deflection_angle / std::f32::consts::FRAC_PI_2);
+            let cost = impact.kinetic_energy * block_effectiveness.max(0.1) * 0.3;
+            Some(ImpactResult::Blocked {
+                stamina_cost: cost,
+                maneuver: BlockManeuver::Generic,
+            })
+        }
+
+        GeometricHitOutcome::BodyHit(hit) => {
+            let zone = hit.zone;
+            let armor = defender.armor_at_zone[zone_to_index(zone)];
+            let angle = surface_angle(impact.attack_direction, defender.facing, zone);
+
+            let armor_active = if let Some(armor) = armor {
+                let coverage_roll =
+                    hash_roll(impact.tick, impact.attacker_id, defender.entity_id, 1);
+                coverage_roll < armor.coverage
+            } else {
+                false
+            };
+
+            let resistance = if armor_active {
+                let armor = armor.unwrap();
+                compute_resistance(armor, impact.damage_type, angle)
+            } else {
+                SKIN_RESISTANCE
+            };
+
+            let penetration_factor = compute_penetration_factor(impact);
+
+            if penetration_factor > resistance {
+                let depth = (penetration_factor - resistance) / resistance;
+                let is_crush = impact.damage_type == DamageType::Crush;
+                let (severity, mut bleed_rate) = severity_for_depth(depth, is_crush);
+
+                if zone == BodyZone::Torso {
+                    bleed_rate *= TORSO_BLEED_MULTIPLIER;
+                }
+
+                let wound = Wound {
+                    zone,
+                    severity,
+                    bleed_rate,
+                    damage_type: impact.damage_type,
+                    attacker_id: impact.attacker_id,
+                    created_at: impact.tick,
+                };
+
+                Some(ImpactResult::Wounded {
+                    wound,
+                    transmitted_force: impact.kinetic_energy,
+                    block_maneuver: None,
+                })
+            } else {
+                let transmitted = if impact.damage_type == DamageType::Crush {
+                    impact.kinetic_energy * 0.5
+                } else {
+                    0.0
+                };
+                Some(ImpactResult::Deflected {
+                    transmitted_force: transmitted,
+                    block_maneuver: None,
+                })
+            }
         }
     }
 }

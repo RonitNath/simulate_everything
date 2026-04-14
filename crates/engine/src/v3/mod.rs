@@ -1,6 +1,8 @@
 pub mod agent;
 pub mod armor;
 pub mod body;
+pub mod body_model;
+pub mod body_physics;
 pub mod coarse_index;
 pub mod collision;
 pub mod combat_log;
@@ -14,7 +16,9 @@ pub mod fine_index;
 pub mod formation;
 pub mod hex;
 pub mod hex_mapping;
+pub mod hitbox;
 pub mod index;
+pub mod kinetic_chain;
 pub mod lifecycle;
 pub mod mapgen;
 pub mod martial;
