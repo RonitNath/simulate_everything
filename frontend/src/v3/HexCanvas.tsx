@@ -18,6 +18,7 @@ import {
   type SettlementEntry,
   pixelToHex, boardPixelSize, HEX_SIZE, playerColorHex,
 } from "./render/grid";
+import { getViewportBounds } from "./render/camera";
 import * as css from "../styles/v3.css";
 
 interface V3HexCanvasProps {
@@ -111,20 +112,39 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     // Advance death animations
     entityMap.advanceLifecycle(now);
 
-    // Build render entity list with interpolated positions
+    // Viewport culling — compute visible world bounds with margin
+    const canvasW = canvasRef?.clientWidth ?? 800;
+    const canvasH = canvasRef?.clientHeight ?? 600;
+    const vp = getViewportBounds(canvasW, canvasH, { x: camX, y: camY, zoom: camZoom });
+    const margin = HEX_SIZE * 2; // Render slightly beyond viewport edge
+    const vpMinX = vp.minWorldX - margin;
+    const vpMinY = vp.minWorldY - margin;
+    const vpMaxX = vp.maxWorldX + margin;
+    const vpMaxY = vp.maxWorldY + margin;
+
+    function inViewport(x: number, y: number): boolean {
+      return x >= vpMinX && x <= vpMaxX && y >= vpMinY && y <= vpMaxY;
+    }
+
+    // Build render entity list with interpolated positions, culled by viewport
     const renderEntities: RenderEntity[] = [];
     const corpses: import("./entityMap").EntityState[] = [];
 
     for (const e of entityMap.entities.values()) {
       if (e.state === "corpse" || e.state === "dying") {
-        corpses.push(e);
+        if (inViewport(e.currPos.x, e.currPos.y)) {
+          corpses.push(e);
+        }
       } else {
-        renderEntities.push({
-          info: e.info,
-          pos: getInterpPos(e, t),
-          facing: getInterpFacing(e, t),
-          state: e.state,
-        });
+        const pos = getInterpPos(e, t);
+        if (inViewport(pos.x, pos.y)) {
+          renderEntities.push({
+            info: e.info,
+            pos,
+            facing: getInterpFacing(e, t),
+            state: e.state,
+          });
+        }
       }
     }
 
