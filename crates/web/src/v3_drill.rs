@@ -184,10 +184,7 @@ impl V3Drill {
         );
         let snapshot = v3_protocol::build_snapshot(&inner.state, 0.05);
         vec![
-            V3ServerToSpectator::Init {
-                init,
-                game_number: 0,
-            },
+            V3ServerToSpectator::Init { init },
             V3ServerToSpectator::Snapshot { snapshot },
         ]
     }
@@ -268,10 +265,9 @@ impl V3Drill {
             &["0".to_string(), "0".to_string()],
             0,
         );
-        let _ = self.spectator_tx.send(V3ServerToSpectator::Init {
-            init,
-            game_number: 0,
-        });
+        let _ = self
+            .spectator_tx
+            .send(V3ServerToSpectator::Init { init });
         let _ = self
             .spectator_tx
             .send(V3ServerToSpectator::Snapshot { snapshot });
@@ -300,10 +296,9 @@ impl V3Drill {
         let agent_versions: Vec<String> = (0..ZOO_PLAYERS).map(|_| "0".to_string()).collect();
 
         let init = v3_protocol::build_init(&inner.state, &agent_names, &agent_versions, 0);
-        let _ = self.spectator_tx.send(V3ServerToSpectator::Init {
-            init,
-            game_number: 0,
-        });
+        let _ = self
+            .spectator_tx
+            .send(V3ServerToSpectator::Init { init });
         let _ = self
             .spectator_tx
             .send(V3ServerToSpectator::Snapshot { snapshot });
