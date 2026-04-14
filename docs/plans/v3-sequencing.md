@@ -38,9 +38,34 @@ Additional deliverables outside the original sequencing continue to evolve indep
 ## Open Integration Work
 
 - Finish movement/pathfinding/formation integration in the live tick
-- Finish movement/pathfinding/formation integration in the live tick
 - Finish settlement, supply-route, and richer production-chain integration in the shared economy
 - Finish remaining protocol/economy surfaces that still have no shared engine backing
+
+## Upcoming Streams (parallel, post current work)
+
+### Stream E: Agent Behavior System
+Autonomous entity decision making. Needs-driven utility scoring → HTN
+decomposition → action queue execution. Dual-mode (tick-by-tick + batch
+resolve). See `docs/plans/v3-streamE-agent-behavior.md`.
+
+Dependencies: Phase 0 (protocol), Stream C (spatial index), A1-A4 (agent layers)
+
+Waves: E1 (needs), E2 (utility scorer), E3 (HTN engine), E4 (action queue),
+E5 (domain definitions), E6 (resolution demand + social state)
+
+### Stream F: Compositional World Model
+Physical properties on entities, affordance queries, material transformation
+through actions. Replaces typed Structure/Resource components with property-
+based composition. See `docs/plans/v3-streamF-compositional-world.md`.
+
+Dependencies: E2 (utility scorer) for F1, E3 (HTN engine) for F2+
+
+Waves: F1 (physical properties), F2 (affordance queries), F3 (material
+transformation), F4 (domain method migration)
+
+### Future: Neural Evolution (post-V3)
+NEAT-evolved neural networks at five insertion points. Requires E+F as stable
+classical interfaces. See `docs/plans/future-neural-evolution.md`.
 
 ## Domain Snapshot
 

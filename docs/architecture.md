@@ -506,3 +506,27 @@ Agents own their local cached view; `SpreadAgent` materializes a full observatio
 - Moves non-general units with the original spread/lanes heuristic and engages opportunistically.
 
 SpreadAgent is a structural placeholder. The target architecture is **Centurion** (see `docs/v2-agent-spec.md`): a hierarchy of specialized sub-agents (economic, tactical, strategic) with shared state and coordinated directives.
+
+### V3 Agent Architecture
+
+V3 uses a three-layer dispatch: Strategy (every ~50 game-seconds), Operations (every ~5), Tactical (every tick for engaged stacks). Personality differentiates only at Strategy (Spread/Striker/Turtle). Operations and Tactical are shared.
+
+**Current**: Strategy reads `StrategicView` (fog-of-war filtered), emits `StrategicDirective`. Operations translates to `OperationalCommand` (task assignments, stack formation, equipment production). Tactical emits per-entity combat commands. Commands validated and applied via shared engine path.
+
+**In progress (Stream E)**: Replacing flat task assignments with autonomous entity behavior. Entities have needs (hunger, safety, duty, rest, social, shelter) that drive utility scoring → HTN goal decomposition → action queue execution. Strategy adjusts need weights instead of commanding directly. Operations injects HTN methods instead of assigning tasks. See `docs/plans/v3-streamE-agent-behavior.md`.
+
+**In progress (Stream F)**: Replacing typed entity components (Structure, Resource) with physical properties. Affordance queries replace type checks. Material transformation through tool-property interaction. See `docs/plans/v3-streamF-compositional-world.md`.
+
+**Future (post-V3)**: NEAT-evolved neural networks at five insertion points: utility scoring, HTN method selection, body control, tactical coordination, social reasoning. See `docs/plans/future-neural-evolution.md`.
+
+### V3 Concurrent Development Streams
+
+| Stream | Topic | Status | Plan |
+|--------|-------|--------|------|
+| Phase 0 | Protocol crate | Complete | `v3-phase0-protocol-crate.md` |
+| A | Verlet body model | Complete (A1-A4) | `v3-streamA-verlet-body.md` |
+| B | wgpu WASM viewer | B1-B4 complete, B5-B6 remaining | `v3-streamB-wgpu-viewer.md` |
+| C | Hex spatial index | Complete | `v3-streamC-spatial-index.md` |
+| D | Terrain operation log | Complete | `v3-streamD-terrain-ops.md` |
+| E | Agent behavior system | Ready for implementation | `v3-streamE-agent-behavior.md` |
+| F | Compositional world model | Ready (depends on E2/E3) | `v3-streamF-compositional-world.md` |

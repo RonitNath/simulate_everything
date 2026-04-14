@@ -65,6 +65,12 @@ docs/            — detailed documentation
 | Replay exporter + viewer | `crates/replay/src/main.rs` |
 | Systemd service template | `simulate_everything.service.example` |
 | Python agent example | `examples/agent.py` |
+| Stream E plan (agent behavior) | `docs/plans/v3-streamE-agent-behavior.md` |
+| Stream F plan (compositional world) | `docs/plans/v3-streamF-compositional-world.md` |
+| Neural evolution future plan | `docs/plans/future-neural-evolution.md` |
+| V3 entity unification spec | `docs/specs/v3-entity-unification-2026-04-13.md` |
+| Version roadmap | `docs/roadmap.md` |
+| V3 sequencing graph | `docs/plans/v3-sequencing.md` |
 
 ## Environment variables
 

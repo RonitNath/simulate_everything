@@ -143,184 +143,180 @@ These systems complete the V2 vision. They are designed (see discussion docs) bu
 
 ## V3 — Depth
 
-**Goal**: Defense in depth works. Sieges are logistics operations. Terrain matters at every scale. Wars are won through economy and infrastructure, not just army size. The spectator sees fortification lines, siege camps, supply convoys, and the slow grinding pressure of attrition.
+**Goal**: Every entity is autonomous. Terrain matters at every scale. Wars are
+won through economy and infrastructure, not just army size. The spectator sees
+individual stories — a farmer who became a soldier, a smith forging swords at
+dawn, a ditch dug over three game-days that diverts a river and changes a
+battle. Behavior emerges from physical simulation and needs-driven agents, not
+from hardcoded unit types or role assignments.
 
-### Building and fortification
+V3 replaces V2's separate entity types with a single composable Entity primitive
+(see `docs/specs/v3-entity-unification-2026-04-13.md`). Every person, structure,
+tool, and resource is an entity with physical properties. Capabilities emerge
+from composition, not categories.
 
-**Hex improvements** (structures on hexes):
-- Camp → Depot → Workshop → Tower → Keep → Citadel
-- Material quality tiers: Earthwork → Timber → Stone → Masonry
-- Each tier: different build speed, material cost, integrity decay rate, combat multiplier
-- Maintenance as ongoing cost: unmaintained structures decay. Over-building creates a maintenance burden.
-- Garrison capacity: structures hold N soldiers who fight at the structure's defense multiplier
+### Implemented (Streams A-D + Phase 0)
 
-**Edge barriers** (walls on hex edges):
-- Ditch → Palisade → Wall → Gatehouse
-- Same material quality tiers
-- `built_by` determines which side gets defensive bonus
-- Gates: passable to builder's units, barrier to enemies
-- Walls restrict movement for everyone including the builder (trade routes, population movement)
+**Entity unification + continuous spatial model**
+- Single `Entity` with optional components (person, mobile, combatant, vitals, etc.)
+- Continuous 3D positions; hex grid is derived projection with hysteresis
+- Containment hierarchy (entities inside entities)
+- Multi-resolution spatial index: fine (10m), hex (150m), coarse (500m)
 
-**Multi-hex structures** (patterns, not special entities):
-- Roman marching camp: 1 center hex (camp) + ditch edges. Cheap, fast, temporary. Built every night by trained soldiers.
-- Motte and bailey: keep hex + palisade bailey hexes. Early permanent fort.
-- Star citadel: citadel center + stone wall edges on surrounding hexes. Overlapping defensive coverage from hex geometry. Nearly impregnable without siege.
-- Great Wall: linear chain of wall edges + watchtower hexes + interior road. Enormous cost, channels enemy movement to gates.
+**Material-interaction combat**
+- 7-step damage pipeline: impact geometry → surface angle → block → armor → wound → bleeding → stagger
+- Weapons and armor defined by physical properties (material, sharpness, weight, reach)
+- Verlet body model with 16 skeletal points for hit detection
+- Kinetic chain for momentum propagation across limbs
 
-**Siege equipment** (built at siege sites from transported materials):
-- Battering ram: attacks edge barriers, degrades integrity
-- Siege tower: negates wall height advantage for attackers
-- Siege ramp: workers pile earth against wall, slow but eventually negates wall entirely
-- Sapping: tunnel under wall from underground layer, collapse it
+**Terrain operation log (Stream D)**
+- Analytic geometric operations (ditch, wall, crater, road, flatten, furrow, bore) stacked per hex
+- Evaluated procedurally at arbitrary resolution — 40 bytes per ditch, not 10k vertices
+- Compaction when stack exceeds threshold; rasterization cache for viewer GPU upload
+- Scales to continental maps: 30km map with 100k edits = ~4MB terrain state
 
-**Bridges**:
-- Timber bridge (fast, enables foot/pack), stone bridge (slow, expensive, enables carts, durable), pontoon bridge (military engineers, temporary, fast army crossing)
+**wgpu WASM viewer (Stream B)**
+- WebGPU terrain renderer with clipmap LOD (1m/4m/16m/64m rings)
+- Heightmap chunk dirtying + incremental GPU upload
+- Entity rendering, hex overlay, camera controls
 
-### Underground layer
-- Same hex grid at negative layer depth, connected to surface by dug entrances
-- Mining: workers dig tunnels, extract ore/stone. Resource hexes hint at what's below.
-- Siege mining: tunnel under enemy wall, collapse. Defender can counter-mine.
-- Trenches: shallow surface excavation, provides wall-like defense without wall-like cost. Trench lines with communication trenches.
-- Hidden movement: tunnel exits behind enemy lines for surprise attacks.
+**Three-layer agent dispatch**
+- Strategy (Spread/Striker/Turtle personalities), Operations, Tactical
+- Strategy reads fog-of-war-filtered StrategicView
+- Tactical triggers on engagement proximity
 
-### Water transport
-- Rafts, barges, ships with capacity/speed tradeoffs
-- Rivers from height field provide natural logistics corridors (10-50× land transport efficiency)
-- Harbors as hex improvements enabling water transport
-- Upstream vs downstream speed differential
-- River control = logistics control
+### In progress (Streams E-F)
 
-### Terrain depth
-- Full biome simulation: moisture carried by wind, rain shadows behind mountains, vegetation from temperature × moisture
-- Height field affects: vision (higher sees further), combat (uphill penalty), movement (steep = slow/impassable), construction cost, water flow
-- Region identity: named regions with strategic character, referenced by agents and spectator narration
-- Foraging: armies extract food from hex, damaging fertility. Scorched earth destroys own fertility to deny enemy forage. Recovery is slow.
-- Water access as terrain constraint: low water hexes cost extra rations, very low = impassable without engineering
+**Agent behavior system (Stream E)**
+- Needs-driven utility scoring (hunger, safety, duty, rest, social, shelter)
+- HTN decomposition: goals → action queues via composable domain methods
+- Dual-mode execution: tick-by-tick (physics) and batch-resolve (fast-forward)
+- Decision frequency LOD + archetype clustering for continental scale
+- Resolution demand generalized beyond combat: negotiation, construction, competition
+- Social state: personality vectors, relationship cache, opinion dynamics
+- See `docs/plans/v3-streamE-agent-behavior.md`
 
-### Population growth
-- Logistic growth: `growth_rate = base_rate * food_satisfaction * (1 - pop/carrying_capacity)`
-- Food surplus → growth, deficit → death (starvation spiral: fewer farmers → less food → more death)
-- Population concentrates in fertile regions, creates demographic pressure for expansion
+**Compositional world model (Stream F)**
+- Physical properties on all entities (mass, hardness, temperature, material)
+- Tool effectiveness through property interaction, not hardcoded per-structure-type
+- Affordance queries: HTN methods find tools/materials by physical constraints
+- Material transformation: "forge" = co-located fire source + anvil + hammer, not a special type
+- See `docs/plans/v3-streamF-compositional-world.md`
 
-### Morale
-- Per-unit morale from: supply state, combat outcomes, leadership proximity, fatigue
-- Low morale: reduced combat effectiveness, eventual rout (flee before zero strength)
-- Rout cascade: one unit routing debuffs adjacent friendlies
-- Surrender: encircled + demoralized units surrender rather than fight to death
-- Starvation and morale interact: starving units lose morale fast
+### Remaining V3 scope
 
-### Equipment and technology
-- Equipment as resource: soldiers need equipment (material cost), equipment quality affects combat
-- Technology progression unlocks: construction tiers, transport modes, equipment quality, economic improvements
-- Small tech tree (8-15 nodes) with meaningful branches
-- Military tech = short-term unit superiority. Economic tech = long-term production advantage.
-- Training units from generic recruits + equipment = specialized soldier
+**Building and fortification** — structures as entities with physical properties.
+Construction through terrain ops (ditches, walls) and entity placement. Material
+quality affects integrity. Maintenance as ongoing cost.
 
-### Unit types (basic)
-- Infantry: holds ground, defensive backbone, garrisons forts
-- Cavalry: fast, scouts, raids convoys, flanks in combat
-- Workers: build, farm, mine, transport — the economy
-- Scouts: fast, fragile, extended vision radius
-- Rock-paper-scissors dynamics from engagement model + speed + strength differences
+**Terrain depth** — height field affects vision, combat, movement, construction
+cost. Terrain ops (Stream D) enable player-scale modifications: trenches, roads,
+leveled building sites, irrigation ditches.
 
----
+**Population dynamics** — logistic growth driven by food satisfaction and carrying
+capacity. Migration toward prosperity. Starvation cascades.
 
-## V4 — Statecraft
+**Morale** — per-entity morale from need satisfaction, combat outcomes, social
+state. Low morale → reduced effectiveness → rout → desertion. Emerges from
+the needs system (Stream E), not from a separate morale mechanic.
 
-**Goal**: The game becomes a simulation of governance, not just warfare. The player's role shifts from "move these units" to "govern this nation." The interesting failures are political. Large empires face internal pressure that counterbalances snowballing.
-
-### Commanders and delegation
-- Commanders are trained entities: competence stats, personality traits (aggressive/cautious/brilliant/incompetent)
-- Assigned to armies, they make local decisions autonomously between orders
-- Communication delay: orders from general travel at message speed (proportional to distance). Commanders interpret strategic intent with local information.
-- Commander quality matters: a brilliant subordinate compensates for bad grand strategy. An incompetent one squanders a good army.
-- Promoting/demoting commanders has consequences — loyalty, morale of their troops
-
-### Information as a resource
-- Scouting: dedicated scout units, observation towers, signal fires
-- Information travel time: what happened at the frontier reaches the capital ticks later
-- Strategic fog: the ruler doesn't see what commanders see in real time
-- Intelligence: captured enemy scouts, intercepted convoys reveal enemy plans
-- Deception: feints, false movements, information denial
-- Signal network: faster communication infrastructure (signal towers, relay riders) = faster response
-
-### Loyalty and factions
-- Commanders accumulate influence through success and troop loyalty
-- Over-centralization vs delegation tradeoff: tight control = slow response + bottleneck at ruler. Delegation = faster response + risk of disloyalty.
-- Distant provinces drift: loyalty decays with distance from capital, cultural difference, communication delay
-- Rebellion: disloyal commanders with loyal troops can revolt. Conquered territories may rebel if under-garrisoned.
-- Faction pressure scales with empire size: more territory = more commanders = more loyalty management = harder to hold together. This is the snowball counterbalance.
-
-### Political and social simulation
-- Population has social structure: classes, occupations, cultural identity
-- War weariness: prolonged war reduces civilian morale and growth
-- Legitimacy: based on military success, economic prosperity, justice (not over-taxing, not losing wars badly)
-- Cultural assimilation: conquered populations slowly integrate or resist depending on treatment
-- Migration: population moves toward prosperity and safety, away from war and famine
-- Civil unrest from: taxation, conscription, famine, military losses, perceived incompetence
-
-### Player interaction model
-- Grand strategy notes to your AI: "Reinforce the northern theater." "Prioritize economy." "I don't trust Commander X." "Accept peace terms if offered."
-- The AI interprets and executes — but interpretation depends on commander competence, loyalty, and communication delay
-- Risk: promoting commanders who make bad decisions, trusting disloyal governors, misjudging enemy intent
-- The player governs; the simulation plays
-
-### Diplomacy
-- AI-to-AI diplomacy between factions: alliances, truces, tribute, marriage, betrayal
-- Driven by strategic calculus (threat assessment, resource comparison, geographic opportunity)
-- Treaties as game objects: terms, duration, violation consequences
-- Coalition dynamics in multi-player: kingmaker problems, balance-of-power politics
+**Equipment** — entities with weapon/armor properties. Material-interaction
+combat already handles equipment effects. Production through compositional
+world model (Stream F): entities shape materials using tools.
 
 ---
 
-## V5 — Technology and Range
+## V4 — Neural Evolution + Statecraft
 
-**Goal**: The full arc from bronze spears to rifled artillery. Ranged combat changes everything — fortification design, unit composition, tactical doctrine. The same terrain and logistics systems from V2-V4 handle it without architecture changes.
+**Goal**: Agents learn. Neural networks replace hand-tuned classical systems at
+five insertion points. Entities evolve across generations — skill, strategy, and
+social behavior emerge from selection pressure, not from authored rules. The game
+becomes a simulation of governance where political failures are as interesting as
+military ones.
 
-### Ranged combat
-- Archers, slingers, javelins: range as hex distance, line of sight from height field
-- Projectile mechanics: arc, drop-off, blocked by terrain/walls
-- Ranged units thin formations before melee contact — fundamental tactical shift
-- Counter-play: shields, cover, closing distance quickly (cavalry charge through arrow fire)
+V4 builds on V3's classical agent behavior system (Stream E) by inserting NEAT-
+evolved neural networks at the interfaces the classical system defines. The
+classical system remains as bootstrap policy and fallback.
 
-### Full unit type system
-- Rock-paper-scissors on hex with edge-based engagement:
-  - Heavy infantry holds against cavalry charge
-  - Cavalry flanks around infantry to hit archers
-  - Archers thin advancing infantry at range
-  - Siege engines break walls that infantry can't crack
-  - Skirmishers harass and screen
-- Unit composition as strategic decision: army composition determines what it can and can't do
+### Neural evolution (see `docs/plans/future-neural-evolution.md`)
 
-### Hot weapons transition
-- Gunpowder as late-tech unlock
-- Changes engagement math: range dominates melee, volume of fire matters, cover is critical
-- Fortification evolution: medieval walls → star forts (angled walls deflect cannon, overlapping fields of fire — already supported by hex geometry)
-- Trench warfare emerges naturally: defense dominates offense when both sides have firearms + trenches (V3 underground layer)
-- Artillery: long range, breaks fortifications, suppresses infantry. Counter: concealment, mobility, counter-battery
+**Five insertion points:**
+1. Utility scoring — `(needs, context) → goal_scores`. Replaces response curves.
+2. HTN method selection — `(state, methods) → method_choice`. Replaces cost heuristic.
+3. Body control — `(body_state, environment) → joint_forces`. Replaces discrete combat menu. Skill = network complexity. Emergent martial arts.
+4. Tactical coordination — `(group_state, enemies) → signals`. Replaces formation commands.
+5. Social reasoning — `(personality, relationships) → comm_strategy`. Replaces opinion heuristics.
 
-### Air layer
-- Observation first: balloons, elevated scouts. Vision bonus from height.
-- Later: air units that ignore surface terrain. Fast, visible, can't hold ground.
-- Surface height affects air interaction: mountains bring surface closer to air layer
+**TensorNEAT** for batch inference (variable-topology nets tensorized, batched
+via SIMD). **rtNEAT** for continuous evolution (no generational pause — offspring
+replace worst performers on death). Cross-generational inheritance with mutation.
 
-### Advanced naval
-- Open-water navigation (not just rivers)
-- Naval combat: boarding (melee), ramming, later cannon
-- Amphibious operations: landing armies from ships
-- Blockade: cut coastal supply and trade
-- Naval logistics: sea transport even more efficient than river
+**Cultural evolution**: different lineages develop genuinely different behavioral
+patterns over hundreds of generations. Not designed — emergent from differential
+survival in different environments.
 
-### Economic warfare
-- Trade routes between regions/factions as game objects
-- Blockade and embargo as strategic tools
-- Currency and trade manipulation (luxury goods for diplomacy/morale)
-- Piracy and commerce raiding
+### Statecraft
 
-### Advanced building
-- Specialized city districts: residential, commercial, industrial, military, religious
-- Wonders: enormous construction projects with civilization-wide effects
-- Infrastructure networks: aqueducts, canal systems, road networks as strategic assets
+**Delegation and commanders**
+- Entities autonomously make local decisions (V3 needs/HTN system handles this)
+- Communication delay: strategic directives travel at message speed
+- Commander quality = evolved neural net sophistication
+- Delegation emerges: faction leader adjusts need weights, commanders interpret locally
+
+**Information as a resource**
+- Scouting, observation, signal networks
+- Information travel time proportional to distance
+- Strategic fog: ruler sees aggregates, commanders see locals
+- Deception: evolved social reasoning nets learn to bluff
+
+**Loyalty and factions**
+- Faction loyalty as emergent property of social interactions (V3 Stream E social state)
+- Loyalty decays with distance, cultural difference, unmet needs
+- Rebellion: entities with low loyalty + high capability may defect
+- Empire size creates management pressure — the snowball counterbalance
+
+**Diplomacy**
+- AI-to-AI negotiation via social reasoning nets
+- Treaties as game objects with enforceable terms
+- Alliance formation from shared personality + shared threats
+- Deception and betrayal emerge from adversarial social evolution
+
+---
+
+## V5 — Scale + Technology
+
+**Goal**: Continental scale. Millions of entities across 300km+ maps over
+centuries of game time. Technology progression from bronze to gunpowder. The
+full arc of civilization: agriculture → urbanization → warfare → politics →
+collapse → renewal.
+
+### Continental scale
+- LOD tiers: strategic (1 game-hour tick), tactical (1 game-second), close (20Hz full physics)
+- Hybrid tier promotion: resolution demand triggers (stakes × uncertainty × conflict intensity)
+- Batch resolution: entities fast-forward through action queues at strategic tier
+- Archetype clustering: millions of entities, hundreds of decision passes
+- Terrain operation log: continent-sized maps with million-edit histories in ~40MB
+
+### Technology progression
+- No tech tree. Technology emerges from material interaction discovery.
+- Entities discover that heating iron + hammering produces better tools (compositional world model)
+- Knowledge propagation via social interactions — training, apprenticeship, trade
+- Regional technological divergence from isolation + different environments
+- Military tech transitions (bronze → iron → steel, melee → ranged → gunpowder)
+  change combat dynamics without architecture changes — same damage pipeline,
+  different material properties
+
+### Water and underground layers
+- Rivers from heightfield provide logistics corridors
+- Water transport entities (rafts, barges, ships)
+- Underground layer for mining, siege tunneling, hidden movement
+- Terrain ops (ditches, bores) connect surface to underground
+
+### Advanced infrastructure
+- Road networks as terrain ops (road variant) that modify movement speed
+- Specialized districts emerge from spatial clustering of activities
+- Infrastructure networks (aqueducts, canals) as terrain modifications
+- Trade routes as persistent entity paths through road networks
 
 ---
 
@@ -328,22 +324,30 @@ These systems complete the V2 vision. They are designed (see discussion docs) bu
 
 ```
 V2 (hex, tick, entities, economy, convoys, roads, population, agents)
- └→ V3 (building, siege, underground, water, terrain depth, morale, equipment, tech, unit types)
-     └→ V4 (commanders, information, loyalty, factions, social simulation, diplomacy, player-as-ruler)
-         └→ V5 (ranged, hot weapons, full unit types, air, naval, economic warfare, advanced building)
+ └→ V3 (entity unification, continuous space, material physics, terrain ops,
+        autonomous agents, HTN behavior, compositional world model)
+     └→ V4 (neural evolution at 5 insertion points, emergent martial arts,
+            cultural evolution, statecraft, diplomacy)
+         └→ V5 (continental scale, LOD tiers, batch resolution, technology
+                progression, water/underground layers, advanced infrastructure)
 ```
 
-Each version is playable and watchable on its own. Each adds a layer of strategic depth without invalidating the previous. The agent architecture scales naturally: V2 agents reason about territory and combat. V3 agents reason about infrastructure and economy. V4 agents delegate to sub-agents (commanders). V5 agents manage combined arms and combined domains (land, sea, air).
+Each version is playable and watchable on its own. V2 agents reason about
+territory and combat. V3 agents are autonomous with coherent individual
+narratives. V4 agents evolve — skill and strategy emerge from selection
+pressure. V5 agents operate at civilization scale across centuries.
 
 ## Design Principles (all versions)
 
 1. **Simulation first.** Model the world truthfully. Interesting gameplay emerges from honest mechanics.
-2. **AI-readable.** Deep simulation, structured observation interface. Layered observations keep per-decision context manageable.
-3. **Leverage compute.** AI agents handle complexity that would overwhelm humans. Detailed supply chains, morale propagation, terrain effects — agents evaluate thousands of tiles per second. Agents handle complexity; spectators see consequences.
-4. **Visible decisions.** Every agent decision is visible on the map and debatable by spectators. Spectators should be able to say "why did Blue do that?" and form opinions.
-5. **Behavioral defaults.** Units have autonomous behaviors for routine decisions. Strategic AI issues directives, not micromanagement.
+2. **No special categories.** There are no unit types, building types, or resource types. There are entities with physical properties. Capabilities emerge from composition. A "forge" is tools co-located with a heat source. A "soldier" is a person with combat skill and a weapon.
+3. **Every entity is autonomous.** Entities pursue their own needs. Strategic AI adjusts priorities and provides opportunities — it doesn't micromanage. Narrative coherence per entity is a hard requirement.
+4. **Leverage compute.** AI agents handle complexity that would overwhelm humans. Agents evaluate thousands of situations per second. Spectators see consequences.
+5. **Visible decisions.** Every agent decision is inspectable. "Why did this farmer walk to the river?" has a concrete answer in the needs/goals/action queue.
 6. **Each version stands alone.** V2 without V3 is a game. V3 without V4 is a game. Each addition enriches without requiring the next.
-7. **The convoy is the primitive.** All resource movement is physical entities on the map. No teleportation, no abstract flow networks.
+7. **Physical movement is real.** All resource movement is physical entities on the map. No teleportation, no abstract flow networks.
 8. **Population is the substrate.** Every action is a person doing a thing. Every person eats. Every decision is a labor allocation tradeoff.
-9. **Construction is permanent investment with ongoing cost.** Infrastructure defines your empire's shape and capability. Maintenance means you can over-build. Roads and fortifications are commitments to a strategic posture.
-10. **Information has travel time.** (V4+) What you know depends on where your scouts are and how fast reports reach you. Uncertainty is a mechanic, not a limitation.
+9. **Actions have consequences.** Terrain ops persist. Social interactions change relationships. Economic decisions compound. A ditch dug in year 1 is still there in year 50.
+10. **Scale through analytic representations.** Dense grids don't survive continental scale. Terrain ops, archetype clustering, decision LOD, and batch resolution are not optimizations — they're architectural requirements.
+11. **Information has travel time.** (V4+) What you know depends on where your scouts are and how fast reports reach you. Uncertainty is a mechanic, not a limitation.
+12. **Evolution over authoring.** (V4+) Neural nets evolve behavior that humans can't predict or author. The classical system is scaffolding for the evolutionary system.
