@@ -1,4 +1,5 @@
 mod v2bench;
+mod v3bench;
 
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -14,7 +15,9 @@ use std::time::Instant;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    if args.iter().any(|a| a == "v2bench") {
+    if args.iter().any(|a| a == "v3bench") {
+        v3bench::main(&args);
+    } else if args.iter().any(|a| a == "v2bench") {
         v2bench::main(&args);
     } else if args.iter().any(|a| a == "bench") {
         bench_main(&args);
