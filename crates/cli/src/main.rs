@@ -1,4 +1,6 @@
+mod headless_renderer;
 mod v2bench;
+mod v3_behavior_bench;
 mod v3bench;
 
 use rand::SeedableRng;
@@ -17,6 +19,8 @@ fn main() {
 
     if args.iter().any(|a| a == "v3bench") {
         v3bench::main(&args);
+    } else if args.iter().any(|a| a == "v3behavior") {
+        v3_behavior_bench::main(&args);
     } else if args.iter().any(|a| a == "v2bench") {
         v2bench::main(&args);
     } else if args.iter().any(|a| a == "bench") {

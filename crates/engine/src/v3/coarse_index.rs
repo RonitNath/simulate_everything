@@ -80,15 +80,12 @@ impl CoarseIndex {
     /// Insert an entity into the coarse index.
     /// `owner` is None for neutral entities, Some(player_id) for owned entities.
     /// `is_soldier` indicates whether the entity contributes to army strength.
-    pub fn insert(
-        &mut self,
-        pos: Vec3,
-        entity: EntityKey,
-        owner: Option<u8>,
-        is_soldier: bool,
-    ) {
+    pub fn insert(&mut self, pos: Vec3, entity: EntityKey, owner: Option<u8>, is_soldier: bool) {
         let cell = self.cell_for_pos(pos);
-        let agg = self.cells.entry(cell).or_insert_with(CoarseHexAggregate::new);
+        let agg = self
+            .cells
+            .entry(cell)
+            .or_insert_with(CoarseHexAggregate::new);
         if !agg.entities.contains(&entity) {
             agg.entities.push(entity);
             if let Some(p) = owner {
@@ -103,13 +100,7 @@ impl CoarseIndex {
     }
 
     /// Remove an entity from the coarse index.
-    pub fn remove(
-        &mut self,
-        pos: Vec3,
-        entity: EntityKey,
-        owner: Option<u8>,
-        is_soldier: bool,
-    ) {
+    pub fn remove(&mut self, pos: Vec3, entity: EntityKey, owner: Option<u8>, is_soldier: bool) {
         let cell = self.cell_for_pos(pos);
         if let Some(agg) = self.cells.get_mut(&cell) {
             let had = agg.entities.contains(&entity);

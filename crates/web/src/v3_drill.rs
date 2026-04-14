@@ -265,9 +265,7 @@ impl V3Drill {
             &["0".to_string(), "0".to_string()],
             0,
         );
-        let _ = self
-            .spectator_tx
-            .send(V3ServerToSpectator::Init { init });
+        let _ = self.spectator_tx.send(V3ServerToSpectator::Init { init });
         let _ = self
             .spectator_tx
             .send(V3ServerToSpectator::Snapshot { snapshot });
@@ -296,9 +294,7 @@ impl V3Drill {
         let agent_versions: Vec<String> = (0..ZOO_PLAYERS).map(|_| "0".to_string()).collect();
 
         let init = v3_protocol::build_init(&inner.state, &agent_names, &agent_versions, 0);
-        let _ = self
-            .spectator_tx
-            .send(V3ServerToSpectator::Init { init });
+        let _ = self.spectator_tx.send(V3ServerToSpectator::Init { init });
         let _ = self
             .spectator_tx
             .send(V3ServerToSpectator::Snapshot { snapshot });
@@ -331,7 +327,6 @@ fn create_drill_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
-                    task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant::new())
@@ -364,7 +359,6 @@ fn create_drill_state() -> GameState {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
-                    task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant {
@@ -410,7 +404,6 @@ fn zoo_spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, facing: f32) -
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.5,
-                    task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant {

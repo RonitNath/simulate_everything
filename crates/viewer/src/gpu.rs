@@ -29,10 +29,20 @@ impl GpuState {
         // Try multiple adapter strategies — Chrome on some GPU/driver combos fails
         // surface-compatible discovery even when WebGPU is nominally available.
         let strategies: &[(&str, Option<PowerPreference>, bool, bool)] = &[
-            ("surface+high", Some(PowerPreference::HighPerformance), false, true),
+            (
+                "surface+high",
+                Some(PowerPreference::HighPerformance),
+                false,
+                true,
+            ),
             ("surface+low", Some(PowerPreference::LowPower), false, true),
             ("surface+none", None, false, true),
-            ("no-surface+high", Some(PowerPreference::HighPerformance), false, false),
+            (
+                "no-surface+high",
+                Some(PowerPreference::HighPerformance),
+                false,
+                false,
+            ),
             ("fallback", None, true, false),
         ];
 
@@ -88,9 +98,7 @@ impl GpuState {
 
         let caps = surface.get_capabilities(&adapter);
         let format = if caps.formats.is_empty() {
-            log::warn!(
-                "surface reports no compatible formats — falling back to Bgra8UnormSrgb"
-            );
+            log::warn!("surface reports no compatible formats — falling back to Bgra8UnormSrgb");
             TextureFormat::Bgra8UnormSrgb
         } else {
             let chosen = caps

@@ -60,7 +60,11 @@ impl UtilityScorer {
                 reason: "entity missing".to_string(),
             };
         };
-        let role = entity.person.as_ref().map(|person| person.role).unwrap_or(Role::Idle);
+        let role = entity
+            .person
+            .as_ref()
+            .map(|person| person.role)
+            .unwrap_or(Role::Idle);
 
         if needs.hunger > 0.72 {
             return GoalChoice {

@@ -27,12 +27,12 @@ pub enum AttackMotion {
 
 /// The 6 sequential links in the kinetic chain, from ground to weapon tip.
 const CHAIN_LINKS: [BodyPointId; 6] = [
-    BodyPointId::RightFoot,   // 0: rear foot push (ground reaction)
-    BodyPointId::RightHip,    // 1: hip rotation toward target
-    BodyPointId::LowerSpine,  // 2: torso follows hips (spine twist)
+    BodyPointId::RightFoot,     // 0: rear foot push (ground reaction)
+    BodyPointId::RightHip,      // 1: hip rotation toward target
+    BodyPointId::LowerSpine,    // 2: torso follows hips (spine twist)
     BodyPointId::RightShoulder, // 3: shoulder accelerates arm
-    BodyPointId::RightElbow,  // 4: elbow extends
-    BodyPointId::RightHand,   // 5: wrist snap
+    BodyPointId::RightElbow,    // 4: elbow extends
+    BodyPointId::RightHand,     // 5: wrist snap
 ];
 
 /// Force magnitude for each chain link (Newtons, applied as impulse).
@@ -131,7 +131,7 @@ impl KineticChainState {
         match self.motion {
             AttackMotion::Overhead => {
                 match link_index {
-                    0 => Vec3::new(0.0, 0.0, 1.0), // Ground push up
+                    0 => Vec3::new(0.0, 0.0, 1.0),         // Ground push up
                     1 | 2 => Vec3::new(cos_d, sin_d, 0.0), // Hip/spine toward target
                     3 | 4 | 5 => Vec3::new(cos_d * 0.3, sin_d * 0.3, -1.0).normalize(), // Arm downward + forward
                     _ => Vec3::ZERO,
@@ -163,8 +163,8 @@ impl KineticChainState {
                 // Straight forward
                 match link_index {
                     0 => Vec3::new(cos_d * 0.3, sin_d * 0.3, 0.3), // Push forward + up
-                    1 | 2 | 3 => Vec3::new(cos_d, sin_d, 0.0), // Everything forward
-                    4 | 5 => Vec3::new(cos_d, sin_d, 0.0), // Arm extends forward
+                    1 | 2 | 3 => Vec3::new(cos_d, sin_d, 0.0),     // Everything forward
+                    4 | 5 => Vec3::new(cos_d, sin_d, 0.0),         // Arm extends forward
                     _ => Vec3::ZERO,
                 }
             }
@@ -201,9 +201,9 @@ pub fn kinetic_energy_from_body(body: &BodyModel, weapon_mass: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::body_model::{BodyModel, StanceId};
     use super::super::body_physics::step_body;
+    use super::*;
 
     fn flat_terrain(_x: f32, _y: f32) -> f32 {
         0.0
@@ -326,10 +326,7 @@ mod tests {
         }
 
         let ke = kinetic_energy_from_body(&body, 1.2);
-        assert!(
-            ke > 0.0,
-            "should have positive KE during swing"
-        );
+        assert!(ke > 0.0, "should have positive KE during swing");
     }
 
     #[test]

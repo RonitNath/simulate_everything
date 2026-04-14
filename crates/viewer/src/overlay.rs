@@ -58,7 +58,10 @@ impl OverlayUi {
                 selected.screen_y,
                 owner_color(selected.owner),
             ));
-            if !entries.iter().any(|entry| entry.entity_id == selected.entity_id) {
+            if !entries
+                .iter()
+                .any(|entry| entry.entity_id == selected.entity_id)
+            {
                 entries.insert(0, selected);
             }
         }
@@ -144,17 +147,31 @@ fn entity_title(entity: &SpectatorEntityInfo) -> String {
             format!("P{owner} {role}")
         }
         EntityKind::Structure => {
-            let structure = entity.structure_type.map(structure_label).unwrap_or("Structure");
+            let structure = entity
+                .structure_type
+                .map(structure_label)
+                .unwrap_or("Structure");
             format!("P{owner} {structure}")
         }
     }
 }
 
 fn entity_subtitle(entity: &SpectatorEntityInfo) -> Option<String> {
-    if let Some(task) = entity.current_task.as_ref().filter(|task| !task.is_empty()) {
-        return Some(task.clone());
+    if let Some(action) = entity
+        .current_action
+        .as_ref()
+        .filter(|action| !action.is_empty())
+    {
+        return Some(action.clone());
     }
-    if let Some(weapon) = entity.weapon_type.as_ref().filter(|weapon| !weapon.is_empty()) {
+    if let Some(goal) = entity.current_goal.as_ref().filter(|goal| !goal.is_empty()) {
+        return Some(goal.clone());
+    }
+    if let Some(weapon) = entity
+        .weapon_type
+        .as_ref()
+        .filter(|weapon| !weapon.is_empty())
+    {
         return Some(weapon.clone());
     }
     None

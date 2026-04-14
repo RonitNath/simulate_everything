@@ -25,6 +25,8 @@ pub struct StrategicView {
     pub threats: Vec<ThreatCluster>,
     /// Per-stack readiness assessment.
     pub stack_readiness: Vec<StackHealth>,
+    /// Terrain infrastructure, opportunity, and damage state.
+    pub terrain: TerrainAssessment,
 }
 
 /// A cluster of hexes with a territorial status.
@@ -96,6 +98,14 @@ pub struct StackHealth {
     pub stack_id: super::state::StackId,
     pub readiness: Readiness,
     pub member_count: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct TerrainAssessment {
+    pub road_coverage: f32,
+    pub fortification_density: f32,
+    pub farming_improvement_density: f32,
+    pub damage_pressure: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +183,45 @@ pub fn build_strategic_view(state: &GameState, player: u8) -> StrategicView {
         },
         threats: detect_threats(state, player),
         stack_readiness,
+        terrain: assess_terrain(state, player),
+    }
+}
+
+fn assess_terrain(state: &GameState, player: u8) -> TerrainAssessment {
+    let mut roads = 0.0;
+    let mut fortifications = 0.0;
+    let mut farming = 0.0;
+    let mut damage = 0.0;
+    let mut owned_sites: f32 = 0.0;
+
+    for entity in state.entities.values() {
+        if entity.owner == Some(player) && entity.site.is_some() {
+            owned_sites += 1.0;
+        }
+    }
+
+    for row in 0..state.map_height as i32 {
+        for col in 0..state.map_width as i32 {
+            let hex = crate::v2::hex::offset_to_axial(row, col);
+            for op in state.terrain_ops.ops_for_hex(hex) {
+                match op {
+                    super::terrain_ops::TerrainOp::Road { .. } => roads += 1.0,
+                    super::terrain_ops::TerrainOp::Ditch { .. }
+                    | super::terrain_ops::TerrainOp::Wall { .. } => fortifications += 1.0,
+                    super::terrain_ops::TerrainOp::Furrow { .. } => farming += 1.0,
+                    super::terrain_ops::TerrainOp::Crater { .. } => damage += 1.0,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let denom = owned_sites.max(1.0);
+    TerrainAssessment {
+        road_coverage: roads / denom,
+        fortification_density: fortifications / denom,
+        farming_improvement_density: farming / denom,
+        damage_pressure: damage / denom,
     }
 }
 
@@ -404,7 +453,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -507,7 +555,6 @@ mod tests {
                 .person(Person {
                     role: Role::Farmer,
                     combat_skill: 0.1,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0)),
         );

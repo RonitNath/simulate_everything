@@ -67,10 +67,8 @@ impl Camera {
     /// Orbit: change azimuth and elevation.
     pub fn orbit(&mut self, delta_azimuth: f32, delta_elevation: f32) {
         self.azimuth += delta_azimuth;
-        self.elevation = (self.elevation + delta_elevation).clamp(
-            10.0_f32.to_radians(),
-            85.0_f32.to_radians(),
-        );
+        self.elevation =
+            (self.elevation + delta_elevation).clamp(10.0_f32.to_radians(), 85.0_f32.to_radians());
     }
 
     /// Zoom: change distance.

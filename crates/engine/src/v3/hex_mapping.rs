@@ -118,7 +118,9 @@ pub fn on_entity_move(
             .unwrap_or(old_hex);
         let resolved = super::index::update_hex_membership(current_hex, new_pos.xy());
         if resolved != current_hex {
-            state.spatial_index.move_entity(current_hex, resolved, entity);
+            state
+                .spatial_index
+                .move_entity(current_hex, resolved, entity);
             if let Some(e) = state.entities.get_mut(entity) {
                 e.hex = Some(resolved);
             }
@@ -153,11 +155,11 @@ pub fn on_entity_move(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::spatial::{GeoMaterial, Heightfield};
     use super::super::state::{Combatant, EntityBuilder, Person, Role};
+    use super::*;
 
     fn test_state() -> GameState {
         let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
@@ -173,7 +175,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

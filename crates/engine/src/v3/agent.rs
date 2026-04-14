@@ -67,29 +67,6 @@ pub enum EquipmentType {
     Greaves,
 }
 
-/// Task assigned to an individual entity by the operations layer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum EntityTask {
-    Farm {
-        field: EntityKey,
-    },
-    Build {
-        site: EntityKey,
-    },
-    Craft {
-        workshop: EntityKey,
-        item: EquipmentType,
-    },
-    Patrol {
-        waypoints: Vec<Vec3>,
-    },
-    Garrison {
-        position: Vec3,
-    },
-    Train,
-    Idle,
-}
-
 // ---------------------------------------------------------------------------
 // Layer commands
 // ---------------------------------------------------------------------------
@@ -115,10 +92,6 @@ pub enum StrategicDirective {
 /// Concrete entity-level orders from the operations layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OperationalCommand {
-    AssignTask {
-        entity: EntityKey,
-        task: EntityTask,
-    },
     FormStack {
         entities: Vec<EntityKey>,
         archetype: StackArchetype,
@@ -183,53 +156,43 @@ pub enum TacticalCommand {
 /// pattern detection and debugging. All variants implement Debug/Display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentTrace {
-    Strategy {
-        posture: Posture,
-        trigger: String,
-        alternatives_considered: Vec<(Posture, f32)>,
+    Policy {
+        player: u8,
+        summary: String,
     },
-    Operations {
-        task_type: String,
-        target: String,
-        reason: String,
-        resource_cost: Option<f32>,
+    MethodInjection {
+        player: u8,
+        summary: String,
     },
-    Tactical {
+    Coordination {
         stack: u32,
-        action: String,
-        target_stack: Option<u32>,
-        damage_estimate: Option<f32>,
-        alternatives: Vec<(u32, String, f32)>,
+        hotspot: String,
+        summary: String,
+    },
+    Behavior {
+        entity: Option<u32>,
+        summary: String,
     },
 }
 
 impl std::fmt::Display for AgentTrace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AgentTrace::Strategy {
-                posture, trigger, ..
-            } => {
-                write!(f, "Strategy: {:?} ({})", posture, trigger)
+            AgentTrace::Policy { player, summary } => {
+                write!(f, "Policy P{}: {}", player, summary)
             }
-            AgentTrace::Operations {
-                task_type,
-                target,
-                reason,
-                ..
-            } => {
-                write!(f, "Operations: {} → {} ({})", task_type, target, reason)
+            AgentTrace::MethodInjection { player, summary } => {
+                write!(f, "Operations P{}: {}", player, summary)
             }
-            AgentTrace::Tactical {
+            AgentTrace::Coordination {
                 stack,
-                action,
-                target_stack,
-                ..
+                hotspot,
+                summary,
             } => {
-                write!(
-                    f,
-                    "Tactical: stack {} → {} target={:?}",
-                    stack, action, target_stack
-                )
+                write!(f, "Coordination stack {} @ {}: {}", stack, hotspot, summary)
+            }
+            AgentTrace::Behavior { entity, summary } => {
+                write!(f, "Behavior {:?}: {}", entity, summary)
             }
         }
     }
@@ -245,8 +208,9 @@ pub trait StrategyLayer: Send {
     fn plan(&mut self, view: &StrategicView) -> Vec<StrategicDirective>;
 }
 
-/// Runs every ~5 game-seconds. Translates strategic directives into entity-level
-/// task assignments. Shared implementation used by all agents.
+/// Runs every ~5 game-seconds. Translates strategic directives into stack,
+/// equipment, and behavior-availability changes. Shared implementation used by
+/// all agents.
 pub trait OperationsLayer: Send {
     fn execute(
         &mut self,
@@ -271,9 +235,8 @@ pub trait TacticalLayer: Send {
 // LayeredAgent
 // ---------------------------------------------------------------------------
 
-/// Engagement detection radius in meters. Any stack with an entity within this
-/// distance of an enemy entity runs the tactical layer.
-const ENGAGEMENT_RADIUS: f32 = 300.0;
+/// Hotspot threshold above which tactical coordination should run.
+const RESOLUTION_DEMAND_THRESHOLD: f32 = 0.24;
 
 /// An agent composed of three layers operating at different cadences.
 pub struct LayeredAgent {
@@ -324,17 +287,14 @@ impl LayeredAgent {
             output.strategy_ran = true;
 
             // Emit strategy trace.
-            if let Some(d) = self.active_directives.first() {
-                let posture = match d {
-                    StrategicDirective::SetPosture(p) => *p,
-                    _ => Posture::Expand,
-                };
-                output.traces.push(AgentTrace::Strategy {
-                    posture,
-                    trigger: format!("tick {} cadence evaluation", tick),
-                    alternatives_considered: Vec::new(),
-                });
-            }
+            output.traces.push(AgentTrace::Policy {
+                player: self.player,
+                summary: format!(
+                    "tick {} policy refresh: {} directives",
+                    tick,
+                    self.active_directives.len()
+                ),
+            });
         }
 
         // Operations layer — runs at operations cadence.
@@ -345,37 +305,37 @@ impl LayeredAgent {
 
             // Emit operations traces.
             for cmd in &commands {
-                let (task_type, target, reason) = match cmd {
-                    OperationalCommand::AssignTask { entity, task } => (
-                        format!("{:?}", std::mem::discriminant(task)),
-                        format!("entity {:?}", entity),
-                        "task assignment".to_string(),
-                    ),
-                    OperationalCommand::FormStack {
-                        entities,
-                        archetype,
-                    } => (
-                        "FormStack".to_string(),
-                        format!("{} entities as {:?}", entities.len(), archetype),
-                        "stack formation".to_string(),
-                    ),
-                    OperationalCommand::RouteStack { stack, waypoints } => (
-                        "RouteStack".to_string(),
-                        format!("stack {:?}, {} waypoints", stack, waypoints.len()),
-                        "stack routing".to_string(),
-                    ),
-                    OperationalCommand::DisbandStack { stack } => (
-                        "DisbandStack".to_string(),
-                        format!("stack {:?}", stack),
-                        "stack disbanding".to_string(),
-                    ),
-                    _ => ("Other".to_string(), format!("{:?}", cmd), String::new()),
-                };
-                output.traces.push(AgentTrace::Operations {
-                    task_type,
-                    target,
-                    reason,
-                    resource_cost: None,
+                output.traces.push(AgentTrace::MethodInjection {
+                    player: self.player,
+                    summary: match cmd {
+                        OperationalCommand::FormStack {
+                            entities,
+                            archetype,
+                        } => format!("form stack {:?} with {} members", archetype, entities.len()),
+                        OperationalCommand::RouteStack { stack, waypoints } => {
+                            format!(
+                                "route stack {:?} across {} waypoints",
+                                stack,
+                                waypoints.len()
+                            )
+                        }
+                        OperationalCommand::DisbandStack { stack } => {
+                            format!("disband stack {:?}", stack)
+                        }
+                        OperationalCommand::ProduceEquipment {
+                            workshop,
+                            item_type,
+                        } => format!("queue {:?} production at {:?}", item_type, workshop),
+                        OperationalCommand::EquipEntity { entity, equipment } => {
+                            format!("equip {:?} with {:?}", entity, equipment)
+                        }
+                        OperationalCommand::EstablishSupplyRoute { from, to } => {
+                            format!("inject supply route {:?}->{:?}", from, to)
+                        }
+                        OperationalCommand::FoundSettlement { entity, target } => {
+                            format!("enable settlement founding by {:?} at {:?}", entity, target)
+                        }
+                    },
                 });
             }
 
@@ -388,25 +348,24 @@ impl LayeredAgent {
             if stack.owner != self.player {
                 continue;
             }
-            if stack_near_enemy(state, stack, ENGAGEMENT_RADIUS) {
+            let hotspot = stack_hotspot(state, stack);
+            if hotspot >= RESOLUTION_DEMAND_THRESHOLD {
                 let commands = self.tactical.decide(state, stack, self.player);
 
                 // Emit tactical traces.
                 for cmd in &commands {
-                    let (action, target_stack) = match cmd {
-                        TacticalCommand::Attack { .. } => ("Engage".to_string(), None),
-                        TacticalCommand::Retreat { .. } => ("Retreat".to_string(), None),
-                        TacticalCommand::Hold { .. } => ("Hold".to_string(), None),
-                        TacticalCommand::Block { .. } => ("Block".to_string(), None),
-                        TacticalCommand::SetFacing { .. } => ("SetFacing".to_string(), None),
-                        TacticalCommand::SetFormation { .. } => ("Reposition".to_string(), None),
+                    let summary = match cmd {
+                        TacticalCommand::Attack { .. } => "engage target".to_string(),
+                        TacticalCommand::Retreat { .. } => "retreat from hotspot".to_string(),
+                        TacticalCommand::Hold { .. } => "hold line".to_string(),
+                        TacticalCommand::Block { .. } => "block threat".to_string(),
+                        TacticalCommand::SetFacing { .. } => "adjust facing".to_string(),
+                        TacticalCommand::SetFormation { .. } => "set formation".to_string(),
                     };
-                    output.traces.push(AgentTrace::Tactical {
+                    output.traces.push(AgentTrace::Coordination {
                         stack: stack.id.0,
-                        action,
-                        target_stack,
-                        damage_estimate: None,
-                        alternatives: Vec::new(),
+                        hotspot: format!("{:.2}", hotspot),
+                        summary,
                     });
                 }
 
@@ -436,59 +395,18 @@ pub struct AgentOutput {
 // Engagement detection
 // ---------------------------------------------------------------------------
 
-/// Returns true if any member of the stack is within `radius` meters of an
-/// enemy entity. Uses spatial index for hex culling, then distance check.
-fn stack_near_enemy(state: &GameState, stack: &super::state::Stack, radius: f32) -> bool {
-    use super::hex::world_to_hex;
-    use super::index::ring_hexes;
-
-    // How many hex rings to check for the radius.
-    // hex_radius ≈ 86.6m, so 300m ≈ 3.5 hex radii → check 4 rings.
-    let hex_rings = (radius / 86.6).ceil() as i32;
-
-    for &member_key in &stack.members {
-        let member = match state.entities.get(member_key) {
-            Some(e) => e,
-            None => continue,
-        };
-        let member_pos = match member.pos {
-            Some(p) => p,
-            None => continue,
-        };
-        let member_hex = world_to_hex(member_pos);
-
-        // Check entities in nearby hexes.
-        let nearby = ring_hexes(member_hex, hex_rings);
-        for hex in nearby {
-            for &entity_key in state.spatial_index.entities_at(hex) {
-                let entity = match state.entities.get(entity_key) {
-                    Some(e) => e,
-                    None => continue,
-                };
-                // Must be an enemy.
-                let entity_owner = match entity.owner {
-                    Some(o) => o,
-                    None => continue,
-                };
-                if entity_owner == stack.owner {
-                    continue;
-                }
-                // Must be a person (not a resource or structure).
-                if entity.person.is_none() {
-                    continue;
-                }
-                // Distance check.
-                if let Some(pos) = entity.pos {
-                    let dx = pos.x - member_pos.x;
-                    let dy = pos.y - member_pos.y;
-                    if dx * dx + dy * dy <= radius * radius {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
+fn stack_hotspot(state: &GameState, stack: &super::state::Stack) -> f32 {
+    stack
+        .members
+        .iter()
+        .filter_map(|member_key| {
+            state
+                .entities
+                .get(*member_key)
+                .and_then(|entity| entity.hex)
+        })
+        .map(|hex| super::resolution::resolution_demand_at(state, hex))
+        .fold(0.0, f32::max)
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +490,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new()),
@@ -647,7 +564,9 @@ mod tests {
 
         // Spawn friendly and enemy entities close together (<300m).
         let friendly = spawn_person(&mut state, Vec3::new(100.0, 100.0, 0.0), 0);
-        let _enemy = spawn_person(&mut state, Vec3::new(200.0, 100.0, 0.0), 1);
+        let _enemy = spawn_person(&mut state, Vec3::new(130.0, 100.0, 0.0), 1);
+        super::super::sim::tick(&mut state, 0.0);
+        state.tick = 1;
 
         // Create a stack for the friendly entity.
         let stack_id = state.alloc_stack_id();
@@ -677,6 +596,8 @@ mod tests {
         // Spawn entities far apart (>300m).
         let friendly = spawn_person(&mut state, Vec3::new(100.0, 100.0, 0.0), 0);
         let _enemy = spawn_person(&mut state, Vec3::new(600.0, 600.0, 0.0), 1);
+        super::super::sim::tick(&mut state, 0.0);
+        state.tick = 1;
 
         let stack_id = state.alloc_stack_id();
         state.stacks.push(Stack {

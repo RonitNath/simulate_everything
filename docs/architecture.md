@@ -531,13 +531,13 @@ SpreadAgent is a structural placeholder. The target architecture is **Centurion*
 
 ### V3 Agent Architecture
 
-V3 uses a three-layer dispatch: Strategy (every ~50 game-seconds), Operations (every ~5), Tactical (every tick for engaged stacks). Personality differentiates only at Strategy (Spread/Striker/Turtle). Operations and Tactical are shared.
+V3 uses a three-layer dispatch: Strategy (every ~50 game-seconds), Operations (every ~5), Tactical (every tick for hotspot stacks). Personality differentiates only at Strategy (Spread/Striker/Turtle). Operations and Tactical are shared.
 
-**Current**: Strategy reads `StrategicView` (fog-of-war filtered), emits `StrategicDirective`. Operations translates to `OperationalCommand` (task assignments, stack formation, equipment production). Tactical emits per-entity combat commands. Commands validated and applied via shared engine path.
+**Current**: Strategy reads `StrategicView` and emits `StrategicDirective`. Those directives now bias faction `NeedWeights` instead of directly assigning entity work. Entities carry autonomous behavior state (`needs`, `current_goal`, `decision_reason`, `action_queue`, `decision_history`, `social`) and pick work/combat/rest/social actions through the Stream E utility + HTN runtime in the sim tick. Operations coordinates stacks, equipment, and method availability; it no longer assigns `EntityTask`s.
 
-**In progress (Stream E)**: Replacing flat task assignments with autonomous entity behavior. Entities have needs (hunger, safety, duty, rest, social, shelter) that drive utility scoring → HTN goal decomposition → action queue execution. Strategy adjusts need weights instead of commanding directly. Operations injects HTN methods instead of assigning tasks. See `docs/plans/v3-streamE-agent-behavior.md`.
+**Current (Stream E + F)**: V3 entity/world state uses the compositional model (`physical`, `tool_props`, `matter`, `site`) and terrain-aware behavior. Roads and furrows influence planning, perception exposes terrain infrastructure/damage summaries, and mapgen seeds settlements with early roads, furrows, stockpiles, and social familiarity. The spectator protocol/frontend expose behavior fields (`needs`, `current_goal`, `current_action`, `action_queue_preview`, `decision_reason`) rather than `current_task`.
 
-**Current (Stream F core)**: V3 entity/world state now uses a compositional model: `physical`, `tool_props`, `matter`, and `site` replace V3 `Structure`/`Resource`. Economy and operations still use the pre-Stream-E task runtime, but all V3 world lookups route through compositional tags and affordance-style predicates. The V3 spectator protocol/frontend expose `physical`, `tool`, `matter`, and `site` directly. See `docs/plans/v3-streamF-compositional-world.md`.
+**Behavior Validation**: `simulate_everything_cli v3behavior ...` runs headless behavior scenarios. It captures per-tick `BehaviorSnapshot` JSON, invariant reports, entity timelines, terrain-op logs, and PNG frames / filmstrips for forensic debugging.
 
 **Future (post-V3)**: NEAT-evolved neural networks at five insertion points: utility scoring, HTN method selection, body control, tactical coordination, social reasoning. See `docs/plans/future-neural-evolution.md`.
 

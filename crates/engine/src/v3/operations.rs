@@ -1,11 +1,11 @@
-/// V3 shared operations layer: priority-weighted task allocator.
+/// V3 shared operations layer: stack/equipment coordination and behavior availability.
 ///
 /// All agent personalities share this implementation. Strategy speaks in
 /// archetypes and priorities; operations translates to concrete entity tasks,
 /// equipment loadouts, and stack management using the damage estimate table.
 use super::agent::{
-    EconomicFocus, EntityTask, EquipmentType, OperationalCommand, OperationsLayer, Posture,
-    StackArchetype, StrategicDirective,
+    EconomicFocus, EquipmentType, OperationalCommand, OperationsLayer, Posture, StackArchetype,
+    StrategicDirective,
 };
 use super::armor::{ArmorConstruction, DamageType, MaterialType};
 use super::damage_table::{DamageEstimateTable, MatchupKey};
@@ -92,87 +92,6 @@ impl SharedOperationsLayer {
             }
         }
         self.priority_regions.retain(|(_, p)| *p > 0.05);
-    }
-
-    /// Assign idle entities to tasks based on economic focus weights.
-    fn assign_tasks(&self, state: &GameState, player: u8) -> Vec<OperationalCommand> {
-        let mut commands = Vec::new();
-        let (farm_w, work_w, _soldier_w) = role_weights(self.economic_focus);
-
-        // Count current role distribution.
-        let mut farmers = 0u32;
-        let mut workers = 0u32;
-        let mut soldiers = 0u32;
-        let mut idle_entities: Vec<EntityKey> = Vec::new();
-
-        for (key, entity) in &state.entities {
-            if entity.owner != Some(player) {
-                continue;
-            }
-            let person = match &entity.person {
-                Some(p) => p,
-                None => continue,
-            };
-            match person.role {
-                Role::Farmer => farmers += 1,
-                Role::Worker | Role::Builder => workers += 1,
-                Role::Soldier => soldiers += 1,
-                Role::Idle => idle_entities.push(key),
-            }
-        }
-
-        let total = (farmers + workers + soldiers + idle_entities.len() as u32) as f32;
-        if total < 1.0 {
-            return commands;
-        }
-
-        // Assign idle entities toward the target distribution.
-        for entity_key in idle_entities {
-            let farm_ratio = farmers as f32 / total;
-            let work_ratio = workers as f32 / total;
-
-            // Find nearest workshop or farm for the task.
-            let task = if farm_ratio < farm_w {
-                // Need more farmers. Find a farm structure.
-                find_nearest_site(state, entity_key, player, PropertyTag::Farm)
-                    .map(|field| EntityTask::Farm { field })
-                    .unwrap_or(EntityTask::Idle)
-            } else if work_ratio < work_w {
-                // Need more workers. Find a workshop.
-                find_nearest_site(state, entity_key, player, PropertyTag::Workshop)
-                    .map(|workshop| EntityTask::Build { site: workshop })
-                    .unwrap_or(EntityTask::Idle)
-            } else {
-                // Default to soldiering — train.
-                EntityTask::Train
-            };
-
-            if !matches!(task, EntityTask::Idle) {
-                commands.push(OperationalCommand::AssignTask {
-                    entity: entity_key,
-                    task,
-                });
-            }
-
-            // Update counts for next iteration.
-            match &commands.last() {
-                Some(OperationalCommand::AssignTask {
-                    task: EntityTask::Farm { .. },
-                    ..
-                }) => farmers += 1,
-                Some(OperationalCommand::AssignTask {
-                    task: EntityTask::Build { .. },
-                    ..
-                }) => workers += 1,
-                Some(OperationalCommand::AssignTask {
-                    task: EntityTask::Train,
-                    ..
-                }) => soldiers += 1,
-                _ => {}
-            }
-        }
-
-        commands
     }
 
     /// Form stacks from available soldiers based on strategic requests.
@@ -400,10 +319,17 @@ impl OperationsLayer for SharedOperationsLayer {
     ) -> Vec<OperationalCommand> {
         self.update_from_directives(directives);
         let mut commands = Vec::new();
-        commands.extend(self.assign_tasks(state, player));
         commands.extend(self.form_stacks(state, player));
         commands.extend(self.route_stacks(state, player));
         commands.extend(self.produce_equipment(state, player));
+        if self.economic_focus == EconomicFocus::Infrastructure
+            && let Some((center, _)) = self.priority_regions.first().copied()
+        {
+            commands.push(OperationalCommand::EstablishSupplyRoute {
+                from: center,
+                to: self.expansion_target.unwrap_or(center),
+            });
+        }
         commands
     }
 }
@@ -513,7 +439,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new()),
@@ -529,7 +454,6 @@ mod tests {
                 .person(Person {
                     role: Role::Idle,
                     combat_skill: 0.0,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0)),
         )
@@ -570,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn assign_tasks_to_idle_entities() {
+    fn infrastructure_focus_injects_supply_route() {
         let mut state = test_state();
         let _idle1 = spawn_idle(&mut state, Vec3::new(50.0, 50.0, 0.0), 0);
         let _idle2 = spawn_idle(&mut state, Vec3::new(60.0, 50.0, 0.0), 0);
@@ -579,16 +503,21 @@ mod tests {
         let mut ops = SharedOperationsLayer::new();
         let commands = ops.execute(
             &state,
-            &[StrategicDirective::SetEconomicFocus(EconomicFocus::Growth)],
+            &[
+                StrategicDirective::SetEconomicFocus(EconomicFocus::Infrastructure),
+                StrategicDirective::PrioritizeRegion {
+                    center: Axial::new(5, 5),
+                    priority: 0.8,
+                },
+            ],
             0,
         );
 
-        let task_count = commands
+        let supply_count = commands
             .iter()
-            .filter(|c| matches!(c, OperationalCommand::AssignTask { .. }))
+            .filter(|c| matches!(c, OperationalCommand::EstablishSupplyRoute { .. }))
             .count();
-        // With Growth focus and a farm available, idle entities should get Farm tasks.
-        assert!(task_count > 0, "should assign tasks to idle entities");
+        assert!(supply_count > 0, "should inject supply route opportunities");
     }
 
     #[test]

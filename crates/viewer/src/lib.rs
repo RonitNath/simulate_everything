@@ -17,8 +17,8 @@ use input::InputState;
 use js_sys::{ArrayBuffer, Object, Reflect, Uint8Array};
 use overlay::OverlayUi;
 use simulate_everything_protocol::{
-    BodyPointWire, BodyRenderInfo, BodyZone, EntityKind, EntityUpdate, SpectatorEntityInfo,
-    V3Init, V3ServerToSpectator, V3Snapshot, V3SnapshotDelta, WoundSeverity, decode,
+    BodyPointWire, BodyRenderInfo, BodyZone, EntityKind, EntityUpdate, SpectatorEntityInfo, V3Init,
+    V3ServerToSpectator, V3Snapshot, V3SnapshotDelta, WoundSeverity, decode,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -480,7 +480,13 @@ fn apply_init(state: &mut ViewerState, init: V3Init) {
     let rh = raster.height.max(1);
     log::info!(
         "apply_init: grid {}x{}, raster {}x{} origin=({},{}) cell={}",
-        width, height, rw, rh, raster.origin_x, raster.origin_y, raster.cell_size,
+        width,
+        height,
+        rw,
+        rh,
+        raster.origin_x,
+        raster.origin_y,
+        raster.cell_size,
     );
     rebuild_terrain_and_overlay(
         state,
@@ -850,8 +856,20 @@ fn apply_entity_update(entities: &mut HashMap<u32, SpectatorEntityInfo>, update:
     if let Some(stack_id) = update.stack_id {
         entity.stack_id = stack_id;
     }
-    if let Some(current_task) = update.current_task {
-        entity.current_task = current_task;
+    if let Some(needs) = update.needs {
+        entity.needs = needs;
+    }
+    if let Some(current_goal) = update.current_goal {
+        entity.current_goal = current_goal;
+    }
+    if let Some(current_action) = update.current_action {
+        entity.current_action = current_action;
+    }
+    if let Some(action_queue_preview) = update.action_queue_preview {
+        entity.action_queue_preview = action_queue_preview;
+    }
+    if let Some(decision_reason) = update.decision_reason {
+        entity.decision_reason = decision_reason;
     }
     if let Some(attack_phase) = update.attack_phase {
         entity.attack_phase = attack_phase;
