@@ -12,6 +12,7 @@ pub mod movement;
 pub mod pathfinding;
 pub mod projectile;
 pub mod query;
+pub mod sim;
 pub mod spatial;
 pub mod state;
 pub mod steering;
