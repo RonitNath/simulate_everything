@@ -7,8 +7,8 @@ use super::agent::{
     EconomicFocus, EntityTask, EquipmentType, OperationalCommand, OperationsLayer, Posture,
     StackArchetype, StrategicDirective,
 };
-use super::damage_table::{DamageEstimateTable, MatchupKey};
 use super::armor::{ArmorConstruction, DamageType, MaterialType};
+use super::damage_table::{DamageEstimateTable, MatchupKey};
 use super::formation::FormationType;
 use super::state::{GameState, Role, Stack, StackId, StructureType};
 use crate::v2::hex::Axial;
@@ -69,7 +69,11 @@ impl SharedOperationsLayer {
                 StrategicDirective::SetPosture(p) => self.posture = *p,
                 StrategicDirective::SetEconomicFocus(f) => self.economic_focus = *f,
                 StrategicDirective::PrioritizeRegion { center, priority } => {
-                    if let Some(entry) = self.priority_regions.iter_mut().find(|(c, _)| *c == *center) {
+                    if let Some(entry) = self
+                        .priority_regions
+                        .iter_mut()
+                        .find(|(c, _)| *c == *center)
+                    {
                         entry.1 = *priority;
                     } else {
                         self.priority_regions.push((*center, *priority));
@@ -98,7 +102,9 @@ impl SharedOperationsLayer {
         let mut idle_entities: Vec<EntityKey> = Vec::new();
 
         for (key, entity) in &state.entities {
-            if entity.owner != Some(player) { continue; }
+            if entity.owner != Some(player) {
+                continue;
+            }
             let person = match &entity.person {
                 Some(p) => p,
                 None => continue,
@@ -112,7 +118,9 @@ impl SharedOperationsLayer {
         }
 
         let total = (farmers + workers + soldiers + idle_entities.len() as u32) as f32;
-        if total < 1.0 { return commands; }
+        if total < 1.0 {
+            return commands;
+        }
 
         // Assign idle entities toward the target distribution.
         for entity_key in idle_entities {
@@ -136,14 +144,26 @@ impl SharedOperationsLayer {
             };
 
             if !matches!(task, EntityTask::Idle) {
-                commands.push(OperationalCommand::AssignTask { entity: entity_key, task });
+                commands.push(OperationalCommand::AssignTask {
+                    entity: entity_key,
+                    task,
+                });
             }
 
             // Update counts for next iteration.
             match &commands.last() {
-                Some(OperationalCommand::AssignTask { task: EntityTask::Farm { .. }, .. }) => farmers += 1,
-                Some(OperationalCommand::AssignTask { task: EntityTask::Build { .. }, .. }) => workers += 1,
-                Some(OperationalCommand::AssignTask { task: EntityTask::Train, .. }) => soldiers += 1,
+                Some(OperationalCommand::AssignTask {
+                    task: EntityTask::Farm { .. },
+                    ..
+                }) => farmers += 1,
+                Some(OperationalCommand::AssignTask {
+                    task: EntityTask::Build { .. },
+                    ..
+                }) => workers += 1,
+                Some(OperationalCommand::AssignTask {
+                    task: EntityTask::Train,
+                    ..
+                }) => soldiers += 1,
                 _ => {}
             }
         }
@@ -156,22 +176,32 @@ impl SharedOperationsLayer {
         let mut commands = Vec::new();
 
         // Collect available soldiers (not already in a stack).
-        let stacked: std::collections::HashSet<EntityKey> = state.stacks.iter()
+        let stacked: std::collections::HashSet<EntityKey> = state
+            .stacks
+            .iter()
             .filter(|s| s.owner == player)
             .flat_map(|s| s.members.iter().copied())
             .collect();
 
         let mut available: Vec<EntityKey> = Vec::new();
         for (key, entity) in &state.entities {
-            if entity.owner != Some(player) { continue; }
-            if entity.person.as_ref().map(|p| p.role) != Some(Role::Soldier) { continue; }
-            if stacked.contains(&key) { continue; }
+            if entity.owner != Some(player) {
+                continue;
+            }
+            if entity.person.as_ref().map(|p| p.role) != Some(Role::Soldier) {
+                continue;
+            }
+            if stacked.contains(&key) {
+                continue;
+            }
             available.push(key);
         }
 
         // Form stacks for each request.
         for &(archetype, region) in &self.stack_requests {
-            if available.len() < MIN_STACK_SIZE { break; }
+            if available.len() < MIN_STACK_SIZE {
+                break;
+            }
 
             let size = match archetype {
                 StackArchetype::Settler => 2,
@@ -196,14 +226,16 @@ impl SharedOperationsLayer {
         let mut commands = Vec::new();
 
         for stack in &state.stacks {
-            if stack.owner != player { continue; }
+            if stack.owner != player {
+                continue;
+            }
 
             let destination = match self.posture {
-                Posture::Attack => {
-                    self.priority_regions.iter()
-                        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                        .map(|(c, _)| *c)
-                }
+                Posture::Attack => self
+                    .priority_regions
+                    .iter()
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(c, _)| *c),
                 Posture::Expand => self.expansion_target,
                 Posture::Defend | Posture::Consolidate => {
                     // Route toward nearest settlement.
@@ -234,7 +266,12 @@ impl SharedOperationsLayer {
         match archetype {
             StackArchetype::HeavyInfantry => {
                 let weapon = self.best_weapon_vs(enemy_armor);
-                vec![weapon, EquipmentType::Shield, EquipmentType::CuirassPlate, EquipmentType::HelmetPlate]
+                vec![
+                    weapon,
+                    EquipmentType::Shield,
+                    EquipmentType::CuirassPlate,
+                    EquipmentType::HelmetPlate,
+                ]
             }
             StackArchetype::LightInfantry => {
                 let weapon = self.best_weapon_vs(enemy_armor);
@@ -244,10 +281,18 @@ impl SharedOperationsLayer {
                 vec![EquipmentType::Bow, EquipmentType::CuirassPadded]
             }
             StackArchetype::Cavalry => {
-                vec![EquipmentType::Spear, EquipmentType::CuirassChain, EquipmentType::HelmetChain]
+                vec![
+                    EquipmentType::Spear,
+                    EquipmentType::CuirassChain,
+                    EquipmentType::HelmetChain,
+                ]
             }
             StackArchetype::Garrison => {
-                vec![EquipmentType::Spear, EquipmentType::Shield, EquipmentType::CuirassPlate]
+                vec![
+                    EquipmentType::Spear,
+                    EquipmentType::Shield,
+                    EquipmentType::CuirassPlate,
+                ]
             }
             StackArchetype::Settler => {
                 vec![] // settlers don't need military equipment
@@ -256,7 +301,10 @@ impl SharedOperationsLayer {
     }
 
     /// Select the best weapon type against observed enemy armor using the damage table.
-    fn best_weapon_vs(&self, enemy_armor: Option<(ArmorConstruction, MaterialType)>) -> EquipmentType {
+    fn best_weapon_vs(
+        &self,
+        enemy_armor: Option<(ArmorConstruction, MaterialType)>,
+    ) -> EquipmentType {
         let (ac, am) = enemy_armor.unwrap_or((ArmorConstruction::Padded, MaterialType::Leather));
 
         // Check each damage type's effectiveness against this armor.
@@ -293,22 +341,29 @@ impl SharedOperationsLayer {
         let mut commands = Vec::new();
 
         // Find workshops owned by this player.
-        let workshops: Vec<EntityKey> = state.entities.iter()
+        let workshops: Vec<EntityKey> = state
+            .entities
+            .iter()
             .filter(|(_, e)| {
                 e.owner == Some(player)
-                    && e.structure.as_ref().map(|s| s.structure_type) == Some(StructureType::Workshop)
+                    && e.structure.as_ref().map(|s| s.structure_type)
+                        == Some(StructureType::Workshop)
             })
             .map(|(k, _)| k)
             .collect();
 
-        if workshops.is_empty() { return commands; }
+        if workshops.is_empty() {
+            return commands;
+        }
 
         // For each pending stack request, determine needed equipment.
         let mut workshop_idx = 0;
         for &(archetype, _region) in &self.stack_requests {
             let loadout = self.archetype_loadout(archetype, None);
             for item_type in loadout {
-                if workshop_idx >= workshops.len() { break; }
+                if workshop_idx >= workshops.len() {
+                    break;
+                }
                 commands.push(OperationalCommand::ProduceEquipment {
                     workshop: workshops[workshop_idx % workshops.len()],
                     item_type,
@@ -321,8 +376,12 @@ impl SharedOperationsLayer {
     }
 
     /// Accessors for testing.
-    pub fn posture(&self) -> Posture { self.posture }
-    pub fn economic_focus(&self) -> EconomicFocus { self.economic_focus }
+    pub fn posture(&self) -> Posture {
+        self.posture
+    }
+    pub fn economic_focus(&self) -> EconomicFocus {
+        self.economic_focus
+    }
 }
 
 impl OperationsLayer for SharedOperationsLayer {
@@ -354,7 +413,9 @@ fn find_nearest_structure(
 ) -> Option<EntityKey> {
     let entity_pos = state.entities.get(entity_key)?.pos?;
 
-    state.entities.iter()
+    state
+        .entities
+        .iter()
         .filter(|(_, e)| {
             e.owner == Some(player)
                 && e.structure.as_ref().map(|s| s.structure_type) == Some(structure_type)
@@ -372,13 +433,20 @@ fn find_nearest_structure(
 fn find_nearest_settlement_hex(state: &GameState, stack: &Stack, player: u8) -> Option<Axial> {
     let leader_pos = state.entities.get(stack.leader)?.pos?;
 
-    state.entities.iter()
+    state
+        .entities
+        .iter()
         .filter(|(_, e)| {
             e.owner == Some(player)
-                && e.structure.as_ref().map(|s| matches!(
-                    s.structure_type,
-                    StructureType::Village | StructureType::City
-                )).unwrap_or(false)
+                && e.structure
+                    .as_ref()
+                    .map(|s| {
+                        matches!(
+                            s.structure_type,
+                            StructureType::Village | StructureType::City
+                        )
+                    })
+                    .unwrap_or(false)
         })
         .filter_map(|(_, e)| e.hex)
         .min_by(|a, b| {
@@ -414,11 +482,11 @@ impl OperationsLayer for NullOperationsLayer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::lifecycle::spawn_entity;
     use super::super::movement::Mobile;
     use super::super::spatial::{GeoMaterial, Heightfield, Vec3};
     use super::super::state::{Combatant, EntityBuilder, Person, Structure};
+    use super::*;
 
     fn test_state() -> GameState {
         let hf = Heightfield::new(30, 30, 0.0, GeoMaterial::Soil);
@@ -426,33 +494,50 @@ mod tests {
     }
 
     fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8) -> EntityKey {
-        spawn_entity(state, EntityBuilder::new()
-            .pos(pos)
-            .owner(owner)
-            .person(Person { role: Role::Soldier, combat_skill: 0.5 })
-            .mobile(Mobile::new(2.0, 10.0))
-            .combatant(Combatant::new()))
+        spawn_entity(
+            state,
+            EntityBuilder::new()
+                .pos(pos)
+                .owner(owner)
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                    task: None,
+                })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new()),
+        )
     }
 
     fn spawn_idle(state: &mut GameState, pos: Vec3, owner: u8) -> EntityKey {
-        spawn_entity(state, EntityBuilder::new()
-            .pos(pos)
-            .owner(owner)
-            .person(Person { role: Role::Idle, combat_skill: 0.0 })
-            .mobile(Mobile::new(2.0, 10.0)))
+        spawn_entity(
+            state,
+            EntityBuilder::new()
+                .pos(pos)
+                .owner(owner)
+                .person(Person {
+                    role: Role::Idle,
+                    combat_skill: 0.0,
+                    task: None,
+                })
+                .mobile(Mobile::new(2.0, 10.0)),
+        )
     }
 
     fn spawn_farm(state: &mut GameState, pos: Vec3, owner: u8) -> EntityKey {
-        spawn_entity(state, EntityBuilder::new()
-            .pos(pos)
-            .owner(owner)
-            .structure(Structure {
-                structure_type: StructureType::Farm,
-                build_progress: 1.0,
-                integrity: 100.0,
-                capacity: 5,
-                material: MaterialType::Wood,
-            }))
+        spawn_entity(
+            state,
+            EntityBuilder::new()
+                .pos(pos)
+                .owner(owner)
+                .structure(Structure {
+                    structure_type: StructureType::Farm,
+                    build_progress: 1.0,
+                    integrity: 100.0,
+                    capacity: 5,
+                    material: MaterialType::Wood,
+                }),
+        )
     }
 
     #[test]
@@ -474,11 +559,14 @@ mod tests {
         let _farm = spawn_farm(&mut state, Vec3::new(55.0, 50.0, 0.0), 0);
 
         let mut ops = SharedOperationsLayer::new();
-        let commands = ops.execute(&state, &[
-            StrategicDirective::SetEconomicFocus(EconomicFocus::Growth),
-        ], 0);
+        let commands = ops.execute(
+            &state,
+            &[StrategicDirective::SetEconomicFocus(EconomicFocus::Growth)],
+            0,
+        );
 
-        let task_count = commands.iter()
+        let task_count = commands
+            .iter()
             .filter(|c| matches!(c, OperationalCommand::AssignTask { .. }))
             .count();
         // With Growth focus and a farm available, idle entities should get Farm tasks.
@@ -493,25 +581,36 @@ mod tests {
         }
 
         let mut ops = SharedOperationsLayer::new();
-        let commands = ops.execute(&state, &[
-            StrategicDirective::SetPosture(Posture::Attack),
-            StrategicDirective::RequestStack {
-                archetype: StackArchetype::HeavyInfantry,
-                region: Axial::new(5, 5),
-            },
-        ], 0);
+        let commands = ops.execute(
+            &state,
+            &[
+                StrategicDirective::SetPosture(Posture::Attack),
+                StrategicDirective::RequestStack {
+                    archetype: StackArchetype::HeavyInfantry,
+                    region: Axial::new(5, 5),
+                },
+            ],
+            0,
+        );
 
-        let form_count = commands.iter()
+        let form_count = commands
+            .iter()
             .filter(|c| matches!(c, OperationalCommand::FormStack { .. }))
             .count();
-        assert_eq!(form_count, 1, "should form one stack from available soldiers");
+        assert_eq!(
+            form_count, 1,
+            "should form one stack from available soldiers"
+        );
     }
 
     #[test]
     fn archetype_loadout_heavy_infantry() {
         let ops = SharedOperationsLayer::new();
         let loadout = ops.archetype_loadout(StackArchetype::HeavyInfantry, None);
-        assert!(loadout.len() >= 3, "heavy infantry needs weapon + shield + armor");
+        assert!(
+            loadout.len() >= 3,
+            "heavy infantry needs weapon + shield + armor"
+        );
         assert!(loadout.contains(&EquipmentType::Shield));
     }
 
@@ -523,8 +622,11 @@ mod tests {
             Some((ArmorConstruction::Plate, MaterialType::Steel)),
         );
         // Against plate, crush should be preferred (mace).
-        assert!(loadout.contains(&EquipmentType::Mace),
-            "should prefer mace against plate armor: {:?}", loadout);
+        assert!(
+            loadout.contains(&EquipmentType::Mace),
+            "should prefer mace against plate armor: {:?}",
+            loadout
+        );
     }
 
     #[test]
@@ -535,8 +637,11 @@ mod tests {
             Some((ArmorConstruction::Padded, MaterialType::Leather)),
         );
         // Against padded, pierce should be preferred (spear).
-        assert!(loadout.contains(&EquipmentType::Spear),
-            "should prefer spear against padded armor: {:?}", loadout);
+        assert!(
+            loadout.contains(&EquipmentType::Spear),
+            "should prefer spear against padded armor: {:?}",
+            loadout
+        );
     }
 
     #[test]
@@ -561,15 +666,20 @@ mod tests {
         });
 
         let mut ops = SharedOperationsLayer::new();
-        let commands = ops.execute(&state, &[
-            StrategicDirective::SetPosture(Posture::Attack),
-            StrategicDirective::PrioritizeRegion {
-                center: Axial::new(10, 10),
-                priority: 0.9,
-            },
-        ], 0);
+        let commands = ops.execute(
+            &state,
+            &[
+                StrategicDirective::SetPosture(Posture::Attack),
+                StrategicDirective::PrioritizeRegion {
+                    center: Axial::new(10, 10),
+                    priority: 0.9,
+                },
+            ],
+            0,
+        );
 
-        let route_count = commands.iter()
+        let route_count = commands
+            .iter()
             .filter(|c| matches!(c, OperationalCommand::RouteStack { .. }))
             .count();
         assert_eq!(route_count, 1, "should route stack toward priority region");
@@ -584,8 +694,17 @@ mod tests {
         spawn_farm(&mut state, Vec3::new(55.0, 50.0, 0.0), 0);
 
         let mut ops = SharedOperationsLayer::new();
-        for posture in [Posture::Expand, Posture::Attack, Posture::Defend, Posture::Consolidate] {
-            for focus in [EconomicFocus::Growth, EconomicFocus::Military, EconomicFocus::Infrastructure] {
+        for posture in [
+            Posture::Expand,
+            Posture::Attack,
+            Posture::Defend,
+            Posture::Consolidate,
+        ] {
+            for focus in [
+                EconomicFocus::Growth,
+                EconomicFocus::Military,
+                EconomicFocus::Infrastructure,
+            ] {
                 let directives = vec![
                     StrategicDirective::SetPosture(posture),
                     StrategicDirective::SetEconomicFocus(focus),

@@ -71,6 +71,17 @@ pub enum ResourceType {
     Stone,
 }
 
+/// Persistent task assignment for per-tick economy and spectator state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskAssignment {
+    Farm { site: EntityKey },
+    Workshop { site: EntityKey },
+    Patrol,
+    Garrison,
+    Train,
+    Idle,
+}
+
 // ---------------------------------------------------------------------------
 // Person component
 // ---------------------------------------------------------------------------
@@ -81,6 +92,8 @@ pub struct Person {
     pub role: Role,
     /// Training level 0.0–1.0. Affects aim, block timing, target leading.
     pub combat_skill: f32,
+    /// Current long-lived assignment used by the economy/runtime layers.
+    pub task: Option<TaskAssignment>,
 }
 
 // ---------------------------------------------------------------------------
@@ -393,8 +406,8 @@ impl GameState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::spatial::GeoMaterial;
+    use super::*;
 
     fn test_state() -> GameState {
         let hf = Heightfield::new(10, 10, 0.0, GeoMaterial::Soil);
@@ -441,6 +454,7 @@ mod tests {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.6,
+                task: None,
             })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())

@@ -10,7 +10,7 @@ Legend:
 - `placeholder` — type/surface exists, but the values are scaffolded or synthetic
 - `not-landed` — still missing
 
-The `v3-shared-exec` pass moved V3 command application into the shared engine, the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` reuses, the `v3-rr-runtime` pass routed V3 RR through that same path, and the `v3-state-surfaces` pass replaced several placeholder protocol/perception fields with engine-derived state. Roads and deeper economy systems still remain partial.
+The `v3-shared-exec` pass moved V3 command application into the shared engine, the `v3-sim-tick` pass added an engine-owned agent phase that `v3bench` reuses, the `v3-rr-runtime` pass routed V3 RR through that same path, the `v3-state-surfaces` pass replaced several placeholder protocol/perception fields with engine-derived state, and the `v3-shared-economy` pass moved shared stockpile production/consumption/equipment spawning out of the bench harness. Roads and richer economy systems still remain partial.
 
 | Item | Status | Notes |
 |------|--------|-------|
@@ -26,17 +26,17 @@ The `v3-shared-exec` pass moved V3 command application into the shared engine, t
 | R2 | `engine-live` | Continuous entity rendering is live. |
 | M2 | `module-only` | Pathfinding/smoothing/formation-slot modules exist but are not integrated into live routing. |
 | W3 | `shared-engine-unused` | Projectile entities and arc physics exist, but the full spec path is still partial. |
-| A2 | `engine-live` | Shared ops layer exists; engine-owned agent phase now applies its outputs and bench reuses that path. |
+| A2 | `engine-live` | Shared ops layer exists; engine-owned agent/economy phases now apply its outputs in bench, sim, and V3 RR. |
 | E1 | `engine-live` | Entity model, containment, and mapgen are live. |
 | P1 | `engine-live` | Core wire types/snapshot surface exist and now emit derived territory, structures, player aggregates, and task labels. |
 | A3 | `engine-live` | Tactical reasoning now runs through the shared engine-owned phase in bench, sim, and V3 RR. |
 | A4 | `engine-live` | Strategy personalities now feed the shared engine-owned phase in bench, sim, V3 RR, and a non-empty derived strategic view. |
 | A5 | `shared-engine-unused` | Damage tables and combat observations exist; learning loop wiring remains partial. |
-| E2 | `engine-live` | The engine now owns `run_agent_phase` and `tick_with_agents`, and V3 RR runs through the shared phase. |
+| E2 | `engine-live` | The engine now owns `run_agent_phase`, `tick_with_agents`, and shared per-tick economy updates; V3 RR runs through the same path. |
 | P2 | `engine-live` | RR/replay surface now uses the shared engine command path, but several protocol fields remain placeholder-grade. |
 | R3 | `engine-live` | Projectile/wound/equipment presentation support exists in replay/render flows. |
 | R4 | `engine-live` | Viewport culling exists. |
-| P3 | `placeholder` | Live status surface exists and more spectator fields are engine-derived now, but roads and some economy surfaces remain scaffolded. |
+| P3 | `placeholder` | Live status surface exists and more spectator fields are engine-derived now, but roads and some deeper economy surfaces remain scaffolded. |
 | P4 | `placeholder` | Review/capture surface exists, but depends on partial runtime integration. |
 | R5 | `not-landed` | Deferred from V3.0 scope. |
 

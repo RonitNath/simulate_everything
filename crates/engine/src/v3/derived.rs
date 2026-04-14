@@ -1,4 +1,4 @@
-use crate::v2::hex::{Axial, axial_to_offset, offset_to_axial};
+use crate::v2::hex::{axial_to_offset, offset_to_axial, Axial};
 
 use super::state::{GameState, ResourceType, Role, StructureType};
 
@@ -229,6 +229,7 @@ mod tests {
                 .person(Person {
                     role,
                     combat_skill: 0.5,
+                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

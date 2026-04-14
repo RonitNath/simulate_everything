@@ -7,6 +7,7 @@ pub mod commands;
 pub mod damage;
 pub mod damage_table;
 pub mod derived;
+pub mod economy;
 pub mod equipment;
 pub mod formation;
 pub mod hex;

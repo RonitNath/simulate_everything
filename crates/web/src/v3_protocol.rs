@@ -6,7 +6,7 @@ use simulate_everything_engine::v3::{
     derived::{derive_hex_control, derive_hex_structures, derive_player_stats, stockpile_level},
     formation::FormationType,
     spatial::Vec3,
-    state::{GameState, ResourceType, Role, StructureType},
+    state::{GameState, ResourceType, Role, StructureType, TaskAssignment},
     wound::Severity,
 };
 
@@ -716,6 +716,24 @@ fn derive_current_task(entity: &simulate_everything_engine::v3::state::Entity) -
     {
         return Some("Recover".to_string());
     }
+    if let Some(task) = entity
+        .person
+        .as_ref()
+        .and_then(|person| person.task.as_ref())
+    {
+        return Some(
+            match task {
+                TaskAssignment::Farm { .. } => "Farm",
+                TaskAssignment::Workshop { .. } => "Work",
+                TaskAssignment::Patrol => "Patrol",
+                TaskAssignment::Garrison => "Garrison",
+                TaskAssignment::Train => "Train",
+                TaskAssignment::Idle => "Idle",
+            }
+            .to_string(),
+        );
+    }
+
     if entity
         .mobile
         .as_ref()
@@ -1011,7 +1029,11 @@ fn diff_entity(prev: &SpectatorEntityInfo, cur: &SpectatorEntityInfo) -> Option<
         changed = true;
     }
 
-    if changed { Some(update) } else { None }
+    if changed {
+        Some(update)
+    } else {
+        None
+    }
 }
 
 /// Compare two stack snapshots and return a StackUpdate with only changed fields.
@@ -1046,7 +1068,11 @@ fn diff_stack(prev: &StackInfo, cur: &StackInfo) -> Option<StackUpdate> {
         changed = true;
     }
 
-    if changed { Some(update) } else { None }
+    if changed {
+        Some(update)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
