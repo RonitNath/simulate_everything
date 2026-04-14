@@ -14,6 +14,7 @@ pub struct V3Snapshot {
     pub dt: f32,
     pub full_state: bool,
     pub entities: Vec<SpectatorEntityInfo>,
+    pub body_models: Vec<BodyRenderInfo>,
     pub projectiles: Vec<ProjectileInfo>,
     pub stacks: Vec<StackInfo>,
     pub hex_ownership: Vec<Option<u8>>,
@@ -34,6 +35,9 @@ pub struct V3SnapshotDelta {
     pub entities_appeared: Vec<SpectatorEntityInfo>,
     pub entities_updated: Vec<EntityUpdate>,
     pub entities_removed: Vec<u32>,
+    pub body_models_appeared: Vec<BodyRenderInfo>,
+    pub body_models_updated: Vec<BodyRenderInfo>,
+    pub body_models_removed: Vec<u32>,
     pub projectiles_spawned: Vec<ProjectileInfo>,
     pub projectiles_removed: Vec<u32>,
     pub stacks_created: Vec<StackInfo>,
@@ -76,7 +80,6 @@ pub enum V3ServerToSpectator {
     Init {
         #[serde(flatten)]
         init: V3Init,
-        game_number: u64,
     },
     #[serde(rename = "v3_snapshot")]
     Snapshot {

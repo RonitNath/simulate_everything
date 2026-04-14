@@ -74,6 +74,7 @@ pub struct EntityRenderer {
     mid_uniform_buf: Buffer,
 
     entity_count: u32,
+    last_tick: Vec<EntityTickData>,
 }
 
 impl EntityRenderer {
@@ -129,10 +130,22 @@ impl EntityRenderer {
             label: Some("interp bg"),
             layout: &compute_bgl,
             entries: &[
-                BindGroupEntry { binding: 0, resource: prev_buf.as_entire_binding() },
-                BindGroupEntry { binding: 1, resource: curr_buf.as_entire_binding() },
-                BindGroupEntry { binding: 2, resource: render_buf.as_entire_binding() },
-                BindGroupEntry { binding: 3, resource: interp_uniform_buf.as_entire_binding() },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: prev_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: curr_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: render_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: interp_uniform_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -159,10 +172,7 @@ impl EntityRenderer {
 
         let entity_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("entity render bgl"),
-            entries: &[
-                bgl_storage_ro_vert(0),
-                bgl_uniform(1, ShaderStages::VERTEX),
-            ],
+            entries: &[bgl_storage_ro_vert(0), bgl_uniform(1, ShaderStages::VERTEX)],
         });
 
         // Two uniform buffers for the two LOD tiers
@@ -173,8 +183,14 @@ impl EntityRenderer {
             label: Some("entity close bg"),
             layout: &entity_bgl,
             entries: &[
-                BindGroupEntry { binding: 0, resource: render_buf.as_entire_binding() },
-                BindGroupEntry { binding: 1, resource: close_uniform_buf.as_entire_binding() },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: render_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: close_uniform_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -182,8 +198,14 @@ impl EntityRenderer {
             label: Some("entity mid bg"),
             layout: &entity_bgl,
             entries: &[
-                BindGroupEntry { binding: 0, resource: render_buf.as_entire_binding() },
-                BindGroupEntry { binding: 1, resource: mid_uniform_buf.as_entire_binding() },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: render_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: mid_uniform_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -240,20 +262,37 @@ impl EntityRenderer {
             close_uniform_buf,
             mid_uniform_buf,
             entity_count: 0,
+            last_tick: Vec::new(),
         }
     }
 
-    /// Upload a new tick. Currently sets both prev and curr to the same data
-    /// (true interpolation needs the WS tick stream with timing).
+    /// Upload a new tick, preserving the previous tick for interpolation.
     pub fn push_tick(&mut self, queue: &Queue, entities: &[EntityTickData]) {
         self.entity_count = entities.len().min(MAX_ENTITIES as usize) as u32;
-        let bytes = bytemuck::cast_slice(&entities[..self.entity_count as usize]);
-        queue.write_buffer(&self.curr_buf, 0, bytes);
-        queue.write_buffer(&self.prev_buf, 0, bytes);
+        let curr_slice = &entities[..self.entity_count as usize];
+        let curr_bytes = bytemuck::cast_slice(curr_slice);
+
+        if self.last_tick.len() == self.entity_count as usize {
+            let prev_bytes = bytemuck::cast_slice(self.last_tick.as_slice());
+            queue.write_buffer(&self.prev_buf, 0, prev_bytes);
+        } else {
+            queue.write_buffer(&self.prev_buf, 0, curr_bytes);
+        }
+        queue.write_buffer(&self.curr_buf, 0, curr_bytes);
+        self.last_tick.clear();
+        self.last_tick.extend_from_slice(curr_slice);
 
         // Update entity count in LOD uniform buffers
-        let close = EntityUniforms { target_lod: 0, entity_count: self.entity_count, _pad: [0.0; 2] };
-        let mid = EntityUniforms { target_lod: 1, entity_count: self.entity_count, _pad: [0.0; 2] };
+        let close = EntityUniforms {
+            target_lod: 0,
+            entity_count: self.entity_count,
+            _pad: [0.0; 2],
+        };
+        let mid = EntityUniforms {
+            target_lod: 1,
+            entity_count: self.entity_count,
+            _pad: [0.0; 2],
+        };
         queue.write_buffer(&self.close_uniform_buf, 0, bytemuck::bytes_of(&close));
         queue.write_buffer(&self.mid_uniform_buf, 0, bytemuck::bytes_of(&mid));
     }
@@ -309,12 +348,18 @@ impl EntityRenderer {
             color_attachments: &[Some(RenderPassColorAttachment {
                 view: color_view,
                 resolve_target: None,
-                ops: Operations { load: LoadOp::Load, store: StoreOp::Store },
+                ops: Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                },
                 depth_slice: None,
             })],
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                 view: depth_view,
-                depth_ops: Some(Operations { load: LoadOp::Load, store: StoreOp::Store }),
+                depth_ops: Some(Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                }),
                 stencil_ops: None,
             }),
             ..Default::default()
