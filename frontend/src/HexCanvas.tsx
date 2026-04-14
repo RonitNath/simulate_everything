@@ -1,5 +1,5 @@
 import { Component, createEffect, onCleanup, onMount } from "solid-js";
-import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
+import { Application, Container, Graphics } from "pixi.js";
 import type { BoardStaticData, BoardFrameData, BiomeName, V2UnitSnapshot } from "./v2types";
 
 export type RenderLayer =
@@ -160,7 +160,7 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     }
   }
 
-  function drawDynamic(staticData: BoardStaticData, frameData: BoardFrameData, showNumbers: boolean, layers: Set<RenderLayer>) {
+  function drawDynamic(staticData: BoardStaticData, frameData: BoardFrameData, _showNumbers: boolean, layers: Set<RenderLayer>) {
     if (!dynamicLayer) return;
     dynamicLayer.removeChildren();
 
@@ -362,20 +362,8 @@ const HexCanvas: Component<HexCanvasProps> = (props) => {
     }
     dynamicLayer.addChild(unitsGfx);
 
-    // Unit count text labels
-    if (showNumbers) {
-      const labelStyle = new TextStyle({ fontSize: Math.max(7, size * 0.35), fill: 0xffffff, fontWeight: "bold" });
-      for (const [key, entry] of unitMap) {
-        const [rowStr, colStr] = key.split(",");
-        const row = parseInt(rowStr, 10);
-        const col = parseInt(colStr, 10);
-        const [cx, cy] = hexCenter(row, col, size);
-        const label = new Text({ text: String(entry.count), style: labelStyle });
-        label.anchor.set(0.5, 0.5);
-        label.position.set(cx, cy + size * 0.1);
-        dynamicLayer.addChild(label);
-      }
-    }
+    // Unit count text labels — disabled for now, PixiJS Text triggers
+    // createPattern errors in some browsers. Will revisit with BitmapText.
 
     // Engagement edges layer
     const engageGfx = new Graphics();
