@@ -5,7 +5,7 @@ use simulate_everything_engine::v3::{
     armor::{BodyZone, DamageType},
     formation::FormationType,
     spatial::Vec3,
-    state::{GameState, ResourceType, Role, StackId, StructureType},
+    state::{GameState, ResourceType, Role, StructureType},
     wound::Severity,
 };
 
@@ -470,9 +470,9 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
             continue;
         }
 
-        let hex = entity.hex.unwrap_or_else(|| {
-            simulate_everything_engine::v2::hex::Axial::new(0, 0)
-        });
+        let hex = entity
+            .hex
+            .unwrap_or_else(|| simulate_everything_engine::v2::hex::Axial::new(0, 0));
 
         let entity_kind = if entity.structure.is_some() {
             EntityKind::Structure
@@ -546,14 +546,24 @@ fn build_entity_list(state: &GameState) -> Vec<SpectatorEntityInfo> {
                     // Weapon angle: offset from facing based on motion.
                     let base_facing = c.facing;
                     let motion_offset = match atk.motion {
-                        simulate_everything_engine::v3::martial::AttackMotion::Overhead => -std::f32::consts::FRAC_PI_2,
-                        simulate_everything_engine::v3::martial::AttackMotion::Forehand => -std::f32::consts::FRAC_PI_4,
-                        simulate_everything_engine::v3::martial::AttackMotion::Backhand => std::f32::consts::FRAC_PI_4,
+                        simulate_everything_engine::v3::martial::AttackMotion::Overhead => {
+                            -std::f32::consts::FRAC_PI_2
+                        }
+                        simulate_everything_engine::v3::martial::AttackMotion::Forehand => {
+                            -std::f32::consts::FRAC_PI_4
+                        }
+                        simulate_everything_engine::v3::martial::AttackMotion::Backhand => {
+                            std::f32::consts::FRAC_PI_4
+                        }
                         simulate_everything_engine::v3::martial::AttackMotion::Thrust => 0.0,
                         simulate_everything_engine::v3::martial::AttackMotion::Generic => 0.0,
                     };
                     // Animate: in windup, weapon goes to ready position; in committed, swings through.
-                    let anim_t = if atk.committed { 1.0 - progress } else { progress };
+                    let anim_t = if atk.committed {
+                        1.0 - progress
+                    } else {
+                        progress
+                    };
                     let w_angle = base_facing + motion_offset * anim_t;
                     (
                         Some(phase.to_string()),
@@ -631,17 +641,18 @@ fn build_stack_list(state: &GameState) -> Vec<StackInfo> {
         .iter()
         .map(|stack| {
             // Compute stack center from member positions.
-            let (cx, cy, count) = stack.members.iter().fold(
-                (0.0f32, 0.0f32, 0u32),
-                |(sx, sy, n), &key| {
-                    if let Some(entity) = state.entities.get(key) {
-                        if let Some(pos) = entity.pos {
-                            return (sx + pos.x, sy + pos.y, n + 1);
+            let (cx, cy, count) =
+                stack
+                    .members
+                    .iter()
+                    .fold((0.0f32, 0.0f32, 0u32), |(sx, sy, n), &key| {
+                        if let Some(entity) = state.entities.get(key) {
+                            if let Some(pos) = entity.pos {
+                                return (sx + pos.x, sy + pos.y, n + 1);
+                            }
                         }
-                    }
-                    (sx, sy, n)
-                },
-            );
+                        (sx, sy, n)
+                    });
             let (cx, cy) = if count > 0 {
                 (cx / count as f32, cy / count as f32)
             } else {
@@ -659,9 +670,11 @@ fn build_stack_list(state: &GameState) -> Vec<StackInfo> {
             StackInfo {
                 id: stack.id.0,
                 owner: stack.owner,
-                members: stack.members.iter().filter_map(|&k| {
-                    state.entities.get(k).map(|e| e.id)
-                }).collect(),
+                members: stack
+                    .members
+                    .iter()
+                    .filter_map(|&k| state.entities.get(k).map(|e| e.id))
+                    .collect(),
                 formation: stack.formation,
                 center_x: cx,
                 center_y: cy,
@@ -740,8 +753,6 @@ impl DeltaTracker {
         let players = build_player_list(state);
 
         // --- Entities ---
-        let cur_entity_map: HashMap<u32, &SpectatorEntityInfo> =
-            cur_entities.iter().map(|e| (e.id, e)).collect();
         let cur_entity_ids: std::collections::HashSet<u32> =
             cur_entities.iter().map(|e| e.id).collect();
         let prev_entity_ids: std::collections::HashSet<u32> =
@@ -771,8 +782,6 @@ impl DeltaTracker {
         }
 
         // --- Projectiles ---
-        let cur_proj_map: HashMap<u32, &ProjectileInfo> =
-            cur_projectiles.iter().map(|p| (p.id, p)).collect();
         let cur_proj_ids: std::collections::HashSet<u32> =
             cur_projectiles.iter().map(|p| p.id).collect();
         let prev_proj_ids: std::collections::HashSet<u32> =
@@ -783,10 +792,8 @@ impl DeltaTracker {
             .filter(|p| !prev_proj_ids.contains(&p.id))
             .cloned()
             .collect();
-        let projectiles_removed: Vec<u32> = prev_proj_ids
-            .difference(&cur_proj_ids)
-            .copied()
-            .collect();
+        let projectiles_removed: Vec<u32> =
+            prev_proj_ids.difference(&cur_proj_ids).copied().collect();
 
         // --- Stacks ---
         let cur_stack_ids: std::collections::HashSet<u32> =
@@ -799,10 +806,8 @@ impl DeltaTracker {
             .filter(|s| !prev_stack_ids.contains(&s.id))
             .cloned()
             .collect();
-        let stacks_dissolved: Vec<u32> = prev_stack_ids
-            .difference(&cur_stack_ids)
-            .copied()
-            .collect();
+        let stacks_dissolved: Vec<u32> =
+            prev_stack_ids.difference(&cur_stack_ids).copied().collect();
 
         let mut stacks_updated: Vec<StackUpdate> = Vec::new();
         for s in &cur_stacks {
@@ -847,11 +852,7 @@ impl DeltaTracker {
             .iter()
             .map(|p| (p.id, p.clone()))
             .collect();
-        self.prev_stacks = snapshot
-            .stacks
-            .iter()
-            .map(|s| (s.id, s.clone()))
-            .collect();
+        self.prev_stacks = snapshot.stacks.iter().map(|s| (s.id, s.clone())).collect();
     }
 }
 
@@ -1018,4 +1019,69 @@ fn diff_stack(prev: &StackInfo, cur: &StackInfo) -> Option<StackUpdate> {
     }
 
     if changed { Some(update) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use simulate_everything_engine::v3::{formation::FormationType, mapgen, state::Stack};
+
+    #[test]
+    fn delta_tracker_reports_stack_creation_update_and_dissolve() {
+        let mut state = mapgen::generate(15, 15, 2, 42);
+        let dt = 1.0;
+
+        let initial = build_snapshot(&state, dt);
+        let mut tracker = DeltaTracker::new();
+        tracker.seed_from_snapshot(&initial);
+
+        let member = state
+            .entities
+            .iter()
+            .find_map(|(key, entity)| (entity.owner == Some(0)).then_some(key))
+            .expect("player 0 should own at least one entity");
+        let mut members = state
+            .stacks
+            .first()
+            .map(|stack| stack.members.clone())
+            .unwrap_or_default();
+        if members.is_empty() {
+            members.push(member);
+        }
+        let stack_id = state.alloc_stack_id();
+        state.stacks.push(Stack {
+            id: stack_id,
+            owner: 0,
+            members,
+            formation: FormationType::Line,
+            leader: member,
+        });
+
+        let created = tracker.build_delta(&state, dt);
+        assert_eq!(created.stacks_created.len(), 1);
+        assert_eq!(created.stacks_created[0].id, stack_id.0);
+        assert!(created.stacks_updated.is_empty());
+        assert!(created.stacks_dissolved.is_empty());
+
+        state
+            .stacks
+            .iter_mut()
+            .find(|stack| stack.id == stack_id)
+            .expect("new stack should exist")
+            .formation = FormationType::Wedge;
+        let updated = tracker.build_delta(&state, dt);
+        assert_eq!(updated.stacks_created.len(), 0);
+        assert_eq!(updated.stacks_updated.len(), 1);
+        assert_eq!(updated.stacks_updated[0].id, stack_id.0);
+        assert_eq!(
+            updated.stacks_updated[0].formation,
+            Some(FormationType::Wedge)
+        );
+
+        state.stacks.retain(|stack| stack.id != stack_id);
+        let dissolved = tracker.build_delta(&state, dt);
+        assert!(dissolved.stacks_created.is_empty());
+        assert!(dissolved.stacks_updated.is_empty());
+        assert_eq!(dissolved.stacks_dissolved, vec![stack_id.0]);
+    }
 }

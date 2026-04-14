@@ -1,10 +1,9 @@
 use smallvec::SmallVec;
 
-use super::armor::ArmorProperties;
+use super::agent::{AgentOutput, LayeredAgent};
 use super::combat_log::CombatObservation;
+use super::commands::{CommandApplySummary, apply_agent_output};
 use super::damage::{self, BlockCapability, DefenderState, Impact, ImpactResult};
-use super::equipment::zone_index;
-use super::hex::world_to_hex;
 use super::index::update_hex_membership;
 use super::lifecycle::{self, cleanup_dead, cleanup_inert_projectiles};
 use super::martial;
@@ -14,7 +13,6 @@ use super::spatial::Vec3;
 use super::state::GameState;
 use super::steering;
 use super::weapon::{self, AttackTick};
-use super::wound::WoundList;
 use crate::v2::state::EntityKey;
 
 // ---------------------------------------------------------------------------
@@ -32,9 +30,45 @@ pub struct TickResult {
     pub impacts: usize,
 }
 
+#[derive(Debug, Default)]
+pub struct AgentPhaseResult {
+    pub outputs: Vec<AgentOutput>,
+    pub summaries: Vec<CommandApplySummary>,
+}
+
 // ---------------------------------------------------------------------------
 // Main tick function
 // ---------------------------------------------------------------------------
+
+/// Run the agent phase against the current state and apply resulting commands.
+///
+/// This is the shared engine-owned path used by the simulation runtime and the
+/// bench harness so both exercise the same command-application code.
+pub fn run_agent_phase(state: &mut GameState, agents: &mut [LayeredAgent]) -> AgentPhaseResult {
+    rebuild_spatial_index(state);
+
+    let outputs: Vec<AgentOutput> = agents.iter_mut().map(|agent| agent.tick(state)).collect();
+    let summaries = apply_agent_outputs(state, &outputs);
+
+    AgentPhaseResult { outputs, summaries }
+}
+
+/// Apply already-produced agent outputs to the world state in order.
+pub fn apply_agent_outputs(
+    state: &mut GameState,
+    outputs: &[AgentOutput],
+) -> Vec<CommandApplySummary> {
+    outputs
+        .iter()
+        .map(|output| apply_agent_output(state, output))
+        .collect()
+}
+
+/// Advance the simulation by one tick after running the shared agent phase.
+pub fn tick_with_agents(state: &mut GameState, agents: &mut [LayeredAgent], dt: f64) -> TickResult {
+    let _ = run_agent_phase(state, agents);
+    tick(state, dt)
+}
 
 /// Advance the simulation by one tick.
 ///
@@ -55,7 +89,6 @@ pub fn tick(state: &mut GameState, dt: f64) -> TickResult {
     rebuild_spatial_index(state);
 
     // --- Phase 2: Movement ---
-    // TODO: Agent layer produces commands here (A domain, not yet implemented)
     compute_steering_and_move(state, dt_f32);
 
     // --- Phase 3: Melee combat ---
@@ -793,13 +826,55 @@ fn tick_vitals(state: &mut GameState, dt: f32) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::agent::{
+        OperationalCommand, OperationsLayer, StrategicDirective, StrategyLayer, TacticalCommand,
+        TacticalLayer,
+    };
     use super::super::equipment::Equipment;
+    use super::super::formation::FormationType;
     use super::super::lifecycle::spawn_entity;
     use super::super::mapgen;
     use super::super::movement::Mobile;
-    use super::super::state::{Combatant, EntityBuilder, Person, Role};
+    use super::super::perception::StrategicView;
+    use super::super::state::{Combatant, EntityBuilder, Person, Role, Stack, StackId};
     use super::super::vitals::Vitals;
+    use super::super::wound::WoundList;
     use super::*;
+    use smallvec::smallvec;
+
+    struct NoopStrategy;
+    impl StrategyLayer for NoopStrategy {
+        fn plan(&mut self, _view: &StrategicView) -> Vec<StrategicDirective> {
+            Vec::new()
+        }
+    }
+
+    struct NoopOperations;
+    impl OperationsLayer for NoopOperations {
+        fn execute(
+            &mut self,
+            _state: &GameState,
+            _directives: &[StrategicDirective],
+            _player: u8,
+        ) -> Vec<OperationalCommand> {
+            Vec::new()
+        }
+    }
+
+    struct FixedTactical {
+        commands: Vec<TacticalCommand>,
+    }
+
+    impl TacticalLayer for FixedTactical {
+        fn decide(
+            &mut self,
+            _state: &GameState,
+            _stack: &Stack,
+            _player: u8,
+        ) -> Vec<TacticalCommand> {
+            self.commands.clone()
+        }
+    }
 
     #[test]
     fn tick_advances_time() {
@@ -1088,7 +1163,7 @@ mod tests {
         state.entities[attacker].combatant.as_mut().unwrap().attack = Some(attack);
 
         // Tick through windup (iron sword: 4 ticks)
-        let blood_before = state.entities[target].vitals.as_ref().unwrap().blood;
+        let _blood_before = state.entities[target].vitals.as_ref().unwrap().blood;
 
         for _ in 0..5 {
             tick(&mut state, 1.0);
@@ -1096,7 +1171,7 @@ mod tests {
 
         // Target should have taken damage OR the attack whiffed (distance-dependent)
         // At 1m apart with 1.5m reach, should hit.
-        let blood_after = state
+        let _blood_after = state
             .entities
             .get(target)
             .map(|e| e.vitals.as_ref().unwrap().blood);
@@ -1110,5 +1185,152 @@ mod tests {
             .unwrap_or(true);
 
         assert!(attack_cleared, "attack should have resolved after windup");
+    }
+
+    #[test]
+    fn run_agent_phase_applies_tactical_commands() {
+        use super::super::spatial::GeoMaterial;
+        use super::super::spatial::Heightfield;
+
+        let hf = Heightfield::new(20, 20, 0.0, GeoMaterial::Soil);
+        let mut state = GameState::new(20, 20, 2, hf);
+
+        let attacker = spawn_entity(
+            &mut state,
+            EntityBuilder::new()
+                .pos(Vec3::new(100.0, 100.0, 0.0))
+                .owner(0)
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
+                .vitals()
+                .equipment(Equipment::empty()),
+        );
+        let sword = spawn_entity(
+            &mut state,
+            EntityBuilder::new()
+                .owner(0)
+                .weapon_props(super::super::weapon::iron_sword()),
+        );
+        super::super::lifecycle::contain(&mut state, attacker, sword);
+        state.entities[attacker].equipment.as_mut().unwrap().weapon = Some(sword);
+
+        let target = spawn_entity(
+            &mut state,
+            EntityBuilder::new()
+                .pos(Vec3::new(101.0, 100.0, 0.0))
+                .owner(1)
+                .person(Person {
+                    role: Role::Soldier,
+                    combat_skill: 0.5,
+                })
+                .mobile(Mobile::new(2.0, 10.0))
+                .combatant(Combatant::new())
+                .vitals()
+                .equipment(Equipment::empty()),
+        );
+
+        state.stacks.push(Stack {
+            id: StackId(1),
+            owner: 0,
+            members: smallvec![attacker],
+            formation: FormationType::Line,
+            leader: attacker,
+        });
+
+        let mut agents = [LayeredAgent::new(
+            Box::new(NoopStrategy),
+            Box::new(NoopOperations),
+            Box::new(FixedTactical {
+                commands: vec![TacticalCommand::Attack { attacker, target }],
+            }),
+            0,
+            50,
+            5,
+        )];
+
+        let phase = run_agent_phase(&mut state, &mut agents);
+
+        assert_eq!(phase.outputs.len(), 1);
+        assert_eq!(phase.summaries.len(), 1);
+        assert_eq!(phase.summaries[0].tactical_applied, 1);
+        assert_eq!(
+            state.entities[attacker]
+                .combatant
+                .as_ref()
+                .and_then(|combatant| combatant.attack.as_ref())
+                .map(|attack| attack.target),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn tick_with_agents_runs_agent_phase_before_movement() {
+        let mut state = mapgen::generate(15, 15, 2, 42);
+
+        let mover = state
+            .entities
+            .iter()
+            .find_map(|(key, entity)| {
+                (entity.owner == Some(0) && entity.mobile.is_some() && entity.pos.is_some())
+                    .then_some(key)
+            })
+            .expect("should have mobile entity for player 0");
+        let initial_pos = state.entities[mover].pos.unwrap();
+
+        let stack_id = state.alloc_stack_id();
+        state.stacks.push(Stack {
+            id: stack_id,
+            owner: 0,
+            members: smallvec![mover],
+            formation: FormationType::Line,
+            leader: mover,
+        });
+
+        struct RouteOperations {
+            stack: StackId,
+            destination: Vec3,
+        }
+
+        impl OperationsLayer for RouteOperations {
+            fn execute(
+                &mut self,
+                _state: &GameState,
+                _directives: &[StrategicDirective],
+                _player: u8,
+            ) -> Vec<OperationalCommand> {
+                vec![OperationalCommand::RouteStack {
+                    stack: self.stack,
+                    waypoints: vec![self.destination],
+                }]
+            }
+        }
+
+        let mut agents = [LayeredAgent::new(
+            Box::new(NoopStrategy),
+            Box::new(RouteOperations {
+                stack: stack_id,
+                destination: Vec3::new(initial_pos.x + 100.0, initial_pos.y, initial_pos.z),
+            }),
+            Box::new(FixedTactical {
+                commands: Vec::new(),
+            }),
+            0,
+            1,
+            1,
+        )];
+
+        let result = tick_with_agents(&mut state, &mut agents, 1.0);
+
+        assert_eq!(result.impacts, 0);
+        assert_eq!(state.tick, 1);
+        let final_pos = state.entities[mover].pos.unwrap();
+        assert!(
+            final_pos.x > initial_pos.x,
+            "entity should move after route command is applied before movement"
+        );
     }
 }

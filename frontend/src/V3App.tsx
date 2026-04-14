@@ -3,7 +3,7 @@ import {
 } from "solid-js";
 import type {
   V3Init, V3Snapshot, V3SnapshotDelta, V3ServerToSpectator,
-  PlayerInfo, SpectatorEntityInfo,
+  PlayerInfo,
 } from "./v3types";
 import type { BiomeName } from "./v2types";
 import V3HexCanvas from "./v3/HexCanvas";
@@ -11,6 +11,7 @@ import PlaybackControls from "./v3/PlaybackControls";
 import ScoreBar from "./v3/ScoreBar";
 import LayerToggles, { type V3RenderLayer } from "./v3/LayerToggles";
 import Inspector from "./v3/Inspector";
+import { applySnapshotDelta } from "./v3/applySnapshotDelta";
 import * as css from "./styles/v3.css";
 
 const MAX_FRAMES = 600;
@@ -67,56 +68,6 @@ const V3App: Component = () => {
   const agentNames = (): string[] => {
     return initData()?.agent_names ?? [];
   };
-
-  // --- Apply snapshot delta onto a full snapshot ---
-  function applyDelta(base: V3Snapshot, delta: V3SnapshotDelta): V3Snapshot {
-    // Build entity map from base
-    const entityMap = new Map<number, SpectatorEntityInfo>();
-    for (const e of base.entities) entityMap.set(e.id, e);
-
-    // Remove
-    for (const id of delta.entities_removed) entityMap.delete(id);
-
-    // Appear
-    for (const e of delta.entities_appeared) entityMap.set(e.id, e);
-
-    // Update (merge changed fields)
-    for (const u of delta.entities_updated) {
-      const existing = entityMap.get(u.id);
-      if (!existing) continue;
-      entityMap.set(u.id, { ...existing, ...u } as SpectatorEntityInfo);
-    }
-
-    return {
-      tick: delta.tick,
-      dt: delta.dt,
-      full_state: false,
-      entities: Array.from(entityMap.values()),
-      projectiles: [
-        // Keep existing, remove removed, add spawned
-        ...base.projectiles.filter((p) => !delta.projectiles_removed.includes(p.id)),
-        ...delta.projectiles_spawned,
-      ],
-      stacks: base.stacks, // Simplified — full stack updates in R2
-      hex_ownership: delta.hex_changes.length > 0
-        ? applyHexChanges(base.hex_ownership, delta.hex_changes)
-        : base.hex_ownership,
-      hex_roads: base.hex_roads,
-      hex_structures: base.hex_structures,
-      players: delta.players,
-    };
-  }
-
-  function applyHexChanges(
-    ownership: (number | null)[],
-    changes: V3SnapshotDelta["hex_changes"],
-  ): (number | null)[] {
-    const result = [...ownership];
-    for (const c of changes) {
-      if (c.owner !== undefined) result[c.index] = c.owner;
-    }
-    return result;
-  }
 
   // --- Frame compaction ---
   function compactFrames(frms: V3Snapshot[]): V3Snapshot[] {
@@ -191,7 +142,7 @@ const V3App: Component = () => {
             setFrames((prev) => {
               const base = prev.length > 0 ? prev[prev.length - 1] : null;
               if (!base) return prev;
-              const merged = applyDelta(base, delta);
+              const merged = applySnapshotDelta(base, delta);
               const next = [...prev, merged];
               return compactFrames(next);
             });

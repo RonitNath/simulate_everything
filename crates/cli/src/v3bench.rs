@@ -10,7 +10,7 @@ use simulate_everything_engine::v3::{
     },
     armor::{self, ArmorConstruction, ArmorProperties, BodyZone, DamageType, MaterialType},
     combat_log::CombatObservation,
-    commands::{CommandStatus, apply_operational_command, apply_tactical_command},
+    commands::{CommandStatus, apply_operational_command},
     damage::{self, BlockCapability, DefenderState, Impact, ImpactResult},
     damage_table::DamageEstimateTable,
     equipment::{self, Equipment},
@@ -22,6 +22,7 @@ use simulate_everything_engine::v3::{
     movement::Mobile,
     operations::{NullOperationsLayer, SharedOperationsLayer},
     projectile,
+    sim,
     spatial::{GeoMaterial, Heightfield, Vec3},
     state::{
         Combatant, EntityBuilder, GameState, Person, ResourceType, Role, Stack, Structure,
@@ -1158,12 +1159,11 @@ fn run_profile_game(
             })
             .collect();
 
-        for output in &outputs {
-            apply_commands(&mut state, &mut economy, output);
-        }
+        sim::apply_agent_outputs(&mut state, &outputs);
+        apply_bench_deferred_commands(&mut state, &mut economy, &outputs);
 
         let t0 = Instant::now();
-        let result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+        let result = sim::tick(&mut state, 1.0);
         let sim_us = t0.elapsed().as_micros() as u64;
 
         let tp = V3TickProfile {
@@ -1576,11 +1576,9 @@ fn run_ascii_game(
             break;
         }
 
-        let outputs: Vec<AgentOutput> = agents.iter_mut().map(|a| a.tick(&state)).collect();
-        for output in &outputs {
-            apply_commands(&mut state, &mut economy, output);
-        }
-        simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+        let phase = sim::run_agent_phase(&mut state, &mut agents);
+        apply_bench_deferred_commands(&mut state, &mut economy, &phase.outputs);
+        sim::tick(&mut state, 1.0);
     }
 
     print_ascii(&state);
@@ -1658,11 +1656,10 @@ fn run_bench_game(
             })
             .collect();
 
-        for output in &outputs {
-            apply_commands(&mut state, &mut economy, output);
-        }
+        sim::apply_agent_outputs(&mut state, &outputs);
+        apply_bench_deferred_commands(&mut state, &mut economy, &outputs);
 
-        let tick_result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+        let tick_result = sim::tick(&mut state, 1.0);
         total_deaths += tick_result.deaths;
         tick_count += 1;
 
@@ -1853,11 +1850,10 @@ fn run_arena(config: &ArenaConfigFile, replay_path: Option<&str>) {
             }
         }
 
-        for output in &outputs {
-            apply_commands(&mut state, &mut economy, output);
-        }
+        sim::apply_agent_outputs(&mut state, &outputs);
+        apply_bench_deferred_commands(&mut state, &mut economy, &outputs);
 
-        let result = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+        let result = sim::tick(&mut state, 1.0);
 
         // Write replay frame
         if let Some(ref mut f) = replay_file {
@@ -2821,12 +2817,10 @@ fn simulate_arena_variant(
             break;
         }
 
-        let outputs: Vec<AgentOutput> = agents.iter_mut().map(|a| a.tick(&state)).collect();
-        for output in &outputs {
-            apply_commands(&mut state, &mut economy, output);
-        }
+        let phase = sim::run_agent_phase(&mut state, &mut agents);
+        apply_bench_deferred_commands(&mut state, &mut economy, &phase.outputs);
 
-        let _ = simulate_everything_engine::v3::sim::tick(&mut state, 1.0);
+        let _ = sim::tick(&mut state, 1.0);
         if capture_timeline {
             timeline.push(record_arena_frame(
                 &mut state,
@@ -3187,8 +3181,13 @@ fn bench_item_cost(item_type: EquipmentType) -> f32 {
     }
 }
 
-fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &AgentOutput) {
-    for cmd in &output.operational_commands {
+fn apply_bench_deferred_commands(
+    state: &mut GameState,
+    economy: &mut EconomyState,
+    outputs: &[AgentOutput],
+) {
+    for output in outputs {
+        for cmd in &output.operational_commands {
         match apply_operational_command(state, cmd) {
             CommandStatus::Applied | CommandStatus::Rejected => continue,
             CommandStatus::Deferred => {}
@@ -3311,9 +3310,6 @@ fn apply_commands(state: &mut GameState, economy: &mut EconomyState, output: &Ag
             }
         }
     }
-
-    for cmd in &output.tactical_commands {
-        let _ = apply_tactical_command(state, cmd);
     }
 }
 
