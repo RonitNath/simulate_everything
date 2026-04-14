@@ -541,7 +541,12 @@ blood -= sum(wound.bleed_rate for wound in wounds)
 
 When blood < 0.5: combat effectiveness reduced (slower, less accurate).
 When blood < 0.2: collapse (entity falls, can't act, continues bleeding).
-When blood <= 0.0: death.
+When blood <= 0.0: death. The entity becomes an inert corpse — Mobile,
+Combatant, and stack membership are stripped, but the entity remains in the
+SlotMap at its position with all equipment still contained. Corpses are not
+automatically removed. Disposal (burial, looting) is an agent-issued task.
+This means battlefields accumulate bodies and equipment until someone deals
+with them.
 
 Most combat deaths are from accumulated bleeding over many ticks, not instant
 kills. A wounded soldier fights at reduced capacity for a long time before dying.
@@ -833,7 +838,7 @@ tick(state, dt):
   resolve_combat(state, dt)           // Melee impact resolution for entities in range
   apply_bleed(state, dt)              // Wounds drain blood
   update_structures(state, dt)        // Construction progress, decay
-  cleanup_dead(state)                 // Remove dead entities, drop equipment
+  cleanup_dead(state)                 // Transition dead entities to inert corpses (strip Mobile/Combatant/stack, keep equipment contained)
   check_elimination(state)            // Player eliminated when all structures lost
 
   state.game_time += dt

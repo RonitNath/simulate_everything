@@ -38,14 +38,16 @@ into a working game.
 - Creation: `GameState::spawn_entity(components...) -> EntityKey`. Assigns
   monotonic public ID, inserts into SlotMap, updates spatial index if pos is Some.
 - Death: entity death (blood <= 0) goes through cleanup_dead in the tick.
-  Equipment entities are ejected (contained_in = None, pos = dying entity's pos).
-  Wounds are not transferred. The dead entity is removed from the SlotMap.
-- Containment cleanup: if a container entity dies, all contained entities are
-  ejected. If a contained entity dies, it's removed from the container's contains
-  list.
-- Projectile cleanup: projectiles that impact or reach ground level are removed.
-  Inert arrows on the ground: V3.0 removes immediately. Future: leave as resource
-  entities.
+  The entity becomes an inert corpse: Mobile, Combatant, and stack membership
+  are stripped. Equipment remains contained_in the corpse. The entity stays in
+  the SlotMap at its position. No automatic removal — disposal (burial, looting)
+  is an agent-issued task. Battlefields accumulate bodies and equipment.
+- Containment on death: equipment stays contained in the corpse (not ejected).
+  If a container structure is destroyed, contained entities are ejected.
+  If a contained entity dies, it stays in the container's contains list as inert.
+- Projectile on impact: arrow entities that embed in a target become inert
+  and stay at the impact position. Arrows that hit ground stay as inert entities.
+  No despawn in V3.0.
 
 ### E.3 Mapgen
 
