@@ -25,8 +25,65 @@
       z-index: 1;
       pointer-events: none;
     }
-    #solid-ui > * {
-      pointer-events: auto;
+    .viewer-overlay-root {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      color: #f3efe7;
+      font: 500 12px/1.2 ui-sans-serif, system-ui, sans-serif;
+    }
+    .viewer-entity-overlay {
+      position: absolute;
+      transform: translate(-50%, -100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      min-width: 84px;
+    }
+    .viewer-label, .viewer-subtitle {
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(8, 13, 19, 0.8);
+      backdrop-filter: blur(6px);
+      white-space: nowrap;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.26);
+    }
+    .viewer-label {
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .viewer-subtitle {
+      opacity: 0.82;
+      font-size: 11px;
+    }
+    .viewer-bar {
+      width: 72px;
+      height: 5px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(8, 13, 19, 0.8);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+    .viewer-bar-fill {
+      height: 100%;
+      border-radius: inherit;
+    }
+    .viewer-bar-blood .viewer-bar-fill {
+      background: linear-gradient(90deg, #7f1d1d, #ef4444);
+    }
+    .viewer-bar-stamina .viewer-bar-fill {
+      background: linear-gradient(90deg, #0f766e, #22d3ee);
+    }
+    .viewer-selection-ring {
+      position: absolute;
+      width: 42px;
+      height: 42px;
+      transform: translate(-50%, -50%);
+      border: 2px solid #4b76ff;
+      border-radius: 999px;
+      box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.08);
     }
   </style>
 </head>

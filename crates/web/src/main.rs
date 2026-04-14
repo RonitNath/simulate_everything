@@ -17,7 +17,7 @@ use axum::{
         ws::{Message, WebSocket},
     },
     http::StatusCode,
-    response::{Html, IntoResponse, Json},
+    response::{Html, IntoResponse, Json, Redirect},
     routing::get,
 };
 use lobby::{Lobby, TurnSubmission};
@@ -1290,6 +1290,10 @@ async fn main() {
         let manifest = env!("CARGO_MANIFEST_DIR");
         format!("{}/../../frontend/dist", manifest)
     });
+    let viewer_dir = std::env::var("SIMEV_VIEWER_DIR").unwrap_or_else(|_| {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        format!("{}/../../crates/viewer/dist", manifest)
+    });
 
     let num_players: u8 = std::env::var("SIMEV_PLAYERS")
         .ok()
@@ -1356,56 +1360,21 @@ async fn main() {
     });
 
     info!("Serving static files from: {}", static_dir);
+    info!("Serving viewer files from: {}", viewer_dir);
 
     let app = Router::new()
-        .route("/", get(v2_sim_page))
-        .route("/rr", get(v2_rr_page))
-        .route("/ws/rr", get(ws_v2_rr))
-        .route("/api/game", get(api_game))
-        .route("/api/ascii", get(api_ascii))
-        .route("/api/v2/game", get(api_v2_game))
-        .route("/api/v2/ascii", get(api_v2_ascii))
-        .route("/live", get(live_page))
-        .route("/ws/agent", get(ws_agent))
-        .route("/ws/spectate", get(ws_spectate_live))
-        .route("/v1", get(simulator_page))
-        .route("/v1/rr", get(rr_page))
-        .route("/ws/v1/rr", get(ws_spectate_rr))
-        .route("/scoreboard", get(scoreboard_page))
-        .route("/api/scoreboard", get(api_scoreboard))
-        .route("/api/rr/config", axum::routing::post(api_rr_config))
-        .route("/api/rr/pause", axum::routing::post(api_rr_pause))
-        .route("/api/rr/resume", axum::routing::post(api_rr_resume))
-        .route("/api/rr/reset", axum::routing::post(api_rr_reset))
-        .route("/api/rr/status", get(api_rr_status))
-        .route("/api/live/config", axum::routing::post(api_live_config))
-        .route("/v2", get(v2_sim_page))
-        .route("/v2/rr", get(v2_rr_page))
-        .route("/ws/v2/rr", get(ws_v2_rr))
-        .route("/api/v2/rr/config", axum::routing::post(api_v2_rr_config))
-        .route("/api/v2/rr/pause", axum::routing::post(api_v2_rr_pause))
-        .route("/api/v2/rr/resume", axum::routing::post(api_v2_rr_resume))
-        .route("/api/v2/rr/reset", axum::routing::post(api_v2_rr_reset))
-        .route("/api/v2/rr/flags", axum::routing::post(api_v2_rr_flag))
-        .route(
-            "/api/v2/rr/capture/start",
-            axum::routing::post(api_v2_rr_capture_start),
-        )
-        .route(
-            "/api/v2/rr/capture/stop",
-            axum::routing::post(api_v2_rr_capture_stop),
-        )
-        .route("/api/v2/rr/reviews", get(api_v2_rr_reviews))
-        .route(
-            "/api/v2/rr/reviews/{id}",
-            get(api_v2_rr_review).delete(api_v2_rr_delete_review),
-        )
-        .route("/api/v2/rr/status", get(api_v2_rr_status))
+        .route("/", get(|| async { Redirect::temporary("/v3/rr") }))
         // V3 RR routes
         .route("/v3/rr", get(v3_rr_page))
-        .route("/v3/replay", get(v3_replay_page))
-        .route("/api/v3/replay/files", get(api_v3_replay_files))
-        .route("/api/v3/replay/file", get(api_v3_replay_file))
+        .route("/rr", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/v1", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/v1/rr", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/v2", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/v2/rr", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/live", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/scoreboard", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/v3/replay", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route("/v3/drill", get(|| async { Redirect::temporary("/v3/rr") }))
         .route("/ws/v3/rr", get(ws_v3_rr))
         .route("/api/v3/rr/config", axum::routing::post(api_v3_rr_config))
         .route("/api/v3/rr/pause", axum::routing::post(api_v3_rr_pause))
@@ -1426,17 +1395,7 @@ async fn main() {
             "/api/v3/rr/reviews/{id}",
             axum::routing::delete(api_v3_rr_delete_review),
         )
-        // V3 Drill Pad routes
-        .route("/v3/drill", get(v3_drill_page))
-        .route("/ws/v3/drill", get(ws_v3_drill))
-        .route("/api/v3/drill/exec", axum::routing::post(api_v3_drill_exec))
-        .route("/api/v3/drill/status", get(api_v3_drill_status))
-        .route("/api/v3/drill/ascii", get(api_v3_drill_ascii))
-        .route(
-            "/api/v3/drill/reset",
-            axum::routing::post(api_v3_drill_reset),
-        )
-        .route("/api/v3/drill/zoo", axum::routing::post(api_v3_drill_zoo))
+        .nest_service("/viewer", ServeDir::new(&viewer_dir))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
 

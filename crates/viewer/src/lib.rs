@@ -5,6 +5,7 @@ mod gpu;
 mod heightmap;
 mod hex_overlay;
 mod input;
+mod overlay;
 
 use body_model::{BODY_POINT_COUNT, BodyRenderer, BodyTickData};
 use camera::Camera;
@@ -13,10 +14,11 @@ use gpu::GpuState;
 use heightmap::HeightmapRenderer;
 use hex_overlay::HexOverlayRenderer;
 use input::InputState;
-use js_sys::{ArrayBuffer, Uint8Array};
+use js_sys::{ArrayBuffer, Object, Reflect, Uint8Array};
+use overlay::OverlayUi;
 use simulate_everything_protocol::{
-    BodyPointWire, BodyRenderInfo, BodyZone, EntityUpdate, SpectatorEntityInfo, V3Init,
-    V3ServerToSpectator, V3Snapshot, V3SnapshotDelta, WoundSeverity, decode,
+    BodyPointWire, BodyRenderInfo, BodyZone, EntityKind, EntityUpdate, SpectatorEntityInfo,
+    V3Init, V3ServerToSpectator, V3Snapshot, V3SnapshotDelta, WoundSeverity, decode,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -27,7 +29,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 use web_sys::{BinaryType, MessageEvent, Url, UrlSearchParams, WebSocket};
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::platform::web::WindowAttributesExtWebSys;
 use winit::window::{Window, WindowId};
@@ -60,9 +62,12 @@ struct ViewerState {
     body_renderer: BodyRenderer,
     camera: Camera,
     input: InputState,
+    overlay: OverlayUi,
     live: LiveWorld,
     websocket: Option<WebSocket>,
     last_frame: f64,
+    selected_entity_id: Option<u32>,
+    cursor_pos: Option<(f32, f32)>,
 }
 
 struct LiveWorld {
@@ -131,6 +136,7 @@ impl ApplicationHandler for ViewerApp {
             );
             let entity_renderer = EntityRenderer::new(&gpu, terrain.camera_bind_group_layout());
             let body_renderer = BodyRenderer::new(&gpu, terrain.camera_bind_group_layout());
+            let overlay = OverlayUi::new();
 
             let now = web_sys::window().unwrap().performance().unwrap().now();
 
@@ -142,12 +148,16 @@ impl ApplicationHandler for ViewerApp {
                 body_renderer,
                 camera,
                 input: InputState::new(),
+                overlay,
                 live: LiveWorld::default(),
                 websocket: None,
                 last_frame: now,
+                selected_entity_id: None,
+                cursor_pos: None,
             });
 
             attach_live_socket(state_ref.clone(), win.clone());
+            publish_selection(None);
             win.request_redraw();
         });
     }
@@ -175,9 +185,18 @@ impl ApplicationHandler for ViewerApp {
                 state: btn_state,
                 ..
             } => {
+                if button == MouseButton::Left && btn_state == winit::event::ElementState::Pressed {
+                    let selected =
+                        pick_entity(&state.camera, &state.live.entities, state.cursor_pos);
+                    if selected != state.selected_entity_id {
+                        state.selected_entity_id = selected;
+                        publish_selection(selected);
+                    }
+                }
                 state.input.mouse_button(button, btn_state);
             }
             WindowEvent::CursorMoved { position, .. } => {
+                state.cursor_pos = Some((position.x as f32, position.y as f32));
                 state
                     .input
                     .mouse_move(position.x, position.y, &mut state.camera);
@@ -260,6 +279,11 @@ impl ApplicationHandler for ViewerApp {
                     &view,
                     &state.gpu.depth_view,
                     state.terrain.camera_bind_group(),
+                );
+                state.overlay.update(
+                    &state.camera,
+                    &state.live.entities,
+                    state.selected_entity_id,
                 );
 
                 state.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -416,14 +440,35 @@ fn http_to_ws_scheme(protocol: &str) -> &'static str {
     }
 }
 
+fn publish_selection(entity_id: Option<u32>) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(parent) = window.parent() else {
+        return;
+    };
+    if parent == window {
+        return;
+    }
+
+    let message = Object::new();
+    let _ = Reflect::set(
+        &message,
+        &JsValue::from_str("type"),
+        &JsValue::from_str("viewer-select-entity"),
+    );
+    let _ = Reflect::set(
+        &message,
+        &JsValue::from_str("entityId"),
+        &entity_id.map_or(JsValue::NULL, |id| JsValue::from_f64(id as f64)),
+    );
+    let _ = parent.post_message(&message, "*");
+}
+
 fn apply_init(state: &mut ViewerState, init: V3Init) {
     let width = init.width.max(1);
     let height = init.height.max(1);
-    let material: Vec<u32> = init
-        .material_map
-        .iter()
-        .map(|value| *value as u32)
-        .collect();
+    let material: Vec<u32> = init.material_map.iter().map(|value| *value as u32).collect();
     rebuild_terrain_and_overlay(
         state,
         width,
@@ -439,6 +484,9 @@ fn apply_init(state: &mut ViewerState, init: V3Init) {
     state.live.hex_ownership = vec![None; (width * height) as usize];
     state.live.current_tick = 0;
     state.live.last_tick_received_at_ms = None;
+    if state.selected_entity_id.take().is_some() {
+        publish_selection(None);
+    }
 }
 
 fn apply_snapshot(state: &mut ViewerState, snapshot: V3Snapshot) {
@@ -453,6 +501,7 @@ fn apply_snapshot(state: &mut ViewerState, snapshot: V3Snapshot) {
         rebuild_overlay(state, snapshot.hex_ownership);
     }
     mark_tick_received(&mut state.live, snapshot.tick);
+    sync_selection(state);
     upload_live_state(state);
 }
 
@@ -489,7 +538,19 @@ fn apply_delta(state: &mut ViewerState, delta: V3SnapshotDelta) {
     }
 
     mark_tick_received(&mut state.live, delta.tick);
+    sync_selection(state);
     upload_live_state(state);
+}
+
+fn sync_selection(state: &mut ViewerState) {
+    let Some(selected) = state.selected_entity_id else {
+        return;
+    };
+    if state.live.entities.contains_key(&selected) {
+        return;
+    }
+    state.selected_entity_id = None;
+    publish_selection(None);
 }
 
 fn mark_tick_received(live: &mut LiveWorld, tick: u64) {
@@ -555,8 +616,8 @@ fn upload_live_state(state: &mut ViewerState) {
                 facing: entity.facing.unwrap_or(0.0),
                 owner: entity.owner.unwrap_or(0) as u32,
                 entity_kind: match entity.entity_kind {
-                    simulate_everything_protocol::EntityKind::Person => 0,
-                    simulate_everything_protocol::EntityKind::Structure => 1,
+                    EntityKind::Person => 0,
+                    EntityKind::Structure => 1,
                 },
                 health_frac: entity.blood.unwrap_or(1.0).clamp(0.0, 1.0),
                 stamina_frac: entity.stamina.unwrap_or(1.0).clamp(0.0, 1.0),
@@ -603,6 +664,45 @@ fn upload_live_state(state: &mut ViewerState) {
 
 fn sim_to_view(x: f32, y: f32, z: f32) -> [f32; 3] {
     [x, z, y]
+}
+
+fn project_entity_to_screen(camera: &Camera, entity: &SpectatorEntityInfo) -> Option<(f32, f32)> {
+    let clip = camera.view_proj() * glam::Vec4::new(entity.x, entity.z + 2.0, entity.y, 1.0);
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    if ndc.z < -1.0 || ndc.z > 1.0 {
+        return None;
+    }
+    let screen_x = (ndc.x * 0.5 + 0.5) * camera.width;
+    let screen_y = (1.0 - (ndc.y * 0.5 + 0.5)) * camera.height;
+    Some((screen_x, screen_y))
+}
+
+fn pick_entity(
+    camera: &Camera,
+    entities: &HashMap<u32, SpectatorEntityInfo>,
+    cursor_pos: Option<(f32, f32)>,
+) -> Option<u32> {
+    let (cursor_x, cursor_y) = cursor_pos?;
+    let mut best: Option<(u32, f32)> = None;
+    for entity in entities.values() {
+        let Some((screen_x, screen_y)) = project_entity_to_screen(camera, entity) else {
+            continue;
+        };
+        let dx = screen_x - cursor_x;
+        let dy = screen_y - cursor_y;
+        let dist_sq = dx * dx + dy * dy;
+        if dist_sq > 28.0 * 28.0 {
+            continue;
+        }
+        match best {
+            Some((_, best_dist_sq)) if dist_sq >= best_dist_sq => {}
+            _ => best = Some((entity.id, dist_sq)),
+        }
+    }
+    best.map(|(id, _)| id)
 }
 
 fn convert_points(points: &[BodyPointWire; BODY_POINT_COUNT]) -> [[f32; 4]; BODY_POINT_COUNT] {

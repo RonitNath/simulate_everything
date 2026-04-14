@@ -48,35 +48,34 @@ bun run build
 Run the web app:
 
 ```bash
-SIMEV_STATIC_DIR=$PWD/frontend/dist cargo run -p simulate-everything-web
+SIMEV_STATIC_DIR=$PWD/frontend/dist \
+SIMEV_VIEWER_DIR=$PWD/crates/viewer/dist \
+cargo run -p simulate-everything-web
 ```
 
 The server listens on `127.0.0.1:3333` by default.
 
-For isolated viewer work without touching the machine-wide systemd service, run a worktree-local backend on loopback:
+For isolated viewer work without touching the machine-wide systemd service:
 
 ```bash
-./scripts/run-v3-viewer-dev-backend.sh
 cd crates/viewer
-trunk serve
+trunk build
+cd ../..
+./scripts/run-v3-viewer-dev-backend.sh
 ```
 
 Then open:
 
 ```text
-http://127.0.0.1:8088/?server=http://127.0.0.1:3334
+http://127.0.0.1:3334/v3/rr
 ```
 
-The viewer also accepts `?ws=ws://127.0.0.1:3334/ws/v3/rr` for an explicit WebSocket override. Without either query param, it keeps the current same-origin behavior.
+The standalone viewer still accepts `?server=...` and `?ws=...` overrides, but the served `/v3/rr` page now embeds it by default and points it at the same-origin backend automatically.
 
 Useful pages:
 
-- `/` simulator replay viewer
-- `/live` live multiplayer / external agents
-- `/rr` continuous round-robin tournament
-- `/scoreboard` aggregate tournament standings
-- `/v2` v2 simulator
-- `/v2/rr` v2 round-robin
+- `/v3/rr` live V3 round-robin viewer
+- `/viewer/` raw standalone wgpu viewer asset entrypoint
 
 ## Main Binaries
 
@@ -113,25 +112,27 @@ The binary name is `simulate_everything_cli`.
 
 The Axum server exposes simulator, live, tournament, and replay APIs.
 
-Start it with the built frontend available at `SIMEV_STATIC_DIR`:
+Start it with the built frontend shell and viewer bundle available:
 
 ```bash
-SIMEV_STATIC_DIR=$PWD/frontend/dist cargo run -p simulate-everything-web
+SIMEV_STATIC_DIR=$PWD/frontend/dist \
+SIMEV_VIEWER_DIR=$PWD/crates/viewer/dist \
+cargo run -p simulate-everything-web
 ```
 
 Key HTTP endpoints:
 
-- `GET /api/game` run a full replay and return JSON
-- `GET /api/ascii` render a snapshot as ASCII
-- `ws /ws/agent` connect an external live agent
-- `ws /ws/spectate` watch live games
-- `ws /ws/rr` watch the round-robin stream
-- `GET /api/scoreboard` fetch standings JSON
-- `GET /api/v2/game` and `GET /api/v2/ascii` run v2 simulations
+- `GET /v3/rr` live V3 viewer shell
+- `GET /viewer/` standalone wgpu viewer entrypoint
+- `ws /ws/v3/rr` watch the V3 round-robin stream
+- `GET /api/v3/rr/status` fetch live RR state
+- `POST /api/v3/rr/pause`, `/resume`, `/reset`, `/config` control the live RR
+- `GET /api/v3/rr/reviews` and `DELETE /api/v3/rr/reviews/{id}` manage saved review bundles
 
 Key environment variables:
 
 - `SIMEV_STATIC_DIR` path to `frontend/dist`
+- `SIMEV_VIEWER_DIR` path to `crates/viewer/dist`
 - `SIMEV_BIND_ADDR` bind address, default `127.0.0.1`
 - `SIMEV_PORT` listen port, default `3333`
 - `SIMEV_PLAYERS` live lobby size, default `2`

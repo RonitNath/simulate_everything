@@ -279,6 +279,7 @@ SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on de
 | `SIMEV_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Persisted flagged V2 RR review bundles |
 | `SIMEV_V3_RR_REVIEW_DIR` | `var/v3_reviews` | Persisted flagged V3 RR review bundles |
 | `SIMEV_STATIC_DIR` | — | Path to `frontend/dist/` |
+| `SIMEV_VIEWER_DIR` | — | Path to `crates/viewer/dist/` |
 | `SIMEV_PYTHON_CLIENT` | — | Path to Python agent dir |
 | `RUST_LOG` | — | Tracing level |
 
@@ -452,8 +453,9 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 
 | Route | Method | Description |
 |-------|--------|-------------|
+| `GET /` | HTTP | Redirect to the live V3 viewer |
 | `GET /v3/rr` | HTTP | V3 round-robin spectator page |
-| `GET /v3/replay` | HTTP | V3 replay viewer page |
+| `GET /viewer/` | HTTP | Standalone wgpu viewer asset entrypoint |
 | `GET /ws/v3/rr` | WebSocket | V3 RR spectator stream |
 | `POST /api/v3/rr/config` | HTTP | Set tick speed / mode / autoplay |
 | `POST /api/v3/rr/pause` | HTTP | Pause the V3 RR loop |
@@ -465,8 +467,6 @@ Implemented in `crates/web/src/v2_roundrobin.rs` (`V2RoundRobin`). Runs continuo
 | `POST /api/v3/rr/capture/stop` | HTTP | Stop and persist the active V3 review segment |
 | `GET /api/v3/rr/reviews` | HTTP | List saved V3 review bundles |
 | `DELETE /api/v3/rr/reviews/{id}` | HTTP | Delete one saved V3 review bundle |
-| `GET /api/v3/replay/files` | HTTP | List replay JSONL files available to the V3 replay viewer |
-| `GET /api/v3/replay/file?path=...` | HTTP | Load one replay JSONL file |
 
 ### V3 Round-Robin
 
@@ -483,8 +483,8 @@ Implemented in `crates/web/src/v3_roundrobin.rs` (`V3RoundRobin`).
 - RR now uses the same engine-owned V3 agent phase as the shared sim/bench path: `sim::run_agent_phase(...)` applies agent outputs before `sim::tick(...)`.
 - RR and `v3bench` now also use the same shared economy-ready world bootstrap (`mapgen::generate_economy_ready(...)`) instead of bench-local support structures.
 - The shared engine tick now owns per-tick food/material production, food consumption, and immediate workshop equipment spawning from contained stockpile resources.
-- Live `/v3/rr` and `/v3/replay` both merge stack create/update/dissolve deltas through the same frontend helper, so stack state stays visually consistent between live and replay views.
 - V3 snapshots now derive territory ownership, structure overlays, player stockpile levels, and basic entity task labels from shared engine state rather than hardcoded zeros or `None`.
+- `/v3/rr` now uses the SolidJS control shell only for scoreboard, inspector, and RR controls. Rendering is delegated to the standalone Rust viewer served from `/viewer/` in an iframe, and selection is forwarded back to the shell via `postMessage`.
 
 ### Standalone Viewer Dev Targeting
 
@@ -493,15 +493,17 @@ The standalone Rust viewer in `crates/viewer/` defaults to same-origin `ws(s)://
 - `?server=http://127.0.0.1:3334` derives `ws://127.0.0.1:3334/ws/v3/rr`
 - `?ws=ws://127.0.0.1:3334/ws/v3/rr` overrides the socket URL directly
 - invalid overrides fall back to same-origin and log a warning in the browser console
+- the backend serves the built viewer bundle from `SIMEV_VIEWER_DIR` at `/viewer/`, and `/v3/rr` embeds that bundle directly rather than requiring a separate `trunk serve`
 
 Recommended local visual-test workflow:
 
 ```bash
+cd crates/viewer && trunk build
+cd ../..
 ./scripts/run-v3-viewer-dev-backend.sh
-cd crates/viewer && trunk serve
 ```
 
-Open `http://127.0.0.1:8088/?server=http://127.0.0.1:3334` to target the isolated loopback backend while leaving the machine-wide systemd service untouched.
+Open `http://127.0.0.1:3334/v3/rr` to target the isolated loopback backend while leaving the machine-wide systemd service untouched.
 
 ### V2 Agents
 
