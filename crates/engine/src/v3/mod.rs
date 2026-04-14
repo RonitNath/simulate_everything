@@ -21,6 +21,7 @@ pub mod sim;
 pub mod spatial;
 pub mod state;
 pub mod steering;
+pub mod strategy;
 pub mod tactical;
 pub mod vitals;
 pub mod weapon;
