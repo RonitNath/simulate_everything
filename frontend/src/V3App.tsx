@@ -119,6 +119,15 @@ const V3App: Component = () => {
   }
 
   // --- WebSocket connection ---
+  let wsRef: WebSocket | null = null;
+
+  function resync() {
+    // Close and reconnect — server sends full catchup (init + snapshot) on new connection
+    if (wsRef) {
+      wsRef.close();
+    }
+  }
+
   createEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws/v3/rr`;
@@ -129,6 +138,7 @@ const V3App: Component = () => {
 
     function connect() {
       ws = new WebSocket(wsUrl);
+      wsRef = ws;
 
       ws.onopen = () => {
         retryDelay = 500;
@@ -342,6 +352,7 @@ const V3App: Component = () => {
                     rivers={[]}
                     frame={currentFrame()}
                     layers={layers()}
+                    tickIntervalMs={tickMs()}
                   />
                 );
               }}
@@ -374,6 +385,7 @@ const V3App: Component = () => {
           onServerPause={serverPause}
           onServerResume={serverResume}
           onReset={resetGame}
+          onResync={resync}
         />
       </div>
     </Show>

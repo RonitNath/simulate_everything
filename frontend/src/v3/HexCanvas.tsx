@@ -4,25 +4,30 @@ import type { V3Snapshot } from "../v3types";
 import type { BiomeName } from "../v2types";
 import type { V3RenderLayer } from "./LayerToggles";
 import {
+  EntityMap, interpT, getInterpPos, getInterpFacing,
+} from "./entityMap";
+import type { RenderEntity } from "./render/entities";
+import {
+  getLodTier,
+  drawEntitiesClose, drawStackBadges, drawDensityHeatmap,
+} from "./render/entities";
+import { drawCorpsesClose, drawCorpsesMid, drawCorpsesFar } from "./render/corpses";
+import {
   drawTerrain, drawTerritory, drawRoads, drawSettlements,
-  type TerrainData, type SettlementEntry,
+  type SettlementEntry,
   pixelToHex, boardPixelSize, HEX_SIZE, playerColorHex,
 } from "./render/grid";
 import * as css from "../styles/v3.css";
 
 interface V3HexCanvasProps {
-  // Init data (terrain)
   width: number;
   height: number;
   biomes: BiomeName[];
   heights: number[];
   rivers: boolean[];
-
-  // Frame data
   frame: V3Snapshot | null;
-
-  // Layer visibility
   layers: Set<V3RenderLayer>;
+  tickIntervalMs: number;
 }
 
 interface TooltipData {
@@ -32,6 +37,7 @@ interface TooltipData {
   col: number;
   owner: number | null;
   roadLevel: number;
+  entityCount: number;
 }
 
 const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
@@ -44,6 +50,8 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
   let territoryGfx: Graphics | null = null;
   let roadsGfx: Graphics | null = null;
   let settlementsGfx: Graphics | null = null;
+  let entityGfx: Graphics | null = null;
+  let corpseGfx: Graphics | null = null;
 
   // Camera state — plain variables, PixiJS manages rendering
   let camZoom = 1.0;
@@ -55,13 +63,82 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
   let dragStartCamX = 0;
   let dragStartCamY = 0;
 
-  // Tooltip signal — SolidJS renders HTML overlay
+  // Entity map — outside SolidJS reactivity
+  const entityMap = new EntityMap();
+
+  // Tooltip signal
   const [tooltip, setTooltip] = createSignal<TooltipData | null>(null);
 
   function applyCamera() {
     if (!world) return;
     world.scale.set(camZoom);
     world.position.set(camX, camY);
+  }
+
+  // --- Entity map update from frame data ---
+
+  function updateEntityMap(frame: V3Snapshot | null) {
+    if (!frame) return;
+    const now = performance.now();
+
+    if (frame.full_state) {
+      entityMap.applyFullSnapshot(frame.entities, frame.projectiles, now);
+    } else {
+      // Full snapshots always have full_state=true in our current protocol.
+      // When delta mode lands, the delta will be applied here.
+      // For now, treat every frame as a full snapshot replacement.
+      entityMap.applyFullSnapshot(frame.entities, frame.projectiles, now);
+    }
+  }
+
+  // --- 60fps render tick ---
+
+  function renderTick() {
+    if (!entityGfx || !corpseGfx) return;
+
+    const now = performance.now();
+    const t = interpT(
+      // Use the latest entity's tick time (they all share the same)
+      entityMap.entities.size > 0
+        ? entityMap.entities.values().next().value!.lastTickTime
+        : now,
+      props.tickIntervalMs,
+      now,
+    );
+
+    // Advance death animations
+    entityMap.advanceLifecycle(now);
+
+    // Build render entity list with interpolated positions
+    const renderEntities: RenderEntity[] = [];
+    const corpses: import("./entityMap").EntityState[] = [];
+
+    for (const e of entityMap.entities.values()) {
+      if (e.state === "corpse" || e.state === "dying") {
+        corpses.push(e);
+      } else {
+        renderEntities.push({
+          info: e.info,
+          pos: getInterpPos(e, t),
+          facing: getInterpFacing(e, t),
+          state: e.state,
+        });
+      }
+    }
+
+    // Render by LOD tier
+    const lod = getLodTier(camZoom);
+
+    if (lod === "close") {
+      drawEntitiesClose(entityGfx, renderEntities, camZoom);
+      drawCorpsesClose(corpseGfx, corpses, now);
+    } else if (lod === "mid") {
+      drawStackBadges(entityGfx, renderEntities);
+      drawCorpsesMid(corpseGfx, corpses);
+    } else {
+      drawDensityHeatmap(entityGfx, renderEntities);
+      drawCorpsesFar(corpseGfx, corpses);
+    }
   }
 
   // --- Event handlers ---
@@ -76,7 +153,6 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
     const newZoom = Math.min(5.0, Math.max(0.1, camZoom * zoomFactor));
 
-    // Zoom centered on mouse cursor
     camX = mouseX - (mouseX - camX) * (newZoom / camZoom);
     camY = mouseY - (mouseY - camY) * (newZoom / camZoom);
     camZoom = newZoom;
@@ -101,7 +177,6 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       return;
     }
 
-    // Hover detection — screen → world → hex
     if (!canvasRef) return;
     const rect = canvasRef.getBoundingClientRect();
     const screenX = e.clientX - rect.left;
@@ -111,7 +186,6 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
 
     const [row, col] = pixelToHex(worldX, worldY, HEX_SIZE);
 
-    // Bounds check
     if (row < 0 || row >= props.height || col < 0 || col >= props.width) {
       setTooltip(null);
       return;
@@ -122,13 +196,18 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const owner = frame?.hex_ownership?.[idx] ?? null;
     const roadLevel = frame?.hex_roads?.[idx] ?? 0;
 
+    // Count entities in this hex from entity map
+    let entityCount = 0;
+    for (const e of entityMap.entities.values()) {
+      const er = e.info.hex_r;
+      const ec = e.info.hex_q + Math.floor((er - (er & 1)) / 2);
+      if (er === row && ec === col && e.state === "alive") entityCount++;
+    }
+
     setTooltip({
       screenX: e.clientX - rect.left,
       screenY: e.clientY - rect.top,
-      row,
-      col,
-      owner,
-      roadLevel,
+      row, col, owner, roadLevel, entityCount,
     });
   }
 
@@ -153,18 +232,24 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     world = new Container();
     app.stage.addChild(world);
 
-    // Create rendering layers (bottom to top)
-    terrainGfx = new Graphics();
+    // Rendering layers (bottom to top per spec)
+    terrainGfx = new Graphics();      // 1. Hex grid
     world.addChild(terrainGfx);
 
-    territoryGfx = new Graphics();
+    territoryGfx = new Graphics();    // 2. Territory overlay
     world.addChild(territoryGfx);
 
-    roadsGfx = new Graphics();
+    roadsGfx = new Graphics();        // 3. Infrastructure
     world.addChild(roadsGfx);
 
-    settlementsGfx = new Graphics();
+    settlementsGfx = new Graphics();  // 3b. Structures
     world.addChild(settlementsGfx);
+
+    corpseGfx = new Graphics();       // 4. Corpse layer
+    world.addChild(corpseGfx);
+
+    entityGfx = new Graphics();       // 5. Entity layer
+    world.addChild(entityGfx);
 
     // Center initial view
     const [boardW, boardH] = boardPixelSize(props.width, props.height, HEX_SIZE);
@@ -174,18 +259,17 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     camY = (canvasH - boardH) / 2;
     applyCamera();
 
-    // Draw initial terrain
-    const terrainData: TerrainData = {
-      width: props.width,
-      height: props.height,
-      biomes: props.biomes,
-      heights: props.heights,
-      rivers: props.rivers,
-    };
-    drawTerrain(terrainGfx, terrainData);
+    // Draw terrain (static, only redraws on new game)
+    drawTerrain(terrainGfx, {
+      width: props.width, height: props.height,
+      biomes: props.biomes, heights: props.heights, rivers: props.rivers,
+    });
 
     // Draw initial dynamic content
     redrawDynamic();
+
+    // Register 60fps render tick via PixiJS ticker
+    app.ticker.add(renderTick);
 
     // Register event listeners
     const canvas = app.canvas as HTMLCanvasElement;
@@ -199,7 +283,6 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     const frame = props.frame;
     const layers = props.layers;
 
-    // Territory
     if (territoryGfx) {
       if (layers.has("territory") && frame) {
         drawTerritory(territoryGfx, props.width, props.height, frame.hex_ownership);
@@ -208,7 +291,6 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       }
     }
 
-    // Roads
     if (roadsGfx) {
       if (layers.has("roads") && frame) {
         drawRoads(roadsGfx, props.width, props.height, frame.hex_roads);
@@ -217,18 +299,15 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       }
     }
 
-    // Settlements — extract from entities in the frame
     if (settlementsGfx) {
       if (layers.has("settlements") && frame) {
         const settlements: SettlementEntry[] = [];
         for (const e of frame.entities) {
           if (!e.structure_type) continue;
-          // V3 entities use axial (hex_q, hex_r) → offset even-r (row, col)
           const row = e.hex_r;
           const col = e.hex_q + Math.floor((e.hex_r - (e.hex_r & 1)) / 2);
           settlements.push({
-            row,
-            col,
+            row, col,
             owner: e.owner ?? 0,
             structureType: e.structure_type,
             containsCount: e.contains_count,
@@ -241,30 +320,33 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     }
   }
 
-  // Redraw terrain when static data changes (rare — only on new game init)
+  // Redraw terrain on static data change
   createEffect(() => {
     if (!terrainGfx) return;
-    const terrainData: TerrainData = {
-      width: props.width,
-      height: props.height,
-      biomes: props.biomes,
-      heights: props.heights,
-      rivers: props.rivers,
-    };
-    drawTerrain(terrainGfx, terrainData);
+    drawTerrain(terrainGfx, {
+      width: props.width, height: props.height,
+      biomes: props.biomes, heights: props.heights, rivers: props.rivers,
+    });
   });
 
-  // Redraw dynamic layers when frame or layers change
+  // Update entity map and redraw dynamic layers on frame or layer change
   createEffect(() => {
-    // Access reactive props inside tracking scope
-    const _frame = props.frame;
-    const _layers = props.layers;
+    const frame = props.frame;
+    if (!app) return;
+    updateEntityMap(frame);
+    redrawDynamic();
+  });
+
+  // Redraw dynamic when layers change
+  createEffect(() => {
+    const _ = props.layers;
     if (!app) return;
     redrawDynamic();
   });
 
   onCleanup(() => {
     if (app) {
+      app.ticker.remove(renderTick);
       const canvas = app.canvas as HTMLCanvasElement;
       canvas.removeEventListener("wheel", handleWheel);
       canvas.removeEventListener("pointerdown", handlePointerDown);
@@ -278,6 +360,8 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     territoryGfx = null;
     roadsGfx = null;
     settlementsGfx = null;
+    entityGfx = null;
+    corpseGfx = null;
   });
 
   return (
@@ -292,15 +376,12 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       <Show when={tooltip()}>
         {(tip) => {
           const t = tip();
-          const left = Math.min(t.screenX + 12, (containerRef?.clientWidth ?? 600) - 180);
-          const top = Math.min(t.screenY + 12, (containerRef?.clientHeight ?? 400) - 80);
+          const left = Math.min(t.screenX + 12, (containerRef?.clientWidth ?? 600) - 200);
+          const top = Math.min(t.screenY + 12, (containerRef?.clientHeight ?? 400) - 100);
           return (
             <div
               class={css.v3Tooltip}
-              style={{
-                left: `${left}px`,
-                top: `${top}px`,
-              }}
+              style={{ left: `${left}px`, top: `${top}px` }}
             >
               <div style={{ "font-weight": "bold", "margin-bottom": "3px" }}>
                 Hex ({t.row}, {t.col})
@@ -308,10 +389,11 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
               <Show when={t.owner != null}>
                 <div>
                   Owner:{" "}
-                  <span style={{ color: playerColorHex(t.owner!) }}>
-                    P{t.owner}
-                  </span>
+                  <span style={{ color: playerColorHex(t.owner!) }}>P{t.owner}</span>
                 </div>
+              </Show>
+              <Show when={t.entityCount > 0}>
+                <div>{t.entityCount} entity{t.entityCount > 1 ? "s" : ""}</div>
               </Show>
               <Show when={t.roadLevel > 0}>
                 <div>Road level: {t.roadLevel}</div>
