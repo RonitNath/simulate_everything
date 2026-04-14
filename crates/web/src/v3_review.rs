@@ -675,6 +675,247 @@ pub async fn list_reviews(review_dir: &Path) -> std::io::Result<Vec<V3ReviewSumm
     Ok(summaries)
 }
 
+// ---------------------------------------------------------------------------
+// Unified bundle listing for review gallery
+// ---------------------------------------------------------------------------
+
+/// Unified metadata for any review bundle (behavior forensics or RR capture).
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleInfo {
+    /// Unique path-based ID, e.g. "v3behavior_farmer/solo_farmer_harvest" or "v3_reviews/game_5/flag_342"
+    pub id: String,
+    /// "behavior" or "rr_capture"
+    pub source: String,
+    /// Scenario or flag name
+    pub name: String,
+    /// Category grouping (e.g. "v3behavior_farmer" or "game_5")
+    pub category: String,
+    /// Overall pass/fail (behavior only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passed: Option<bool>,
+    /// Per-invariant results (behavior only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invariants: Option<Vec<InvariantInfo>>,
+    /// Tick count
+    pub tick_count: u64,
+    /// Agent names (RR only — behavior bundles don't store these in summary)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub agent_names: Vec<String>,
+    /// Annotation text (RR only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<String>,
+    /// Seed (RR only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    /// Whether filmstrip.png exists
+    pub has_filmstrip: bool,
+    /// Whether review.html exists
+    pub has_review_html: bool,
+    /// File modification time (epoch seconds)
+    pub modified_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InvariantInfo {
+    pub name: String,
+    pub passed: bool,
+}
+
+/// Behavior forensics summary.json shape.
+#[derive(Debug, Deserialize)]
+struct BehaviorSummary {
+    id: String,
+    #[serde(default)]
+    invariants_passed: bool,
+    #[serde(default)]
+    final_tick: u64,
+}
+
+/// Behavior invariants.json entry shape.
+#[derive(Debug, Deserialize)]
+struct BehaviorInvariant {
+    name: String,
+    passed: bool,
+}
+
+/// Scan both behavior forensics and RR capture directories, returning a unified list.
+pub async fn list_all_bundles(var_dir: &Path, rr_review_dir: &Path) -> Vec<BundleInfo> {
+    let mut bundles = Vec::new();
+
+    // Scan behavior forensics: var/v3behavior_*/<scenario>/summary.json
+    if let Ok(mut entries) = tokio::fs::read_dir(var_dir).await {
+        while let Some(entry) = entries.next_entry().await.ok().flatten() {
+            let name = entry.file_name();
+            let dir_name = name.to_string_lossy();
+            if !dir_name.starts_with("v3behavior_") {
+                continue;
+            }
+            if !entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let category = dir_name.to_string();
+            if let Ok(mut scenarios) = tokio::fs::read_dir(entry.path()).await {
+                while let Some(scenario) = scenarios.next_entry().await.ok().flatten() {
+                    if !scenario.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    let scenario_path = scenario.path();
+                    let summary_path = scenario_path.join("summary.json");
+                    if !summary_path.exists() {
+                        continue;
+                    }
+                    if let Some(bundle) =
+                        read_behavior_bundle(&category, &scenario_path, &summary_path).await
+                    {
+                        bundles.push(bundle);
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan RR captures: rr_review_dir/game_N/<flag_or_segment>/summary.json
+    if rr_review_dir.exists() {
+        if let Ok(mut game_dirs) = tokio::fs::read_dir(rr_review_dir).await {
+            while let Some(game_entry) = game_dirs.next_entry().await.ok().flatten() {
+                if !game_entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let game_name = game_entry.file_name().to_string_lossy().to_string();
+                if let Ok(mut flag_dirs) = tokio::fs::read_dir(game_entry.path()).await {
+                    while let Some(flag_entry) = flag_dirs.next_entry().await.ok().flatten() {
+                        if !flag_entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+                            continue;
+                        }
+                        let flag_path = flag_entry.path();
+                        let summary_path = flag_path.join("summary.json");
+                        if !summary_path.exists() {
+                            continue;
+                        }
+                        if let Some(bundle) =
+                            read_rr_bundle(&game_name, &flag_path, &summary_path).await
+                        {
+                            bundles.push(bundle);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by modified_at descending.
+    bundles.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    bundles
+}
+
+async fn read_behavior_bundle(
+    category: &str,
+    scenario_path: &Path,
+    summary_path: &Path,
+) -> Option<BundleInfo> {
+    let content = tokio::fs::read_to_string(summary_path).await.ok()?;
+    let summary: BehaviorSummary = serde_json::from_str(&content).ok()?;
+
+    let scenario_name = scenario_path.file_name()?.to_string_lossy().to_string();
+    let id = format!("{}/{}", category, scenario_name);
+
+    // Read invariants.json if it exists.
+    let invariants = match tokio::fs::read_to_string(scenario_path.join("invariants.json")).await {
+        Ok(inv_content) => {
+            let parsed: Vec<BehaviorInvariant> =
+                serde_json::from_str(&inv_content).unwrap_or_default();
+            Some(
+                parsed
+                    .into_iter()
+                    .map(|i| InvariantInfo {
+                        name: i.name,
+                        passed: i.passed,
+                    })
+                    .collect(),
+            )
+        }
+        Err(_) => None,
+    };
+
+    let has_filmstrip = scenario_path.join("filmstrip.png").exists();
+    let has_review_html = scenario_path.join("review.html").exists();
+
+    let modified_at = tokio::fs::metadata(summary_path)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    Some(BundleInfo {
+        id,
+        source: "behavior".to_string(),
+        name: summary.id,
+        category: category.to_string(),
+        passed: Some(summary.invariants_passed),
+        invariants,
+        tick_count: summary.final_tick,
+        agent_names: Vec::new(),
+        annotation: None,
+        seed: None,
+        has_filmstrip,
+        has_review_html,
+        modified_at,
+    })
+}
+
+async fn read_rr_bundle(
+    game_name: &str,
+    flag_path: &Path,
+    summary_path: &Path,
+) -> Option<BundleInfo> {
+    let content = tokio::fs::read_to_string(summary_path).await.ok()?;
+    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let flag_name = flag_path.file_name()?.to_string_lossy().to_string();
+    let id = format!("v3_reviews/{}/{}", game_name, flag_name);
+
+    let agent_names: Vec<String> = val
+        .get("agent_names")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let annotation = val
+        .get("annotation")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let seed = val.get("seed").and_then(|v| v.as_u64());
+    let tick_count = val.get("tick_count").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let has_filmstrip = flag_path.join("filmstrip.png").exists();
+    let has_review_html = flag_path.join("review.html").exists();
+
+    let modified_at = tokio::fs::metadata(summary_path)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    Some(BundleInfo {
+        id,
+        source: "rr_capture".to_string(),
+        name: flag_name,
+        category: game_name.to_string(),
+        passed: None,
+        invariants: None,
+        tick_count,
+        agent_names,
+        annotation: Some(annotation),
+        seed,
+        has_filmstrip,
+        has_review_html,
+        modified_at,
+    })
+}
+
 /// Delete a review bundle directory.
 pub async fn delete_review(review_dir: &Path, id: &str) -> std::io::Result<bool> {
     // id format: game_N_flag_T or game_N_segment_T

@@ -8,9 +8,12 @@ export default defineConfig({
   build: {
     outDir: "dist",
     rollupOptions: {
-      input: "src/index.tsx",
+      input: {
+        index: "src/index.tsx",
+        reviews: "src/reviews.tsx",
+      },
       output: {
-        entryFileNames: "index.js",
+        entryFileNames: "[name].js",
         assetFileNames: "[name][extname]",
       },
     },

@@ -56,6 +56,10 @@ struct AppState {
     v3_drill: Arc<v3_drill::V3Drill>,
     scoreboard: Arc<Mutex<Scoreboard>>,
     build_ver: String,
+    /// Root `var/` directory for scanning behavior forensics bundles.
+    var_dir: PathBuf,
+    /// V3 RR review directory (for RR capture bundles).
+    v3_rr_review_dir: PathBuf,
 }
 
 // ============================================================
@@ -644,6 +648,89 @@ async fn v3_replay_page(State(state): State<Arc<AppState>>) -> impl IntoResponse
         .render()
         .unwrap(),
     )
+}
+
+// ============================================================
+// V3 Review Gallery
+// ============================================================
+
+#[derive(Template)]
+#[template(path = "v3reviews.html")]
+struct V3ReviewsTemplate {
+    build_ver: String,
+}
+
+async fn v3_reviews_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Html(
+        V3ReviewsTemplate {
+            build_ver: state.build_ver.clone(),
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
+async fn api_v3_reviews_all(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let bundles =
+        v3_review::list_all_bundles(&state.var_dir, &state.v3_rr_review_dir).await;
+    Json(bundles)
+}
+
+async fn serve_review_file(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+) -> impl IntoResponse {
+    // Reject path traversal attempts.
+    if path.contains("..") {
+        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
+    }
+
+    // Try resolving against known bundle root directories.
+    // Behavior bundles: var_dir/v3behavior_*/<scenario>/<file>
+    // RR bundles: v3_rr_review_dir/<game>/<flag>/<file>
+    let candidate = if path.starts_with("v3behavior_") {
+        state.var_dir.join(&path)
+    } else if path.starts_with("v3_reviews/") {
+        // Strip the "v3_reviews/" prefix and resolve against rr review dir.
+        let sub = path.strip_prefix("v3_reviews/").unwrap();
+        state.v3_rr_review_dir.join(sub)
+    } else {
+        return (StatusCode::NOT_FOUND, "unknown bundle source").into_response();
+    };
+
+    // Canonicalize and verify containment.
+    let canonical = match candidate.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    };
+
+    let var_canonical = state.var_dir.canonicalize().unwrap_or_default();
+    let rr_canonical = state.v3_rr_review_dir.canonicalize().unwrap_or_default();
+
+    if !canonical.starts_with(&var_canonical) && !canonical.starts_with(&rr_canonical) {
+        return (StatusCode::FORBIDDEN, "access denied").into_response();
+    }
+
+    // Serve the file.
+    match tokio::fs::read(&canonical).await {
+        Ok(bytes) => {
+            let content_type = match canonical.extension().and_then(|e| e.to_str()) {
+                Some("html") => "text/html",
+                Some("json") => "application/json",
+                Some("png") => "image/png",
+                Some("js") => "application/javascript",
+                Some("css") => "text/css",
+                _ => "application/octet-stream",
+            };
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, content_type)],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "file not found").into_response(),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1336,11 +1423,18 @@ async fn main() {
         let manifest = env!("CARGO_MANIFEST_DIR");
         format!("{}/../../var/v3_reviews", manifest)
     });
+    let v3_rr_review_dir: PathBuf = v3_review_dir.clone().into();
     let v3_rr = Arc::new(V3RoundRobin::new(tick_ms, v3_review_dir.into()));
     let v3_rr_loop = v3_rr.clone();
     tokio::spawn(async move {
         v3_rr_loop.run_loop().await;
     });
+
+    // var/ directory for scanning behavior forensics bundles.
+    let var_dir: PathBuf = {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        PathBuf::from(format!("{}/../../var", manifest))
+    };
 
     let build_ver = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1357,6 +1451,8 @@ async fn main() {
         v3_drill,
         scoreboard,
         build_ver,
+        var_dir,
+        v3_rr_review_dir,
     });
 
     info!("Serving static files from: {}", static_dir);
@@ -1401,6 +1497,10 @@ async fn main() {
             "/api/v3/rr/reviews/{id}",
             axum::routing::delete(api_v3_rr_delete_review),
         )
+        // V3 Review Gallery routes
+        .route("/v3/reviews", get(v3_reviews_page))
+        .route("/api/v3/reviews/all", get(api_v3_reviews_all))
+        .route("/reviews/files/{*path}", get(serve_review_file))
         .nest_service("/viewer", ServeDir::new(&viewer_dir))
         .nest_service("/static", ServeDir::new(&static_dir))
         .with_state(state);
