@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use simulate_everything_engine::v3::spatial::GeoMaterial;
 use simulate_everything_engine::v3::{
+    body_model::BodyPointId,
     derived::{derive_hex_control, derive_hex_structures, derive_player_stats, stockpile_level},
     spatial::{Vec2, Vec3, terrain_height_at, terrain_material_at, terrain_raster_bounds},
     state::{GameState, TaskAssignment},
@@ -11,9 +12,9 @@ use simulate_everything_engine::v3::{
 
 // Re-export all wire types from the protocol crate.
 pub use simulate_everything_protocol::{
-    BodyZone, DamageType, EntityKind, EntityUpdate, FormationType, HexDelta, PlayerInfo,
-    ProjectileInfo, ResourceType, Role, SpectatorEntityInfo, StackInfo, StackUpdate, StructureType,
-    TerrainPatch, TerrainRasterInit, TimeMode, V3Init, V3RrStatus, V3ServerToSpectator, V3Snapshot,
+    BodyPointWire, BodyRenderInfo, BodyZone, CapsuleWire, DiscWire, EntityKind, EntityUpdate,
+    PlayerInfo, ProjectileInfo, Role, SpectatorEntityInfo, StackInfo, StackUpdate, TerrainPatch,
+    TerrainRasterInit, TimeMode, V3Init, V3RrStatus, V3ServerToSpectator, V3Snapshot,
     V3SnapshotDelta, WoundSeverity,
 };
 
@@ -100,6 +101,7 @@ fn build_terrain_patch(
 /// Build a full V3Snapshot from engine state.
 pub fn build_snapshot(state: &GameState, dt: f32) -> V3Snapshot {
     let entities = build_entity_list(state);
+    let body_models = build_body_render_list(state);
     let projectiles = build_projectile_list(state);
     let stacks = build_stack_list(state);
     let hex_ownership = derive_hex_control(state)
@@ -116,12 +118,108 @@ pub fn build_snapshot(state: &GameState, dt: f32) -> V3Snapshot {
         dt,
         full_state: true,
         entities,
+        body_models,
         projectiles,
         stacks,
         hex_ownership,
         hex_roads,
         hex_structures,
         players,
+    }
+}
+
+fn build_body_render_list(state: &GameState) -> Vec<BodyRenderInfo> {
+    let mut body_models = Vec::new();
+
+    for (_key, entity) in &state.entities {
+        let Some(body) = entity.body.as_ref() else {
+            continue;
+        };
+
+        let points = std::array::from_fn(|i| {
+            let p = body.points[i].pos;
+            BodyPointWire {
+                x: p.x,
+                y: p.y,
+                z: p.z,
+            }
+        });
+
+        let facing = entity.combatant.as_ref().map(|c| c.facing).unwrap_or(0.0);
+        let weapon = build_weapon_capsule(state, entity, body.as_ref(), facing);
+        let shield = build_shield_disc(state, entity, body.as_ref(), facing);
+
+        body_models.push(BodyRenderInfo {
+            entity_id: entity.id,
+            points,
+            weapon,
+            shield,
+        });
+    }
+
+    body_models
+}
+
+fn build_weapon_capsule(
+    state: &GameState,
+    entity: &simulate_everything_engine::v3::state::Entity,
+    body: &simulate_everything_engine::v3::body_model::BodyModel,
+    facing: f32,
+) -> Option<CapsuleWire> {
+    let weapon_key = entity.equipment.as_ref()?.weapon?;
+    let weapon = state.entities.get(weapon_key)?.weapon_props.as_ref()?;
+    if weapon.reach <= 0.0 {
+        return None;
+    }
+
+    let hand = body.point(BodyPointId::RightHand).pos;
+    let elbow = body.point(BodyPointId::RightElbow).pos;
+    let hand_dir = safe_normalize(hand - elbow);
+    let facing_dir = Vec3::new(facing.cos(), facing.sin(), 0.0);
+    let dir = if hand_dir.length_squared() > 1e-4 {
+        hand_dir
+    } else {
+        facing_dir
+    };
+    let tip = hand + dir * weapon.reach.max(0.4);
+
+    Some(CapsuleWire {
+        a: [hand.x, hand.y, hand.z],
+        b: [tip.x, tip.y, tip.z],
+        radius: (weapon.weight * 0.02).clamp(0.025, 0.08),
+    })
+}
+
+fn build_shield_disc(
+    state: &GameState,
+    entity: &simulate_everything_engine::v3::state::Entity,
+    body: &simulate_everything_engine::v3::body_model::BodyModel,
+    facing: f32,
+) -> Option<DiscWire> {
+    let shield_key = entity.equipment.as_ref()?.shield?;
+    let shield = state.entities.get(shield_key)?.weapon_props.as_ref()?;
+    let left_hand = body.point(BodyPointId::LeftHand).pos;
+    let left_elbow = body.point(BodyPointId::LeftElbow).pos;
+    let guard_dir = safe_normalize(left_hand - left_elbow);
+    let normal = if guard_dir.length_squared() > 1e-4 {
+        guard_dir
+    } else {
+        Vec3::new(facing.cos(), facing.sin(), 0.0)
+    };
+    let center = left_hand + normal * 0.15;
+
+    Some(DiscWire {
+        center: [center.x, center.y, center.z],
+        normal: [normal.x, normal.y, normal.z],
+        radius: shield.block_arc.clamp(0.45, 1.5) * 0.35,
+    })
+}
+
+fn safe_normalize(v: Vec3) -> Vec3 {
+    if v.length() > 1e-4 {
+        v.normalize()
+    } else {
+        Vec3::ZERO
     }
 }
 
@@ -502,6 +600,7 @@ fn derive_current_task(entity: &simulate_everything_engine::v3::state::Entity) -
 /// Tracks previous tick's state to compute deltas for spectator streaming.
 pub struct DeltaTracker {
     prev_entities: HashMap<u32, SpectatorEntityInfo>,
+    prev_body_models: HashMap<u32, BodyRenderInfo>,
     prev_projectiles: HashMap<u32, ProjectileInfo>,
     prev_stacks: HashMap<u32, StackInfo>,
 }
@@ -516,6 +615,7 @@ impl DeltaTracker {
     pub fn new() -> Self {
         Self {
             prev_entities: HashMap::new(),
+            prev_body_models: HashMap::new(),
             prev_projectiles: HashMap::new(),
             prev_stacks: HashMap::new(),
         }
@@ -524,6 +624,7 @@ impl DeltaTracker {
     /// Reset tracker state (e.g., on new game).
     pub fn reset(&mut self) {
         self.prev_entities.clear();
+        self.prev_body_models.clear();
         self.prev_projectiles.clear();
         self.prev_stacks.clear();
     }
@@ -532,6 +633,7 @@ impl DeltaTracker {
     /// Updates internal state for the next comparison.
     pub fn build_delta(&mut self, state: &mut GameState, dt: f32) -> V3SnapshotDelta {
         let cur_entities = build_entity_list(state);
+        let cur_body_models = build_body_render_list(state);
         let cur_projectiles = build_projectile_list(state);
         let cur_stacks = build_stack_list(state);
         let players = build_player_list(state);
@@ -563,6 +665,29 @@ impl DeltaTracker {
                 && let Some(update) = diff_entity(prev, e)
             {
                 entities_updated.push(update);
+            }
+        }
+
+        // --- Body models ---
+        let cur_body_ids: std::collections::HashSet<u32> =
+            cur_body_models.iter().map(|b| b.entity_id).collect();
+        let prev_body_ids: std::collections::HashSet<u32> =
+            self.prev_body_models.keys().copied().collect();
+
+        let body_models_appeared: Vec<BodyRenderInfo> = cur_body_models
+            .iter()
+            .filter(|b| !prev_body_ids.contains(&b.entity_id))
+            .cloned()
+            .collect();
+        let body_models_removed: Vec<u32> =
+            prev_body_ids.difference(&cur_body_ids).copied().collect();
+
+        let mut body_models_updated = Vec::new();
+        for body in &cur_body_models {
+            if let Some(prev) = self.prev_body_models.get(&body.entity_id)
+                && prev != body
+            {
+                body_models_updated.push(body.clone());
             }
         }
 
@@ -605,6 +730,10 @@ impl DeltaTracker {
 
         // Update previous state for next tick.
         self.prev_entities = cur_entities.into_iter().map(|e| (e.id, e)).collect();
+        self.prev_body_models = cur_body_models
+            .into_iter()
+            .map(|b| (b.entity_id, b))
+            .collect();
         self.prev_projectiles = cur_projectiles.into_iter().map(|p| (p.id, p)).collect();
         self.prev_stacks = cur_stacks.into_iter().map(|s| (s.id, s)).collect();
         let terrain_patches = dirty_terrain_hexes
@@ -619,6 +748,9 @@ impl DeltaTracker {
             entities_appeared,
             entities_updated,
             entities_removed,
+            body_models_appeared,
+            body_models_updated,
+            body_models_removed,
             projectiles_spawned,
             projectiles_removed,
             stacks_created,
@@ -636,6 +768,11 @@ impl DeltaTracker {
             .entities
             .iter()
             .map(|e| (e.id, e.clone()))
+            .collect();
+        self.prev_body_models = snapshot
+            .body_models
+            .iter()
+            .map(|b| (b.entity_id, b.clone()))
             .collect();
         self.prev_projectiles = snapshot
             .projectiles

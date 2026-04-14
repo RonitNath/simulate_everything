@@ -1281,10 +1281,7 @@ fn write_swordplay_drill_replay(
     ];
     let agent_versions = vec!["v3-sword-drill".to_string(), "v3-sword-drill".to_string()];
     let init = v3_protocol::build_init(&state, &agent_names, &agent_versions, 0);
-    let init_msg = v3_protocol::V3ServerToSpectator::Init {
-        game_number: 0,
-        init,
-    };
+    let init_msg = v3_protocol::V3ServerToSpectator::Init { init };
     writeln!(file, "{}", serde_json::to_string(&init_msg).unwrap()).unwrap();
 
     let mut delta_tracker = v3_protocol::DeltaTracker::new();
@@ -1676,10 +1673,7 @@ fn run_arena(config: &ArenaConfigFile, replay_path: Option<&str>) {
         let agent_names = vec![scenario.side_a.agent.clone(), scenario.side_b.agent.clone()];
         let agent_versions = vec!["v3-arena".to_string(); 2];
         let init = v3_protocol::build_init(&state, &agent_names, &agent_versions, 0);
-        let init_msg = v3_protocol::V3ServerToSpectator::Init {
-            game_number: 0,
-            init,
-        };
+        let init_msg = v3_protocol::V3ServerToSpectator::Init { init };
         writeln!(f, "{}", serde_json::to_string(&init_msg).unwrap()).unwrap();
         eprintln!("  [replay] Writing to {}", path);
         f

@@ -136,7 +136,7 @@ pub struct SpectatorEntityInfo {
     pub blood: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stamina: Option<f32>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wounds: Vec<(BodyZone, WoundSeverity)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weapon_type: Option<String>,
@@ -163,6 +163,37 @@ pub struct SpectatorEntityInfo {
     pub weapon_angle: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attack_progress: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BodyPointWire {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CapsuleWire {
+    pub a: [f32; 3],
+    pub b: [f32; 3],
+    pub radius: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DiscWire {
+    pub center: [f32; 3],
+    pub normal: [f32; 3],
+    pub radius: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BodyRenderInfo {
+    pub entity_id: u32,
+    pub points: [BodyPointWire; 16],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon: Option<CapsuleWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shield: Option<DiscWire>,
 }
 
 /// Changed fields only (for delta snapshots).

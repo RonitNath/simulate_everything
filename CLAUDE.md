@@ -52,6 +52,7 @@ docs/            — detailed documentation
 | V3 entity model + state | `crates/engine/src/v3/state.rs` |
 | V3 sim tick | `crates/engine/src/v3/sim.rs` |
 | V3 agent architecture | `crates/engine/src/v3/agent.rs` |
+| V3 terrain operations | `crates/engine/src/v3/terrain_ops.rs` |
 | V3 wire types + msgpack | `crates/protocol/` |
 | V3 WS builders + delta tracker | `crates/web/src/v3_protocol.rs` |
 | V3 RR loop | `crates/web/src/v3_roundrobin.rs` |
@@ -79,6 +80,7 @@ docs/            — detailed documentation
 | `SIMEV_BIND_ADDR` | `0.0.0.0` | IP address to bind the server to |
 | `SIMEV_PORT` | `3333` | Port to listen on |
 | `SIMEV_STATIC_DIR` | `frontend/dist` | Path to built frontend assets |
+| `SIMEV_VIEWER_DIR` | `crates/viewer/dist` | Path to built standalone viewer assets |
 | `SIMEV_PLAYERS` | (varies) | Number of players |
 | `SIMEV_TICK_MS` | (varies) | Tick interval in milliseconds |
 | `SIMEV_SEED` | (random) | RNG seed |

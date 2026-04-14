@@ -1,6 +1,6 @@
 import { Component, For, Show } from "solid-js";
 import type { PlayerInfo } from "../v3types";
-import { playerColorHex } from "./render/grid";
+import { playerColorHex } from "./colors";
 import * as css from "../styles/v3.css";
 
 interface ScoreBarProps {

@@ -1,6 +1,6 @@
 # Stream B: wgpu WASM Viewer
 
-Status: **B1-B3 done, B4 next (depends on A1 body model)**
+Status: **B1-B4 done, B5 next**
 Depends on: Phase 0 (protocol crate)
 Design spec: `docs/plans/v3-wgpu-renderer.md`
 Linear: reference IA issue if one exists
@@ -122,8 +122,6 @@ transitions are seamless during zoom
 
 ### B4: Body-model rendering + capsule instancing
 
-**Depends on:** A1 (body model struct + protocol body_points field)
-
 **Files created:**
 - `src/body_model.rs` — body-point storage buffer, capsule mesh template,
   instanced draw for limb segments, wound tinting, weapon/shield rendering
@@ -132,6 +130,14 @@ transitions are seamless during zoom
   parts with wound tint (blend toward crimson by damage factor per zone).
 - `src/shaders/body_interpolate.wgsl` — compute: lerp body points between
   ticks (same pattern as entity interpolation)
+
+**Files modified:**
+- `crates/protocol/src/entity.rs`, `crates/protocol/src/tick.rs` — sparse
+  `body_models` wire payloads for full snapshots and deltas
+- `crates/web/src/v3_protocol.rs` — derive live body points plus optional
+  weapon capsule and shield disc from Stream A engine state
+- `src/lib.rs` — binary msgpack spectator WS client, full/delta ingestion,
+  live entity/body uploads, interpolation timing from received ticks
 
 **Body-model rendering:**
 - 16 body points × 200 close-zoom entities = 3,200 capsule instances
@@ -143,6 +149,11 @@ transitions are seamless during zoom
 
 **Gate:** 200 body-model entities render at 60fps with visible combat
 poses, wound tinting, weapon/shield
+
+**Status:** Done. The standalone viewer now consumes live V3 RR msgpack
+spectator messages, interpolates sparse body-model payloads, and renders
+body capsules with optional weapon/shield primitives on top of the
+existing terrain/entity passes.
 
 ### B5: Overlays + text + polish
 

@@ -26,18 +26,56 @@ impl GpuState {
 
         let surface = instance.create_surface(window).unwrap();
 
-        let adapter = instance
-            .request_adapter(&RequestAdapterOptions {
-                power_preference: PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .expect("Failed to find GPU adapter");
+        // Try multiple adapter strategies — Chrome on some GPU/driver combos fails
+        // surface-compatible discovery even when WebGPU is nominally available.
+        let strategies: &[(&str, Option<PowerPreference>, bool, bool)] = &[
+            ("surface+high", Some(PowerPreference::HighPerformance), false, true),
+            ("surface+low", Some(PowerPreference::LowPower), false, true),
+            ("surface+none", None, false, true),
+            ("no-surface+high", Some(PowerPreference::HighPerformance), false, false),
+            ("fallback", None, true, false),
+        ];
+
+        let mut adapter = None;
+        let mut used_surface = false;
+        for (label, pref, fallback, with_surface) in strategies {
+            log::info!("adapter strategy '{label}': trying...");
+            let result = instance
+                .request_adapter(&RequestAdapterOptions {
+                    power_preference: pref.unwrap_or(PowerPreference::None),
+                    compatible_surface: if *with_surface { Some(&surface) } else { None },
+                    force_fallback_adapter: *fallback,
+                })
+                .await;
+            match result {
+                Ok(a) => {
+                    log::info!("adapter strategy '{label}': success — {:?}", a.get_info());
+                    used_surface = *with_surface;
+                    adapter = Some(a);
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("adapter strategy '{label}': failed — {e}");
+                }
+            }
+        }
+
+        let adapter = adapter.expect(
+            "No WebGPU adapter found after trying all strategies. \
+             Check chrome://gpu — WebGPU must be hardware-accelerated and the GPU driver \
+             must support a surface-compatible format.",
+        );
+
+        if !used_surface {
+            log::warn!(
+                "adapter acquired WITHOUT surface compatibility — \
+                 surface configuration may fail or produce format mismatches"
+            );
+        }
 
         log::info!("Adapter: {:?}", adapter.get_info());
 
-        let (device, queue) = adapter
+        let (device, queue): (Device, Queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("viewer device"),
                 required_features: Features::FLOAT32_FILTERABLE,
@@ -49,12 +87,21 @@ impl GpuState {
             .expect("Failed to create device");
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(caps.formats[0]);
+        let format = if caps.formats.is_empty() {
+            log::warn!(
+                "surface reports no compatible formats — falling back to Bgra8UnormSrgb"
+            );
+            TextureFormat::Bgra8UnormSrgb
+        } else {
+            let chosen = caps
+                .formats
+                .iter()
+                .find(|f| f.is_srgb())
+                .copied()
+                .unwrap_or(caps.formats[0]);
+            log::info!("surface format: {chosen:?} (from {:?})", caps.formats);
+            chosen
+        };
 
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,

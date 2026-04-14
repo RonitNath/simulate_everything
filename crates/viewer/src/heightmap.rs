@@ -644,4 +644,16 @@ impl HeightmapRenderer {
     pub fn map_height(&self) -> u32 {
         self.map_height
     }
+
+    pub fn raster_origin_x(&self) -> f32 {
+        self.raster_origin_x
+    }
+
+    pub fn raster_origin_z(&self) -> f32 {
+        self.raster_origin_z
+    }
+
+    pub fn raster_cell_size(&self) -> f32 {
+        self.raster_cell_size
+    }
 }

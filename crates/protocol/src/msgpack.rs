@@ -78,6 +78,20 @@ mod tests {
                 weapon_angle: None,
                 attack_progress: None,
             }],
+            body_models: vec![BodyRenderInfo {
+                entity_id: 1,
+                points: [BodyPointWire {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                }; 16],
+                weapon: Some(CapsuleWire {
+                    a: [0.0, 0.0, 0.0],
+                    b: [1.0, 0.0, 0.0],
+                    radius: 0.05,
+                }),
+                shield: None,
+            }],
             projectiles: vec![],
             stacks: vec![],
             hex_ownership: vec![None; 4],
@@ -98,6 +112,7 @@ mod tests {
         assert_eq!(decoded.tick, 42);
         assert_eq!(decoded.entities.len(), 1);
         assert_eq!(decoded.entities[0].role, Some(Role::Soldier));
+        assert_eq!(decoded.body_models.len(), 1);
     }
 
     #[test]
@@ -148,6 +163,22 @@ mod tests {
                 attack_progress: None,
             }],
             entities_removed: vec![],
+            body_models_appeared: vec![],
+            body_models_updated: vec![BodyRenderInfo {
+                entity_id: 1,
+                points: [BodyPointWire {
+                    x: 1.0,
+                    y: 2.0,
+                    z: 3.0,
+                }; 16],
+                weapon: None,
+                shield: Some(DiscWire {
+                    center: [0.0, 0.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    radius: 0.4,
+                }),
+            }],
+            body_models_removed: vec![],
             projectiles_spawned: vec![],
             projectiles_removed: vec![],
             stacks_created: vec![],
@@ -168,5 +199,6 @@ mod tests {
         let decoded: V3SnapshotDelta = decode(&bytes).unwrap();
         assert_eq!(decoded.entities_updated[0].x, Some(15.0));
         assert_eq!(decoded.terrain_patches.len(), 1);
+        assert_eq!(decoded.body_models_updated.len(), 1);
     }
 }
