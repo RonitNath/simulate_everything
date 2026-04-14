@@ -329,7 +329,9 @@ When blood <= 0.0 (from D pipeline bleed accumulation):
    Body (wound record), owner, Resource (if carrying)
 3. Entity stays in SlotMap as inert corpse
 4. Equipment entities remain `contained_in` the corpse
-5. No entity removal in V3.0. Entities only grow over a match.
+5. No despawn in V3.0 — entities are never removed from the SlotMap.
+   Component transitions (stripping Mobile, Combatant, etc.) are normal
+   state changes, not removal. Entity count only grows over a match.
 
 ### Inert Projectiles
 
@@ -413,8 +415,10 @@ for post-match replay and scoreboard.
 - Skill-interpolated aim (lead targets by combat_skill)
 - Projectile-entity collision detection per substep
 - Friendly fire via physics
-- Inert projectile entities (persist on ground)
-- Inert corpse entities (persist with equipment)
+- No despawn — entities never removed from SlotMap. Death and impact are
+  component transitions (strip Mobile/Combatant/Projectile), not entity removal
+- Inert projectile entities (persist on ground after impact)
+- Inert corpse entities (persist with equipment after death)
 - Stagger interaction with attack commitment
 - God-command equipment spawning for mapgen
 - Starting set: iron sword, wooden bow, leather cuirass, bronze breastplate
