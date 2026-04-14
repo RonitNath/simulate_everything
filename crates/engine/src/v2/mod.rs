@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_layers;
 pub mod ascii;
 pub mod city_ai;
 pub mod combat;
