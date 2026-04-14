@@ -12,3 +12,4 @@ noise = "0.9"
 slotmap = { version = "1", features = ["serde"] }
 smallvec = "1"
 bitvec = "1"
+moka = { version = "0.12", features = ["sync"] }
