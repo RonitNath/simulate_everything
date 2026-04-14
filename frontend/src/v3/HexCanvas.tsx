@@ -12,6 +12,7 @@ import {
   drawEntitiesClose, drawStackBadges, drawDensityHeatmap,
 } from "./render/entities";
 import { drawCorpsesClose, drawCorpsesMid, drawCorpsesFar } from "./render/corpses";
+import { drawProjectiles } from "./render/projectiles";
 import {
   drawTerrain, drawTerritory, drawRoads, drawSettlements,
   type SettlementEntry,
@@ -52,6 +53,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
   let settlementsGfx: Graphics | null = null;
   let entityGfx: Graphics | null = null;
   let corpseGfx: Graphics | null = null;
+  let projectileGfx: Graphics | null = null;
 
   // Camera state — plain variables, PixiJS manages rendering
   let camZoom = 1.0;
@@ -94,7 +96,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
   // --- 60fps render tick ---
 
   function renderTick() {
-    if (!entityGfx || !corpseGfx) return;
+    if (!entityGfx || !corpseGfx || !projectileGfx) return;
 
     const now = performance.now();
     const t = interpT(
@@ -139,6 +141,9 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       drawDensityHeatmap(entityGfx, renderEntities);
       drawCorpsesFar(corpseGfx, corpses);
     }
+
+    // Projectiles (rendered on top of entities at close/mid zoom)
+    drawProjectiles(projectileGfx, entityMap.projectiles, lod, props.tickIntervalMs, now);
   }
 
   // --- Event handlers ---
@@ -251,6 +256,9 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     entityGfx = new Graphics();       // 5. Entity layer
     world.addChild(entityGfx);
 
+    projectileGfx = new Graphics();   // 6. Projectile layer
+    world.addChild(projectileGfx);
+
     // Center initial view
     const [boardW, boardH] = boardPixelSize(props.width, props.height, HEX_SIZE);
     const canvasW = canvasRef.clientWidth || 800;
@@ -362,6 +370,7 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
     settlementsGfx = null;
     entityGfx = null;
     corpseGfx = null;
+    projectileGfx = null;
   });
 
   return (
