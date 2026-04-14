@@ -9,8 +9,8 @@ use super::runner;
 use super::sim;
 use super::spatial::SpatialIndex;
 use super::state::{
-    Biome, CargoType, Cell, Convoy, Engagement, GameState, Player, Population, Role, Settlement,
-    SettlementType, Unit,
+    Biome, CargoType, Cell, Convoy, Entity, EntityKey, Engagement, GameState, Person, Player,
+    Population, Resource, Role, Settlement, SettlementType, Structure, Unit, Vision,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +87,33 @@ pub struct SettlementSnapshot {
     pub population: u16,
 }
 
+/// Replay-safe snapshot of a Mobile component (Axial → (i32, i32) for route).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MobileSnapshot {
+    pub speed: f32,
+    pub move_cooldown: u8,
+    pub destination: Option<(i32, i32)>,
+    pub route: Vec<(i32, i32)>,
+}
+
+/// Replay-safe snapshot of an Entity. SlotMap keys are replaced with public IDs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitySnapshot {
+    pub id: u32,
+    pub q: Option<i32>,
+    pub r: Option<i32>,
+    pub owner: Option<u8>,
+    pub contained_in_id: Option<u32>,
+    pub contains_ids: Vec<u32>,
+    pub person: Option<Person>,
+    pub mobile: Option<MobileSnapshot>,
+    pub vision: Option<Vision>,
+    pub combatant_engaged_ids: Vec<u32>,
+    pub combatant_facing: Option<f32>,
+    pub resource: Option<Resource>,
+    pub structure: Option<Structure>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub tick: u64,
@@ -98,6 +125,8 @@ pub struct Frame {
     pub population: Vec<PopulationSnapshot>,
     pub convoys: Vec<ConvoySnapshot>,
     pub settlements: Vec<SettlementSnapshot>,
+    #[serde(default)]
+    pub entity_snapshots: Vec<EntitySnapshot>,
     pub scores: Vec<super::sim::ScoreBreakdown>,
 }
 
@@ -186,6 +215,55 @@ fn snapshot_cells(state: &GameState) -> Vec<CellSnapshot> {
         .collect()
 }
 
+fn snapshot_entities(state: &GameState) -> Vec<EntitySnapshot> {
+    // Build a mapping from EntityKey → public ID for cross-references.
+    let key_to_id: std::collections::HashMap<EntityKey, u32> = state
+        .entities
+        .iter()
+        .map(|(key, entity)| (key, entity.id))
+        .collect();
+
+    state
+        .entities
+        .values()
+        .map(|e| EntitySnapshot {
+            id: e.id,
+            q: e.pos.map(|p| p.q),
+            r: e.pos.map(|p| p.r),
+            owner: e.owner,
+            contained_in_id: e
+                .contained_in
+                .and_then(|key| key_to_id.get(&key).copied()),
+            contains_ids: e
+                .contains
+                .iter()
+                .filter_map(|key| key_to_id.get(key).copied())
+                .collect(),
+            person: e.person.clone(),
+            mobile: e.mobile.as_ref().map(|m| MobileSnapshot {
+                speed: m.speed,
+                move_cooldown: m.move_cooldown,
+                destination: m.destination.map(|a| (a.q, a.r)),
+                route: m.route.iter().map(|a| (a.q, a.r)).collect(),
+            }),
+            vision: e.vision.clone(),
+            combatant_engaged_ids: e
+                .combatant
+                .as_ref()
+                .map(|c| {
+                    c.engaged_with
+                        .iter()
+                        .filter_map(|key| key_to_id.get(key).copied())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            combatant_facing: e.combatant.as_ref().map(|c| c.facing),
+            resource: e.resource.clone(),
+            structure: e.structure.clone(),
+        })
+        .collect()
+}
+
 fn snapshot_settlements(state: &GameState) -> Vec<SettlementSnapshot> {
     state
         .settlements
@@ -229,6 +307,7 @@ pub fn capture_frame(state: &GameState) -> Frame {
         population: snapshot_population(state),
         convoys: snapshot_convoys(state),
         settlements: snapshot_settlements(state),
+        entity_snapshots: snapshot_entities(state),
         scores: sim::score_players(state),
     }
 }
@@ -393,6 +472,69 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         });
     }
 
+    // Rebuild entities from snapshots in two passes:
+    // Pass 1: insert entities with empty cross-references, collecting ID→Key mapping.
+    // Pass 2: fix up contained_in, contains, and combatant.engaged_with references.
+    let mut entities: SlotMap<EntityKey, Entity> = SlotMap::with_key();
+    let mut next_entity_id: u32 = 0;
+    let mut id_to_key = std::collections::HashMap::new();
+
+    for es in &frame.entity_snapshots {
+        next_entity_id = next_entity_id.max(es.id + 1);
+        let mobile = es.mobile.as_ref().map(|m| super::state::Mobile {
+            speed: m.speed,
+            move_cooldown: m.move_cooldown,
+            destination: m.destination.map(|(q, r)| Axial::new(q, r)),
+            route: m.route.iter().map(|&(q, r)| Axial::new(q, r)).collect(),
+        });
+        let combatant = if es.combatant_facing.is_some() || !es.combatant_engaged_ids.is_empty() {
+            Some(super::state::Combatant {
+                engaged_with: Vec::new(), // filled in pass 2
+                facing: es.combatant_facing.unwrap_or(0.0),
+            })
+        } else {
+            None
+        };
+        let key = entities.insert(Entity {
+            id: es.id,
+            pos: match (es.q, es.r) {
+                (Some(q), Some(r)) => Some(Axial::new(q, r)),
+                _ => None,
+            },
+            owner: es.owner,
+            contained_in: None, // filled in pass 2
+            contains: Vec::new(), // filled in pass 2
+            person: es.person.clone(),
+            mobile,
+            vision: es.vision.clone(),
+            combatant,
+            resource: es.resource.clone(),
+            structure: es.structure.clone(),
+        });
+        id_to_key.insert(es.id, key);
+    }
+
+    // Pass 2: fix up cross-references using public ID → EntityKey mapping.
+    for es in &frame.entity_snapshots {
+        let Some(&key) = id_to_key.get(&es.id) else {
+            continue;
+        };
+        let entity = &mut entities[key];
+        entity.contained_in = es.contained_in_id.and_then(|id| id_to_key.get(&id).copied());
+        entity.contains = es
+            .contains_ids
+            .iter()
+            .filter_map(|id| id_to_key.get(id).copied())
+            .collect();
+        if let Some(combatant) = &mut entity.combatant {
+            combatant.engaged_with = es
+                .combatant_engaged_ids
+                .iter()
+                .filter_map(|id| id_to_key.get(id).copied())
+                .collect();
+        }
+    }
+
     let total_cells = replay.width * replay.height;
     let mut state = GameState {
         width: replay.width,
@@ -409,8 +551,8 @@ pub fn reconstruct_state(replay: &Replay, frame: &Frame) -> GameState {
         next_pop_id,
         next_convoy_id,
         next_settlement_id,
-        entities: SlotMap::with_key(),
-        next_entity_id: 0,
+        entities,
+        next_entity_id,
         scouted: vec![vec![true; total_cells]; replay.num_players],
         spatial: SpatialIndex::new(replay.width, replay.height),
         dirty_hexes: BitVec::repeat(false, total_cells),
@@ -537,5 +679,46 @@ mod tests {
         assert_eq!(state.units.len(), final_state.units.len());
         assert_eq!(state.population.len(), final_state.population.len());
         assert_eq!(state.convoys.len(), final_state.convoys.len());
+        assert_eq!(state.entities.len(), final_state.entities.len());
+    }
+
+    #[test]
+    fn entity_snapshots_capture_and_roundtrip() {
+        let config = test_config();
+        let mut agents = test_agents();
+        let (replay, final_state) = record_game_with_final_state(&config, &mut agents, 100, 10);
+
+        // Verify frames contain entity snapshots
+        let frame = replay.frames.last().unwrap();
+        assert!(
+            !frame.entity_snapshots.is_empty(),
+            "entity snapshots should be populated"
+        );
+
+        // Verify roundtrip preserves entity count and IDs
+        let state = reconstruct_state(&replay, frame);
+        assert_eq!(state.entities.len(), final_state.entities.len());
+
+        // Verify entity IDs match
+        let mut original_ids: Vec<u32> = final_state.entities.values().map(|e| e.id).collect();
+        let mut roundtrip_ids: Vec<u32> = state.entities.values().map(|e| e.id).collect();
+        original_ids.sort();
+        roundtrip_ids.sort();
+        assert_eq!(original_ids, roundtrip_ids);
+
+        // Verify containment relationships survive roundtrip
+        for entity in state.entities.values() {
+            for &child_key in &entity.contains {
+                let child = state
+                    .entities
+                    .get(child_key)
+                    .expect("contained entity should exist");
+                assert_eq!(
+                    child.contained_in.map(|k| state.entities[k].id),
+                    Some(entity.id),
+                    "child's contained_in should point back to parent"
+                );
+            }
+        }
     }
 }
