@@ -501,8 +501,12 @@ fn apply_init(state: &mut ViewerState, init: V3Init) {
         &raster.materials,
         vec![None; (width * height) as usize],
     );
-    state.camera.target = glam::Vec3::new(width as f32 * 0.5, 0.0, height as f32 * 0.5);
-    state.camera.distance = (width.max(height) as f32 * 1.8).clamp(60.0, 1200.0);
+    // Center camera on the raster extent, not the hex grid
+    let raster_cx = raster.origin_x + (rw as f32 * raster.cell_size) * 0.5;
+    let raster_cz = raster.origin_y + (rh as f32 * raster.cell_size) * 0.5;
+    let raster_extent = (rw.max(rh) as f32 * raster.cell_size).max(width.max(height) as f32);
+    state.camera.target = glam::Vec3::new(raster_cx, 0.0, raster_cz);
+    state.camera.distance = (raster_extent * 1.2).clamp(60.0, 12000.0);
     state.live.entities.clear();
     state.live.body_models.clear();
     state.live.hex_ownership = vec![None; (width * height) as usize];
