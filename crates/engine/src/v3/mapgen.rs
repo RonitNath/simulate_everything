@@ -10,6 +10,7 @@ use super::movement::Mobile;
 use super::physical::{MatterStack, PhysicalProperties, SiteProperties, ToolProperties};
 use super::spatial::{GeoMaterial, Heightfield, Vec3, Vertex};
 use super::state::{Combatant, CommodityKind, EntityBuilder, GameState, Person, Role};
+use super::terrain_ops::TerrainOp;
 use super::weapon;
 use crate::v2::hex::{Axial, offset_to_axial};
 use crate::v2::state::EntityKey;
@@ -107,7 +108,6 @@ fn spawn_soldier(state: &mut GameState, pos: Vec3, owner: u8, skill: f32) -> Ent
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: skill,
-                    task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS))
             .combatant(Combatant::new())
@@ -177,7 +177,6 @@ fn spawn_civilian(state: &mut GameState, pos: Vec3, owner: u8, role: Role) -> En
             .person(Person {
                 role,
                 combat_skill: 0.1,
-                    task: None,
             })
             .mobile(Mobile::new(PERSON_STEERING, PERSON_RADIUS)),
     )
@@ -316,9 +315,69 @@ pub fn generate(width: usize, height: usize, num_players: u8, seed: u64) -> Game
             };
             spawn_civilian(&mut state, pos, owner, role);
         }
+
+        seed_settlement_behavior_state(&mut state, owner, center);
     }
 
     state
+}
+
+fn seed_settlement_behavior_state(state: &mut GameState, owner: u8, center: Vec3) {
+    let farm_pos = Vec3::new(center.x + 70.0, center.y, center.z);
+    let hex = crate::v2::hex::offset_to_axial(1, 1);
+    state.terrain_ops.push_op(
+        hex,
+        TerrainOp::Road {
+            points: smallvec::smallvec![center.xy(), farm_pos.xy()],
+            width: 5.0,
+            grade: 1.0,
+            material: GeoMaterial::Soil,
+        },
+        &state.heightfield,
+        state.map_width,
+        state.map_height,
+    );
+    state.terrain_ops.push_op(
+        hex,
+        TerrainOp::Furrow {
+            center: farm_pos.xy(),
+            half_extents: super::spatial::Vec2::new(18.0, 12.0),
+            rotation: 0.0,
+            spacing: 2.5,
+            depth: 0.5,
+        },
+        &state.heightfield,
+        state.map_width,
+        state.map_height,
+    );
+
+    let mut related = Vec::new();
+    for entity in state.entities.values() {
+        if entity.owner == Some(owner) {
+            if let Some(id) = entity.person.as_ref().map(|_| entity.id) {
+                related.push(id);
+            }
+        }
+    }
+
+    for entity in state.entities.values_mut() {
+        if entity.owner != Some(owner) {
+            continue;
+        }
+        let Some(behavior) = entity.behavior.as_mut() else {
+            continue;
+        };
+        behavior.needs.hunger = 0.25;
+        behavior.needs.rest = 0.2;
+        behavior.needs.social = 0.15;
+        for counterpart in related.iter().copied().take(3) {
+            if counterpart != entity.id {
+                behavior
+                    .social
+                    .remember(0, counterpart, "seeded settlement familiarity");
+            }
+        }
+    }
 }
 
 pub fn generate_economy_ready(

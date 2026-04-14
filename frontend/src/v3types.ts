@@ -67,6 +67,15 @@ export interface SiteInfo {
   occupancy_capacity: number;
 }
 
+export interface EntityNeedsInfo {
+  hunger: number;
+  safety: number;
+  duty: number;
+  rest: number;
+  social: number;
+  shelter: number;
+}
+
 export interface SpectatorEntityInfo {
   id: number;
   owner?: number | null;
@@ -89,7 +98,11 @@ export interface SpectatorEntityInfo {
   site?: SiteInfo;
   contains_count: number;
   stack_id?: number;
-  current_task?: string;
+  needs?: EntityNeedsInfo;
+  current_goal?: string;
+  current_action?: string;
+  action_queue_preview?: string[];
+  decision_reason?: string;
   // Swordplay visual state
   attack_phase?: string;   // "idle" | "windup" | "committed" | "recovery"
   attack_motion?: string;  // "overhead" | "forehand" | "backhand" | "thrust"
@@ -120,7 +133,11 @@ export interface EntityUpdate {
   site?: SiteInfo | null;
   contains_count?: number;
   stack_id?: number | null;
-  current_task?: string | null;
+  needs?: EntityNeedsInfo | null;
+  current_goal?: string | null;
+  current_action?: string | null;
+  action_queue_preview?: string[];
+  decision_reason?: string | null;
   attack_phase?: string | null;
   attack_motion?: string | null;
   weapon_angle?: number | null;
@@ -355,7 +372,11 @@ export function applyDelta(state: V3GameState, delta: V3SnapshotDelta): void {
     if (u.armor_type !== undefined) e.armor_type = u.armor_type ?? undefined;
     if (u.contains_count !== undefined) e.contains_count = u.contains_count;
     if (u.stack_id !== undefined) e.stack_id = u.stack_id ?? undefined;
-    if (u.current_task !== undefined) e.current_task = u.current_task ?? undefined;
+    if (u.needs !== undefined) e.needs = u.needs ?? undefined;
+    if (u.current_goal !== undefined) e.current_goal = u.current_goal ?? undefined;
+    if (u.current_action !== undefined) e.current_action = u.current_action ?? undefined;
+    if (u.action_queue_preview !== undefined) e.action_queue_preview = u.action_queue_preview;
+    if (u.decision_reason !== undefined) e.decision_reason = u.decision_reason ?? undefined;
     if (u.attack_phase !== undefined) e.attack_phase = u.attack_phase ?? undefined;
     if (u.attack_motion !== undefined) e.attack_motion = u.attack_motion ?? undefined;
     if (u.weapon_angle !== undefined) e.weapon_angle = u.weapon_angle ?? undefined;

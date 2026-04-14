@@ -1372,8 +1372,14 @@ async fn main() {
         .route("/v2", get(|| async { Redirect::temporary("/v3/rr") }))
         .route("/v2/rr", get(|| async { Redirect::temporary("/v3/rr") }))
         .route("/live", get(|| async { Redirect::temporary("/v3/rr") }))
-        .route("/scoreboard", get(|| async { Redirect::temporary("/v3/rr") }))
-        .route("/v3/replay", get(|| async { Redirect::temporary("/v3/rr") }))
+        .route(
+            "/scoreboard",
+            get(|| async { Redirect::temporary("/v3/rr") }),
+        )
+        .route(
+            "/v3/replay",
+            get(|| async { Redirect::temporary("/v3/rr") }),
+        )
         .route("/v3/drill", get(|| async { Redirect::temporary("/v3/rr") }))
         .route("/ws/v3/rr", get(ws_v3_rr))
         .route("/api/v3/rr/config", axum::routing::post(api_v3_rr_config))

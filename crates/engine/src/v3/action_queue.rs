@@ -59,7 +59,12 @@ impl ActionQueue {
         if let Some(current) = self.current.as_ref() {
             labels.push(current.action.label());
         }
-        labels.extend(self.queued.iter().take(max_items.saturating_sub(labels.len())).map(Action::label));
+        labels.extend(
+            self.queued
+                .iter()
+                .take(max_items.saturating_sub(labels.len()))
+                .map(Action::label),
+        );
         labels
     }
 }

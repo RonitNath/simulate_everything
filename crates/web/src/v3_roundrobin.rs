@@ -304,8 +304,7 @@ impl V3RoundRobin {
 
             // Broadcast init.
             let init = v3_protocol::build_init(&state, &agent_names, &agent_versions, game_number);
-            self.broadcast(V3ServerToSpectator::Init { init })
-                .await;
+            self.broadcast(V3ServerToSpectator::Init { init }).await;
 
             // Broadcast initial full snapshot + seed delta tracker.
             let mode = *self.mode.lock().await;

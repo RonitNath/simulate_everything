@@ -421,22 +421,22 @@ pub fn neutral_stance() -> StanceTemplate {
     StanceTemplate {
         id: StanceId::Neutral,
         offsets: [
-            Vec3::new(0.0, 0.0, HEAD_Z),                        // Head
-            Vec3::new(0.0, 0.0, NECK_Z),                        // Neck
-            Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),    // L shoulder
-            Vec3::new(SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),     // R shoulder
-            Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, ELBOW_Z),       // L elbow
-            Vec3::new(SHOULDER_HALF_WIDTH, 0.0, ELBOW_Z),        // R elbow
-            Vec3::new(-0.15, 0.0, HAND_Z),                       // L hand
-            Vec3::new(0.15, 0.0, HAND_Z),                        // R hand
-            Vec3::new(0.0, 0.0, UPPER_SPINE_Z),                  // Upper spine
-            Vec3::new(0.0, 0.0, LOWER_SPINE_Z),                  // Lower spine
-            Vec3::new(-HIP_HALF_WIDTH, 0.0, HIP_Z),              // L hip
-            Vec3::new(HIP_HALF_WIDTH, 0.0, HIP_Z),               // R hip
-            Vec3::new(-HIP_HALF_WIDTH, 0.0, KNEE_Z),             // L knee
-            Vec3::new(HIP_HALF_WIDTH, 0.0, KNEE_Z),              // R knee
-            Vec3::new(-HIP_HALF_WIDTH, 0.0, FOOT_Z),             // L foot
-            Vec3::new(HIP_HALF_WIDTH, 0.0, FOOT_Z),              // R foot
+            Vec3::new(0.0, 0.0, HEAD_Z),                      // Head
+            Vec3::new(0.0, 0.0, NECK_Z),                      // Neck
+            Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z), // L shoulder
+            Vec3::new(SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),  // R shoulder
+            Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, ELBOW_Z),    // L elbow
+            Vec3::new(SHOULDER_HALF_WIDTH, 0.0, ELBOW_Z),     // R elbow
+            Vec3::new(-0.15, 0.0, HAND_Z),                    // L hand
+            Vec3::new(0.15, 0.0, HAND_Z),                     // R hand
+            Vec3::new(0.0, 0.0, UPPER_SPINE_Z),               // Upper spine
+            Vec3::new(0.0, 0.0, LOWER_SPINE_Z),               // Lower spine
+            Vec3::new(-HIP_HALF_WIDTH, 0.0, HIP_Z),           // L hip
+            Vec3::new(HIP_HALF_WIDTH, 0.0, HIP_Z),            // R hip
+            Vec3::new(-HIP_HALF_WIDTH, 0.0, KNEE_Z),          // L knee
+            Vec3::new(HIP_HALF_WIDTH, 0.0, KNEE_Z),           // R knee
+            Vec3::new(-HIP_HALF_WIDTH, 0.0, FOOT_Z),          // L foot
+            Vec3::new(HIP_HALF_WIDTH, 0.0, FOOT_Z),           // R foot
         ],
         stiffness: 0.3,
     }
@@ -450,10 +450,10 @@ pub fn high_guard_stance() -> StanceTemplate {
             Vec3::new(0.0, 0.0, NECK_Z),
             Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),
             Vec3::new(SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),
-            Vec3::new(-0.10, 0.10, 1.30),                        // L elbow raised
-            Vec3::new(0.05, 0.10, 1.55),                         // R elbow high
-            Vec3::new(-0.10, 0.15, 1.20),                        // L hand guard
-            Vec3::new(0.0, 0.05, STANDING_HEIGHT + 0.05),        // R hand above head
+            Vec3::new(-0.10, 0.10, 1.30), // L elbow raised
+            Vec3::new(0.05, 0.10, 1.55),  // R elbow high
+            Vec3::new(-0.10, 0.15, 1.20), // L hand guard
+            Vec3::new(0.0, 0.05, STANDING_HEIGHT + 0.05), // R hand above head
             Vec3::new(0.0, 0.0, UPPER_SPINE_Z),
             Vec3::new(0.0, 0.0, LOWER_SPINE_Z),
             Vec3::new(-HIP_HALF_WIDTH, 0.0, HIP_Z),
@@ -475,18 +475,18 @@ pub fn mid_guard_stance() -> StanceTemplate {
             Vec3::new(0.0, 0.0, NECK_Z),
             Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),
             Vec3::new(SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),
-            Vec3::new(-0.15, 0.10, 1.15),                        // L elbow forward
-            Vec3::new(0.15, 0.15, 1.15),                         // R elbow forward
-            Vec3::new(-0.10, 0.20, 1.10),                        // L hand guard
-            Vec3::new(0.10, 0.25, 1.20),                         // R hand center chest
+            Vec3::new(-0.15, 0.10, 1.15), // L elbow forward
+            Vec3::new(0.15, 0.15, 1.15),  // R elbow forward
+            Vec3::new(-0.10, 0.20, 1.10), // L hand guard
+            Vec3::new(0.10, 0.25, 1.20),  // R hand center chest
             Vec3::new(0.0, 0.0, UPPER_SPINE_Z),
             Vec3::new(0.0, 0.0, LOWER_SPINE_Z),
             Vec3::new(-HIP_HALF_WIDTH, 0.0, HIP_Z),
             Vec3::new(HIP_HALF_WIDTH, 0.0, HIP_Z),
             Vec3::new(-HIP_HALF_WIDTH, 0.0, KNEE_Z),
-            Vec3::new(HIP_HALF_WIDTH, 0.05, KNEE_Z),             // Lead foot slightly forward
+            Vec3::new(HIP_HALF_WIDTH, 0.05, KNEE_Z), // Lead foot slightly forward
             Vec3::new(-HIP_HALF_WIDTH, 0.0, FOOT_Z),
-            Vec3::new(HIP_HALF_WIDTH, 0.10, FOOT_Z),             // R foot forward
+            Vec3::new(HIP_HALF_WIDTH, 0.10, FOOT_Z), // R foot forward
         ],
         stiffness: 0.6,
     }
@@ -500,13 +500,13 @@ pub fn low_guard_stance() -> StanceTemplate {
             Vec3::new(0.0, 0.0, NECK_Z),
             Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),
             Vec3::new(SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),
-            Vec3::new(-0.15, 0.05, 1.00),                        // L elbow low
-            Vec3::new(0.20, 0.05, 0.90),                         // R elbow low
-            Vec3::new(-0.10, 0.10, 0.85),                        // L hand low
-            Vec3::new(0.20, 0.10, 0.70),                         // R hand below waist
+            Vec3::new(-0.15, 0.05, 1.00), // L elbow low
+            Vec3::new(0.20, 0.05, 0.90),  // R elbow low
+            Vec3::new(-0.10, 0.10, 0.85), // L hand low
+            Vec3::new(0.20, 0.10, 0.70),  // R hand below waist
             Vec3::new(0.0, 0.0, UPPER_SPINE_Z),
             Vec3::new(0.0, 0.0, LOWER_SPINE_Z),
-            Vec3::new(-0.20, 0.0, HIP_Z),                        // Wide stance
+            Vec3::new(-0.20, 0.0, HIP_Z), // Wide stance
             Vec3::new(0.20, 0.0, HIP_Z),
             Vec3::new(-0.20, 0.0, KNEE_Z),
             Vec3::new(0.20, 0.0, KNEE_Z),
@@ -521,22 +521,22 @@ pub fn lunge_stance() -> StanceTemplate {
     StanceTemplate {
         id: StanceId::Lunge,
         offsets: [
-            Vec3::new(0.0, 0.15, HEAD_Z - 0.10),                 // Head forward, slightly lower
+            Vec3::new(0.0, 0.15, HEAD_Z - 0.10), // Head forward, slightly lower
             Vec3::new(0.0, 0.10, NECK_Z - 0.08),
             Vec3::new(-SHOULDER_HALF_WIDTH, 0.05, SHOULDER_Z - 0.05),
             Vec3::new(SHOULDER_HALF_WIDTH, 0.10, SHOULDER_Z - 0.05),
             Vec3::new(-0.15, 0.10, 1.05),
-            Vec3::new(0.10, 0.35, 1.15),                         // R elbow extended forward
+            Vec3::new(0.10, 0.35, 1.15), // R elbow extended forward
             Vec3::new(-0.10, 0.15, 0.95),
-            Vec3::new(0.05, 0.50, 1.20),                         // R hand max extension
+            Vec3::new(0.05, 0.50, 1.20), // R hand max extension
             Vec3::new(0.0, 0.08, UPPER_SPINE_Z - 0.03),
             Vec3::new(0.0, 0.0, LOWER_SPINE_Z),
-            Vec3::new(-HIP_HALF_WIDTH, -0.10, HIP_Z),            // Back hip
-            Vec3::new(HIP_HALF_WIDTH, 0.10, HIP_Z - 0.05),      // Lead hip forward+lower
+            Vec3::new(-HIP_HALF_WIDTH, -0.10, HIP_Z), // Back hip
+            Vec3::new(HIP_HALF_WIDTH, 0.10, HIP_Z - 0.05), // Lead hip forward+lower
             Vec3::new(-HIP_HALF_WIDTH, -0.15, KNEE_Z + 0.05),
-            Vec3::new(HIP_HALF_WIDTH, 0.25, KNEE_Z - 0.10),     // Deep lead knee
-            Vec3::new(-HIP_HALF_WIDTH, -0.20, FOOT_Z),           // Back foot behind
-            Vec3::new(HIP_HALF_WIDTH, 0.40, FOOT_Z),             // Lead foot far forward
+            Vec3::new(HIP_HALF_WIDTH, 0.25, KNEE_Z - 0.10), // Deep lead knee
+            Vec3::new(-HIP_HALF_WIDTH, -0.20, FOOT_Z),      // Back foot behind
+            Vec3::new(HIP_HALF_WIDTH, 0.40, FOOT_Z),        // Lead foot far forward
         ],
         stiffness: 0.7,
     }
@@ -551,15 +551,15 @@ pub fn withdraw_stance() -> StanceTemplate {
             Vec3::new(-SHOULDER_HALF_WIDTH, -0.03, SHOULDER_Z),
             Vec3::new(SHOULDER_HALF_WIDTH, -0.03, SHOULDER_Z),
             Vec3::new(-0.12, -0.05, 1.15),
-            Vec3::new(0.12, -0.05, 1.20),                        // R elbow retracted
+            Vec3::new(0.12, -0.05, 1.20), // R elbow retracted
             Vec3::new(-0.08, 0.00, 1.10),
-            Vec3::new(0.08, 0.00, 1.25),                         // R hand to chest
+            Vec3::new(0.08, 0.00, 1.25), // R hand to chest
             Vec3::new(0.0, -0.02, UPPER_SPINE_Z),
             Vec3::new(0.0, 0.0, LOWER_SPINE_Z),
-            Vec3::new(-0.10, 0.0, HIP_Z),                        // Narrow stance
+            Vec3::new(-0.10, 0.0, HIP_Z), // Narrow stance
             Vec3::new(0.10, 0.0, HIP_Z),
             Vec3::new(-0.10, 0.0, KNEE_Z),
-            Vec3::new(0.10, -0.05, KNEE_Z),                      // Weight back
+            Vec3::new(0.10, -0.05, KNEE_Z), // Weight back
             Vec3::new(-0.10, 0.0, FOOT_Z),
             Vec3::new(0.10, -0.10, FOOT_Z),
         ],
@@ -579,13 +579,13 @@ pub fn tool_swing_stance() -> StanceTemplate {
             Vec3::new(0.0, 0.03, NECK_Z),
             Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z),
             Vec3::new(SHOULDER_HALF_WIDTH, 0.05, SHOULDER_Z),
-            Vec3::new(-0.15, 0.05, 1.10),                        // L elbow forward
-            Vec3::new(0.10, 0.20, 1.30),                         // R elbow high/forward
-            Vec3::new(-0.10, 0.15, 1.00),                        // L hand on tool shaft
-            Vec3::new(0.05, 0.10, STANDING_HEIGHT),               // R hand high (tool grip)
+            Vec3::new(-0.15, 0.05, 1.10),           // L elbow forward
+            Vec3::new(0.10, 0.20, 1.30),            // R elbow high/forward
+            Vec3::new(-0.10, 0.15, 1.00),           // L hand on tool shaft
+            Vec3::new(0.05, 0.10, STANDING_HEIGHT), // R hand high (tool grip)
             Vec3::new(0.0, 0.02, UPPER_SPINE_Z),
             Vec3::new(0.0, 0.0, LOWER_SPINE_Z),
-            Vec3::new(-0.18, 0.0, HIP_Z),                        // Wide stance for stability
+            Vec3::new(-0.18, 0.0, HIP_Z), // Wide stance for stability
             Vec3::new(0.18, 0.0, HIP_Z),
             Vec3::new(-0.18, 0.0, KNEE_Z),
             Vec3::new(0.18, 0.0, KNEE_Z),
@@ -600,13 +600,13 @@ pub fn carry_stance() -> StanceTemplate {
     StanceTemplate {
         id: StanceId::Carry,
         offsets: [
-            Vec3::new(0.0, -0.02, HEAD_Z - 0.02),                // Slightly hunched
+            Vec3::new(0.0, -0.02, HEAD_Z - 0.02), // Slightly hunched
             Vec3::new(0.0, -0.01, NECK_Z - 0.01),
             Vec3::new(-SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z - 0.02),
             Vec3::new(SHOULDER_HALF_WIDTH, 0.0, SHOULDER_Z - 0.02),
-            Vec3::new(-0.20, 0.10, 1.00),                        // Arms forward, holding
+            Vec3::new(-0.20, 0.10, 1.00), // Arms forward, holding
             Vec3::new(0.20, 0.10, 1.00),
-            Vec3::new(-0.15, 0.20, 0.95),                        // Hands gripping load
+            Vec3::new(-0.15, 0.20, 0.95), // Hands gripping load
             Vec3::new(0.15, 0.20, 0.95),
             Vec3::new(0.0, -0.01, UPPER_SPINE_Z - 0.02),
             Vec3::new(0.0, 0.0, LOWER_SPINE_Z),
@@ -625,22 +625,22 @@ pub fn climb_stance() -> StanceTemplate {
     StanceTemplate {
         id: StanceId::Climb,
         offsets: [
-            Vec3::new(0.0, 0.15, HEAD_Z + 0.10),                 // Head forward and up
+            Vec3::new(0.0, 0.15, HEAD_Z + 0.10), // Head forward and up
             Vec3::new(0.0, 0.10, NECK_Z + 0.05),
             Vec3::new(-SHOULDER_HALF_WIDTH, 0.08, SHOULDER_Z + 0.05),
             Vec3::new(SHOULDER_HALF_WIDTH, 0.08, SHOULDER_Z + 0.05),
-            Vec3::new(-0.15, 0.15, 1.40),                        // L elbow reaching up
-            Vec3::new(0.15, 0.15, 1.20),                         // R elbow lower (alternating grip)
-            Vec3::new(-0.10, 0.20, 1.55),                        // L hand gripping above
-            Vec3::new(0.10, 0.20, 1.30),                         // R hand gripping lower
+            Vec3::new(-0.15, 0.15, 1.40), // L elbow reaching up
+            Vec3::new(0.15, 0.15, 1.20),  // R elbow lower (alternating grip)
+            Vec3::new(-0.10, 0.20, 1.55), // L hand gripping above
+            Vec3::new(0.10, 0.20, 1.30),  // R hand gripping lower
             Vec3::new(0.0, 0.10, UPPER_SPINE_Z + 0.03),
             Vec3::new(0.0, 0.05, LOWER_SPINE_Z),
             Vec3::new(-HIP_HALF_WIDTH, 0.0, HIP_Z),
             Vec3::new(HIP_HALF_WIDTH, 0.0, HIP_Z),
-            Vec3::new(-HIP_HALF_WIDTH, 0.05, KNEE_Z + 0.10),    // L knee raised (stepping)
+            Vec3::new(-HIP_HALF_WIDTH, 0.05, KNEE_Z + 0.10), // L knee raised (stepping)
             Vec3::new(HIP_HALF_WIDTH, 0.0, KNEE_Z),
-            Vec3::new(-HIP_HALF_WIDTH, 0.10, FOOT_Z + 0.20),    // L foot on hold
-            Vec3::new(HIP_HALF_WIDTH, 0.0, FOOT_Z),              // R foot planted
+            Vec3::new(-HIP_HALF_WIDTH, 0.10, FOOT_Z + 0.20), // L foot on hold
+            Vec3::new(HIP_HALF_WIDTH, 0.0, FOOT_Z),          // R foot planted
         ],
         stiffness: 0.6,
     }

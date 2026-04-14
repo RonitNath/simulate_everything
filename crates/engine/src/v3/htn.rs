@@ -5,6 +5,7 @@ use smallvec::smallvec;
 use super::action_queue::Action;
 use super::spatial::Vec3;
 use super::state::{GameState, StructureType};
+use super::terrain_ops::TerrainOp;
 use super::utility::Goal;
 use crate::v2::state::EntityKey;
 
@@ -49,7 +50,11 @@ impl DomainRegistry {
     }
 
     pub fn methods_for_goal(&self, player: Option<u8>, goal: Goal) -> Vec<&HtnMethod> {
-        let mut methods: Vec<&HtnMethod> = self.defaults.iter().filter(|method| method.goal == goal).collect();
+        let mut methods: Vec<&HtnMethod> = self
+            .defaults
+            .iter()
+            .filter(|method| method.goal == goal)
+            .collect();
         if let Some(owner) = player {
             if let Some(extra) = self.faction_injections.get(owner as usize) {
                 methods.extend(extra.iter().filter(|method| method.goal == goal));
@@ -235,9 +240,24 @@ fn nearest_friendly_structure(
         })
         .filter_map(|(key, other)| {
             let other_pos = other.pos?;
-            Some((key, (other_pos.x - pos.x).powi(2) + (other_pos.y - pos.y).powi(2)))
+            let mut score = (other_pos.x - pos.x).powi(2) + (other_pos.y - pos.y).powi(2);
+            let hex = other
+                .hex
+                .unwrap_or_else(|| crate::v2::hex::offset_to_axial(0, 0));
+            let ops = state.terrain_ops.ops_for_hex(hex);
+            if structure_type == StructureType::Farm
+                && ops.iter().any(|op| matches!(op, TerrainOp::Furrow { .. }))
+            {
+                score *= 0.7;
+            }
+            if ops.iter().any(|op| matches!(op, TerrainOp::Road { .. })) {
+                score *= 0.85;
+            }
+            Some((key, score))
         })
-        .min_by(|(_, left), (_, right)| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|(_, left), (_, right)| {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|(key, _)| key)
 }
 
@@ -257,8 +277,13 @@ fn nearest_enemy_person(state: &GameState, entity_key: EntityKey) -> Option<Enti
         .filter(|(_, other)| other.person.is_some())
         .filter_map(|(key, other)| {
             let other_pos = other.pos?;
-            Some((key, (other_pos.x - pos.x).powi(2) + (other_pos.y - pos.y).powi(2)))
+            Some((
+                key,
+                (other_pos.x - pos.x).powi(2) + (other_pos.y - pos.y).powi(2),
+            ))
         })
-        .min_by(|(_, left), (_, right)| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|(_, left), (_, right)| {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|(key, _)| key)
 }

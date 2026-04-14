@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 
-use super::agent::{AgentOutput, LayeredAgent};
 use super::action_queue::{Action, CurrentAction};
+use super::agent::{AgentOutput, LayeredAgent};
 use super::body_physics;
 use super::combat_log::CombatObservation;
 use super::commands::{CommandApplySummary, apply_agent_output};
@@ -196,7 +196,12 @@ fn tick_entity_behavior(state: &mut GameState, entity_key: EntityKey, dt: f32, b
     let owner = entity_snapshot.owner.unwrap_or(0);
     let pos = entity_snapshot.pos.unwrap_or(Vec3::ZERO);
     let enemy_close = enemy_nearby(state, entity_key, 90.0);
-    let resolution = resolution_demand_at(state, entity_snapshot.hex.unwrap_or_else(|| super::hex::world_to_hex(pos)));
+    let resolution = resolution_demand_at(
+        state,
+        entity_snapshot
+            .hex
+            .unwrap_or_else(|| super::hex::world_to_hex(pos)),
+    );
     let weights = state
         .faction_need_weights
         .get(owner as usize)
@@ -215,15 +220,24 @@ fn tick_entity_behavior(state: &mut GameState, entity_key: EntityKey, dt: f32, b
         .get_mut(entity_key)
         .and_then(|entity| entity.behavior.as_mut())
     {
-        let ticks_elapsed = state.tick.saturating_sub(behavior.last_decision_tick).max(1);
-        apply_decay(&mut behavior.needs, NeedDecayRates::default(), ticks_elapsed, dt);
+        let ticks_elapsed = state
+            .tick
+            .saturating_sub(behavior.last_decision_tick)
+            .max(1);
+        apply_decay(
+            &mut behavior.needs,
+            NeedDecayRates::default(),
+            ticks_elapsed,
+            dt,
+        );
         if enemy_close {
             behavior.needs.safety = behavior.needs.safety.max(0.7);
         }
         if waypoints_empty {
             behavior.needs.duty = (behavior.needs.duty + 0.02).clamp(0.0, 1.0);
         }
-        should_replan = state.tick >= behavior.next_decision_tick || behavior.action_queue.is_empty();
+        should_replan =
+            state.tick >= behavior.next_decision_tick || behavior.action_queue.is_empty();
     }
 
     if should_replan {
@@ -233,7 +247,8 @@ fn tick_entity_behavior(state: &mut GameState, entity_key: EntityKey, dt: f32, b
             .and_then(|entity| entity.behavior.as_ref())
             .map(|behavior| behavior.needs)
             .unwrap_or_default();
-        let choice = UtilityScorer::choose_goal(state, entity_key, needs, weights, resolution, enemy_close);
+        let choice =
+            UtilityScorer::choose_goal(state, entity_key, needs, weights, resolution, enemy_close);
         let plan = htn::decompose_goal(state, entity_key, choice.goal);
         if let Some(behavior) = state
             .entities
@@ -254,8 +269,8 @@ fn tick_entity_behavior(state: &mut GameState, entity_key: EntityKey, dt: f32, b
                 reason: choice.reason,
             });
             behavior.last_decision_tick = state.tick;
-            behavior.next_decision_tick = state.tick
-                + decision_interval(choice.goal, enemy_close, resolution, person.role);
+            behavior.next_decision_tick =
+                state.tick + decision_interval(choice.goal, enemy_close, resolution, person.role);
         }
     }
 
@@ -315,7 +330,9 @@ fn advance_current_action(state: &mut GameState, entity_key: EntityKey, dt: f32,
             true
         }
         Action::AttackTarget { target } => advance_attack_action(state, entity_key, target),
-        Action::FleeFrom { threat, distance } => advance_flee_action(state, entity_key, threat, distance, batch_mode),
+        Action::FleeFrom { threat, distance } => {
+            advance_flee_action(state, entity_key, threat, distance, batch_mode)
+        }
         Action::Rest { duration } => {
             advance_timed_action(state, entity_key, dt, duration, |state, entity_key| {
                 if let Some(behavior) = state
@@ -351,7 +368,9 @@ fn advance_current_action(state: &mut GameState, entity_key: EntityKey, dt: f32,
                 }
             })
         }
-        Action::Wait { duration } => advance_timed_action(state, entity_key, dt, duration, |_state, _entity_key| {}),
+        Action::Wait { duration } => {
+            advance_timed_action(state, entity_key, dt, duration, |_state, _entity_key| {})
+        }
     };
 
     if complete
@@ -365,7 +384,12 @@ fn advance_current_action(state: &mut GameState, entity_key: EntityKey, dt: f32,
     }
 }
 
-fn advance_move_action(state: &mut GameState, entity_key: EntityKey, target: Vec3, batch_mode: bool) -> bool {
+fn advance_move_action(
+    state: &mut GameState,
+    entity_key: EntityKey,
+    target: Vec3,
+    batch_mode: bool,
+) -> bool {
     if batch_mode {
         if let Some(entity) = state.entities.get_mut(entity_key) {
             entity.pos = Some(target);
@@ -412,7 +436,10 @@ fn advance_timed_action(
 }
 
 fn apply_work_effect(state: &mut GameState, entity_key: EntityKey, target: EntityKey) {
-    let owner = state.entities.get(entity_key).and_then(|entity| entity.owner);
+    let owner = state
+        .entities
+        .get(entity_key)
+        .and_then(|entity| entity.owner);
     let Some(owner) = owner else {
         return;
     };
@@ -437,7 +464,11 @@ fn apply_work_effect(state: &mut GameState, entity_key: EntityKey, target: Entit
 }
 
 fn apply_consume_effect(state: &mut GameState, entity_key: EntityKey) {
-    let Some(owner) = state.entities.get(entity_key).and_then(|entity| entity.owner) else {
+    let Some(owner) = state
+        .entities
+        .get(entity_key)
+        .and_then(|entity| entity.owner)
+    else {
         return;
     };
     use simulate_everything_protocol::CommodityKind;
@@ -1538,7 +1569,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1564,7 +1594,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1617,7 +1646,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())
@@ -1641,7 +1669,6 @@ mod tests {
                 .person(Person {
                     role: Role::Soldier,
                     combat_skill: 0.5,
-                    task: None,
                 })
                 .mobile(Mobile::new(2.0, 10.0))
                 .combatant(Combatant::new())

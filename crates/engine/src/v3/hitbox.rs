@@ -218,11 +218,7 @@ pub fn capsule_sweep_test(
 
 /// Test a line segment (sword sweep) against a disc hitbox (shield).
 /// Returns the parameter t along the sweep and the hit point, or None.
-pub fn disc_sweep_test(
-    sweep_start: Vec3,
-    sweep_end: Vec3,
-    disc: &Disc,
-) -> Option<(f32, Vec3)> {
+pub fn disc_sweep_test(sweep_start: Vec3, sweep_end: Vec3, disc: &Disc) -> Option<(f32, Vec3)> {
     let d = sweep_end - sweep_start;
     let denom = disc.normal.dot(d);
 
@@ -353,9 +349,9 @@ pub enum GeometricHitOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::body_model::{BodyModel, StanceId};
     use super::super::body_physics::step_body;
+    use super::*;
     use std::f32::consts::{FRAC_PI_2, PI};
 
     fn flat_terrain(_x: f32, _y: f32) -> f32 {
@@ -398,11 +394,8 @@ mod tests {
             radius: 0.1,
         };
         // Sweep passes far from the capsule
-        let result = capsule_sweep_test(
-            Vec3::new(5.0, 0.0, 1.0),
-            Vec3::new(6.0, 0.0, 1.0),
-            &capsule,
-        );
+        let result =
+            capsule_sweep_test(Vec3::new(5.0, 0.0, 1.0), Vec3::new(6.0, 0.0, 1.0), &capsule);
         assert!(result.is_none(), "far sweep should miss");
     }
 
@@ -431,11 +424,7 @@ mod tests {
             normal: Vec3::new(0.0, -1.0, 0.0), // facing toward sweep
             radius: 0.3,
         };
-        let result = disc_sweep_test(
-            Vec3::new(0.0, 0.0, 1.0),
-            Vec3::new(0.0, 1.0, 1.0),
-            &disc,
-        );
+        let result = disc_sweep_test(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 1.0), &disc);
         assert!(result.is_some(), "head-on sweep should hit disc");
     }
 
@@ -447,11 +436,7 @@ mod tests {
             radius: 0.1,
         };
         // Sweep passes outside disc radius
-        let result = disc_sweep_test(
-            Vec3::new(0.5, 0.0, 1.0),
-            Vec3::new(0.5, 1.0, 1.0),
-            &disc,
-        );
+        let result = disc_sweep_test(Vec3::new(0.5, 0.0, 1.0), Vec3::new(0.5, 1.0, 1.0), &disc);
         assert!(result.is_none(), "sweep outside radius should miss");
     }
 
@@ -463,11 +448,7 @@ mod tests {
             radius: 0.3,
         };
         // Sweep parallel to disc face
-        let result = disc_sweep_test(
-            Vec3::new(0.0, 0.0, 1.0),
-            Vec3::new(0.0, 1.0, 1.0),
-            &disc,
-        );
+        let result = disc_sweep_test(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 1.0), &disc);
         // Parallel sweep might intersect the plane at one point if aligned,
         // but with near-zero denominator should be treated as miss
         // Actually this sweep IS in the disc plane... the dot product
@@ -477,12 +458,13 @@ mod tests {
 
     #[test]
     fn disc_deflection_angle_head_on() {
-        let angle = disc_deflection_angle(
-            Vec3::new(0.0, 1.0, 0.0),
-            Vec3::new(0.0, -1.0, 0.0),
-        );
+        let angle = disc_deflection_angle(Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
         // Head-on: sweep direction opposite to normal → cos_angle = 1.0 → angle = 0
-        assert!(angle < 0.1, "head-on should be near 0: {}", angle.to_degrees());
+        assert!(
+            angle < 0.1,
+            "head-on should be near 0: {}",
+            angle.to_degrees()
+        );
     }
 
     #[test]
@@ -584,7 +566,9 @@ mod tests {
         );
 
         match outcome {
-            GeometricHitOutcome::ShieldBlock { deflection_angle, .. } => {
+            GeometricHitOutcome::ShieldBlock {
+                deflection_angle, ..
+            } => {
                 assert!(
                     deflection_angle < PI / 4.0,
                     "head-on shield block should have low deflection angle: {:.1} deg",
@@ -610,6 +594,9 @@ mod tests {
 
         let slow_velocity = 2.0;
         let slow_ke = 0.5 * disc_mass * slow_velocity * slow_velocity;
-        assert!(ke > slow_ke * 2.0, "faster bash should be quadratically stronger");
+        assert!(
+            ke > slow_ke * 2.0,
+            "faster bash should be quadratically stronger"
+        );
     }
 }

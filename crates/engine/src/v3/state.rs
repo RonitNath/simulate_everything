@@ -52,17 +52,6 @@ pub struct Stack {
 
 pub use simulate_everything_protocol::{CommodityKind, ResourceType, Role, StructureType};
 
-/// Persistent task assignment for per-tick economy and spectator state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TaskAssignment {
-    Farm { site: EntityKey },
-    Workshop { site: EntityKey },
-    Patrol,
-    Garrison,
-    Train,
-    Idle,
-}
-
 // ---------------------------------------------------------------------------
 // Behavior state (Stream E)
 // ---------------------------------------------------------------------------
@@ -113,8 +102,6 @@ pub struct Person {
     pub role: Role,
     /// Training level 0.0–1.0. Affects aim, block timing, target leading.
     pub combat_skill: f32,
-    /// Current long-lived assignment used by the economy/runtime layers.
-    pub task: Option<TaskAssignment>,
 }
 
 // ---------------------------------------------------------------------------
@@ -508,7 +495,6 @@ mod tests {
             .person(Person {
                 role: Role::Soldier,
                 combat_skill: 0.6,
-                task: None,
             })
             .mobile(Mobile::new(2.0, 10.0))
             .combatant(Combatant::new())
