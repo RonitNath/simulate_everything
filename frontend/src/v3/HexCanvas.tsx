@@ -366,18 +366,13 @@ const V3HexCanvas: Component<V3HexCanvasProps> = (props) => {
       background: 0x0a0a0f,
       resizeTo: canvasRef,
       antialias: true,
-      // We handle wheel zoom ourselves on the raw canvas element.
-      // Disable PixiJS wheel interception to avoid hit-test crashes on
-      // synthetic events while keeping pointer events for tooltips.
-      eventFeatures: { move: true, globalMove: true, click: true, wheel: false },
-      // Prevent GPU stalls from ReadPixels in headless/screenshot contexts.
-      preserveDrawingBuffer: true,
+      // Disable the PixiJS event system entirely — we handle all
+      // pointer/wheel events on the raw canvas element. PixiJS's
+      // EventSystem crashes on Graphics hit-testing (isInteractive)
+      // and interferes with our custom zoom/pan handlers.
+      eventFeatures: { move: false, globalMove: false, click: false, wheel: false },
     });
     canvasRef.appendChild(app.canvas);
-
-    // All pointer/wheel events are handled via raw canvas listeners.
-    // Disable PixiJS hit-testing to avoid isInteractive errors on Graphics.
-    app.stage.interactiveChildren = false;
 
     world = new Container();
     app.stage.addChild(world);
