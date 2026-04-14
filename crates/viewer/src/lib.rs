@@ -1,11 +1,13 @@
 mod camera;
 mod gpu;
 mod heightmap;
+mod hex_overlay;
 mod input;
 
 use camera::Camera;
 use gpu::GpuState;
 use heightmap::HeightmapRenderer;
+use hex_overlay::HexOverlayRenderer;
 use input::InputState;
 
 use std::cell::RefCell;
@@ -42,6 +44,7 @@ struct ViewerApp {
 struct ViewerState {
     gpu: GpuState,
     terrain: HeightmapRenderer,
+    hex_overlay: HexOverlayRenderer,
     camera: Camera,
     input: InputState,
     last_frame: f64,
@@ -62,7 +65,6 @@ impl ApplicationHandler for ViewerApp {
             .unwrap()
             .dyn_into()
             .unwrap();
-        // Insert canvas before the UI overlay div
         root.prepend_with_node_1(&canvas).unwrap();
 
         let attrs = Window::default_attributes().with_canvas(Some(canvas));
@@ -115,6 +117,39 @@ impl ApplicationHandler for ViewerApp {
             let terrain =
                 HeightmapRenderer::new(&gpu, map_size, map_size, &height_data, &material_data);
 
+            // Demo hex ownership: 7x7 hex grid, alternating players
+            let hex_w = 7u32;
+            let hex_h = 7u32;
+            let hex_ownership: Vec<Option<u8>> = (0..(hex_w * hex_h))
+                .map(|i| {
+                    let q = (i % hex_w) as i32;
+                    let r = (i / hex_w) as i32;
+                    // Assign ownership based on distance from center
+                    let cq = q as f32 - hex_w as f32 / 2.0;
+                    let cr = r as f32 - hex_h as f32 / 2.0;
+                    let dist = (cq * cq + cr * cr).sqrt();
+                    if dist < 2.0 {
+                        Some(0) // blue center
+                    } else if dist < 3.5 {
+                        Some(1) // red ring
+                    } else {
+                        None // unowned
+                    }
+                })
+                .collect();
+
+            let hex_overlay = HexOverlayRenderer::new(
+                &gpu,
+                terrain.camera_bind_group_layout(),
+                terrain.heightmap_view(),
+                terrain.sampler(),
+                map_size,
+                map_size,
+                &hex_ownership,
+                hex_w,
+                hex_h,
+            );
+
             let now = web_sys::window()
                 .unwrap()
                 .performance()
@@ -124,12 +159,13 @@ impl ApplicationHandler for ViewerApp {
             *state_ref.borrow_mut() = Some(ViewerState {
                 gpu,
                 terrain,
+                hex_overlay,
                 camera,
                 input: InputState::new(),
                 last_frame: now,
             });
 
-            log::info!("GPU initialized, terrain ready");
+            log::info!("GPU initialized, terrain + hex overlay ready");
             win.request_redraw();
         });
     }
@@ -179,6 +215,9 @@ impl ApplicationHandler for ViewerApp {
                 // Update camera from held keys
                 state.input.update_camera(&mut state.camera, dt);
 
+                // Flush any dirty terrain chunks
+                state.terrain.flush_dirty_chunks(&state.gpu.queue);
+
                 // Render
                 let camera_uniforms = state.camera.uniforms();
                 let camera_target = state.camera.target.to_array();
@@ -200,6 +239,7 @@ impl ApplicationHandler for ViewerApp {
                     },
                 );
 
+                // Pass 1: terrain
                 state.terrain.render(
                     &mut encoder,
                     &view,
@@ -209,10 +249,19 @@ impl ApplicationHandler for ViewerApp {
                     camera_target,
                 );
 
+                // Pass 2: hex overlay (on top of terrain)
+                state.hex_overlay.render(
+                    &mut encoder,
+                    &view,
+                    &state.gpu.depth_view,
+                    state.terrain.camera_bind_group(),
+                );
+
                 state.gpu.queue.submit(std::iter::once(encoder.finish()));
                 frame.present();
 
                 // Request next frame
+                drop(state_borrow);
                 if let Some(win) = &self.window {
                     win.request_redraw();
                 }
