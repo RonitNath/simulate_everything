@@ -16,6 +16,7 @@ interface PlaybackControlsProps {
   onServerPause: () => void;
   onServerResume: () => void;
   onReset: () => void;
+  onResync: () => void;
 }
 
 const SPEED_PRESETS = [
@@ -93,6 +94,13 @@ const PlaybackControls: Component<PlaybackControlsProps> = (props) => {
           title="Reset game"
         >
           RST
+        </button>
+        <button
+          class={css.v3Btn}
+          onClick={() => props.onResync()}
+          title="Resync: reconnect WebSocket for fresh full snapshot"
+        >
+          SYNC
         </button>
       </div>
     </div>
