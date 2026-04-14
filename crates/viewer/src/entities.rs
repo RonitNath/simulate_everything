@@ -31,11 +31,12 @@ pub struct EntityGpuData {
 }
 
 /// Interpolation uniforms. Must match interpolate.wgsl.
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct InterpolationUniforms {
     t: f32,
     entity_count: u32,
+    _pad0: [u32; 2],
     camera_pos: [f32; 3],
     viewport_height: f32,
     lod_scale: f32,
@@ -54,6 +55,7 @@ struct EntityUniforms {
 const MAX_ENTITIES: u32 = 16384;
 const CLOSE_VERTS_PER_ENTITY: u32 = 24; // 8 triangles × 3 verts
 const MID_VERTS_PER_ENTITY: u32 = 12; // diamond + facing indicator
+const INTERPOLATION_UNIFORM_BINDING_SIZE: u64 = 64;
 
 /// Entity renderer with compute interpolation and LOD-based drawing.
 pub struct EntityRenderer {
@@ -102,7 +104,7 @@ impl EntityRenderer {
 
         let interp_uniform_buf = device.create_buffer(&BufferDescriptor {
             label: Some("interp uniforms"),
-            size: std::mem::size_of::<InterpolationUniforms>() as u64,
+            size: INTERPOLATION_UNIFORM_BINDING_SIZE,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -272,6 +274,7 @@ impl EntityRenderer {
         let uniforms = InterpolationUniforms {
             t,
             entity_count: self.entity_count,
+            _pad0: [0; 2],
             camera_pos,
             viewport_height,
             lod_scale: 86.6 / std::f32::consts::FRAC_PI_4.tan(),
