@@ -17,6 +17,8 @@ web-sys = { version = "0.3", features = [
     "Element",
     "HtmlCanvasElement",
     "Location",
+    "Url",
+    "UrlSearchParams",
     "WebSocket",
     "MessageEvent",
     "BinaryType",

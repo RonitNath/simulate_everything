@@ -271,10 +271,13 @@ SolidJS + Vite + vanilla-extract CSS. Built to `frontend/dist/` by systemd on de
 ## Environment Variables
 | Var | Default | Used by |
 |-----|---------|---------|
+| `SIMEV_BIND_ADDR` | `127.0.0.1` | HTTP/WebSocket bind address |
+| `SIMEV_PORT` | `3333` | HTTP/WebSocket listen port |
 | `SIMEV_PLAYERS` | 2 | Live lobby size |
 | `SIMEV_TICK_MS` | 250 | Live tick speed |
 | `SIMEV_SEED` | 42 | Live first game seed |
 | `SIMEV_V2_RR_REVIEW_DIR` | `var/v2_rr_reviews` | Persisted flagged V2 RR review bundles |
+| `SIMEV_V3_RR_REVIEW_DIR` | `var/v3_reviews` | Persisted flagged V3 RR review bundles |
 | `SIMEV_STATIC_DIR` | — | Path to `frontend/dist/` |
 | `SIMEV_PYTHON_CLIENT` | — | Path to Python agent dir |
 | `RUST_LOG` | — | Tracing level |
@@ -482,6 +485,23 @@ Implemented in `crates/web/src/v3_roundrobin.rs` (`V3RoundRobin`).
 - The shared engine tick now owns per-tick food/material production, food consumption, and immediate workshop equipment spawning from contained stockpile resources.
 - Live `/v3/rr` and `/v3/replay` both merge stack create/update/dissolve deltas through the same frontend helper, so stack state stays visually consistent between live and replay views.
 - V3 snapshots now derive territory ownership, structure overlays, player stockpile levels, and basic entity task labels from shared engine state rather than hardcoded zeros or `None`.
+
+### Standalone Viewer Dev Targeting
+
+The standalone Rust viewer in `crates/viewer/` defaults to same-origin `ws(s)://<page-host>/ws/v3/rr`.
+
+- `?server=http://127.0.0.1:3334` derives `ws://127.0.0.1:3334/ws/v3/rr`
+- `?ws=ws://127.0.0.1:3334/ws/v3/rr` overrides the socket URL directly
+- invalid overrides fall back to same-origin and log a warning in the browser console
+
+Recommended local visual-test workflow:
+
+```bash
+./scripts/run-v3-viewer-dev-backend.sh
+cd crates/viewer && trunk serve
+```
+
+Open `http://127.0.0.1:8088/?server=http://127.0.0.1:3334` to target the isolated loopback backend while leaving the machine-wide systemd service untouched.
 
 ### V2 Agents
 

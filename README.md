@@ -53,6 +53,22 @@ SIMEV_STATIC_DIR=$PWD/frontend/dist cargo run -p simulate-everything-web
 
 The server listens on `127.0.0.1:3333` by default.
 
+For isolated viewer work without touching the machine-wide systemd service, run a worktree-local backend on loopback:
+
+```bash
+./scripts/run-v3-viewer-dev-backend.sh
+cd crates/viewer
+trunk serve
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8088/?server=http://127.0.0.1:3334
+```
+
+The viewer also accepts `?ws=ws://127.0.0.1:3334/ws/v3/rr` for an explicit WebSocket override. Without either query param, it keeps the current same-origin behavior.
+
 Useful pages:
 
 - `/` simulator replay viewer
@@ -121,6 +137,8 @@ Key environment variables:
 - `SIMEV_PLAYERS` live lobby size, default `2`
 - `SIMEV_TICK_MS` live tick speed, default `250`
 - `SIMEV_SEED` initial live-game seed, default `42`
+- `SIMEV_V2_RR_REVIEW_DIR` persisted V2 RR review bundle directory
+- `SIMEV_V3_RR_REVIEW_DIR` persisted V3 RR review bundle directory
 - `SIMEV_PYTHON_CLIENT` path used by the subprocess bridge agent
 - `RUST_LOG` tracing level
 

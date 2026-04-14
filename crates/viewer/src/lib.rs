@@ -25,7 +25,7 @@ use std::sync::Arc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
-use web_sys::{BinaryType, MessageEvent, WebSocket};
+use web_sys::{BinaryType, MessageEvent, Url, UrlSearchParams, WebSocket};
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -284,13 +284,8 @@ impl ApplicationHandler for ViewerApp {
 }
 
 fn attach_live_socket(state_ref: Rc<RefCell<Option<ViewerState>>>, window: Arc<Window>) {
-    let location = web_sys::window().unwrap().location();
-    let protocol = match location.protocol().unwrap().as_str() {
-        "https:" => "wss:",
-        _ => "ws:",
-    };
-    let host = location.host().unwrap();
-    let ws_url = format!("{protocol}//{host}/ws/v3/rr");
+    let ws_url = resolve_ws_url();
+    log::info!("viewer connecting to {ws_url}");
     let ws = WebSocket::new(&ws_url).expect("Failed to create websocket");
     ws.set_binary_type(BinaryType::Arraybuffer);
 
@@ -349,6 +344,75 @@ fn attach_live_socket(state_ref: Rc<RefCell<Option<ViewerState>>>, window: Arc<W
 
     if let Some(state) = state_ref.borrow_mut().as_mut() {
         state.websocket = Some(ws);
+    }
+}
+
+fn resolve_ws_url() -> String {
+    let location = web_sys::window().unwrap().location();
+    let current_href = location.href().unwrap_or_else(|_| String::new());
+    let current_protocol = location.protocol().unwrap_or_else(|_| "http:".to_string());
+    let current_host = location.host().unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    let search = location.search().unwrap_or_default();
+    let params = match UrlSearchParams::new_with_str(&search) {
+        Ok(params) => params,
+        Err(_) => {
+            log::warn!("failed to parse query parameters from location search: {search}");
+            return format!(
+                "{}//{current_host}/ws/v3/rr",
+                http_to_ws_scheme(&current_protocol)
+            );
+        }
+    };
+
+    if let Some(explicit_ws) = params.get("ws") {
+        if let Some(url) = normalize_ws_override(&explicit_ws, &current_href) {
+            return url;
+        }
+        log::warn!("ignoring invalid viewer ws override: {explicit_ws}");
+    }
+
+    if let Some(server_origin) = params.get("server") {
+        if let Some(url) = derive_ws_from_server(&server_origin, &current_href) {
+            return url;
+        }
+        log::warn!("ignoring invalid viewer server override: {server_origin}");
+    }
+
+    format!(
+        "{}//{current_host}/ws/v3/rr",
+        http_to_ws_scheme(&current_protocol)
+    )
+}
+
+fn normalize_ws_override(candidate: &str, current_href: &str) -> Option<String> {
+    let url = resolve_url(candidate, current_href)?;
+    match url.protocol().as_str() {
+        "ws:" | "wss:" => Some(url.href()),
+        _ => None,
+    }
+}
+
+fn derive_ws_from_server(candidate: &str, current_href: &str) -> Option<String> {
+    let url = resolve_url(candidate, current_href)?;
+    let ws_scheme = match url.protocol().as_str() {
+        "http:" => "ws:",
+        "https:" => "wss:",
+        _ => return None,
+    };
+    Some(format!("{ws_scheme}//{}/ws/v3/rr", url.host()))
+}
+
+fn resolve_url(candidate: &str, current_href: &str) -> Option<Url> {
+    Url::new(candidate)
+        .ok()
+        .or_else(|| Url::new_with_base(candidate, current_href).ok())
+}
+
+fn http_to_ws_scheme(protocol: &str) -> &'static str {
+    match protocol {
+        "https:" => "wss:",
+        _ => "ws:",
     }
 }
 
