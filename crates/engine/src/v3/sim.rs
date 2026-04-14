@@ -162,6 +162,25 @@ fn rebuild_spatial_index(state: &mut GameState) {
             entity.hex = Some(new_hex);
         }
     }
+
+    // Rebuild fine index (full rebuild each tick — cheap hash table ops)
+    state.fine_index.rebuild(
+        state
+            .entities
+            .iter()
+            .filter_map(|(key, e)| e.pos.map(|p| (key, p))),
+    );
+
+    // Rebuild coarse index (full rebuild each tick — few cells, cheap)
+    state.coarse_index.rebuild(state.entities.iter().filter_map(|(key, e)| {
+        let pos = e.pos?;
+        let is_soldier = e
+            .person
+            .as_ref()
+            .map(|p| p.role == super::state::Role::Soldier)
+            .unwrap_or(false);
+        Some((key, pos, e.owner, is_soldier))
+    }));
 }
 
 // ---------------------------------------------------------------------------

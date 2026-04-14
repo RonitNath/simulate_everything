@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod armor;
 pub mod body;
+pub mod coarse_index;
 pub mod collision;
 pub mod combat_log;
 pub mod commands;
@@ -9,8 +10,10 @@ pub mod damage_table;
 pub mod derived;
 pub mod economy;
 pub mod equipment;
+pub mod fine_index;
 pub mod formation;
 pub mod hex;
+pub mod hex_mapping;
 pub mod index;
 pub mod lifecycle;
 pub mod mapgen;
