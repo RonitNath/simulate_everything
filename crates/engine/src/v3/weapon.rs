@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::armor::DamageType;
 use super::armor::MaterialType;
 use super::damage::Impact;
+use super::martial::{self, AttackMotion};
 use super::spatial::Vec3;
 use crate::v2::state::EntityKey;
 
@@ -66,9 +67,13 @@ pub struct AttackState {
     /// The weapon entity being used.
     pub weapon: EntityKey,
     /// Ticks elapsed since attack started.
-    pub progress: u16,
+    pub progress: f32,
     /// Past commitment threshold — cannot cancel, only degrade on stagger.
     pub committed: bool,
+    /// Selected sword motion for this attack.
+    pub motion: AttackMotion,
+    /// Snapshot of attacker melee training when the attack began.
+    pub attacker_skill: f32,
 }
 
 impl AttackState {
@@ -76,8 +81,26 @@ impl AttackState {
         Self {
             target,
             weapon,
-            progress: 0,
+            progress: 0.0,
             committed: false,
+            motion: AttackMotion::Generic,
+            attacker_skill: 0.5,
+        }
+    }
+
+    pub fn for_melee(
+        target: EntityKey,
+        weapon: EntityKey,
+        motion: AttackMotion,
+        attacker_skill: f32,
+    ) -> Self {
+        Self {
+            target,
+            weapon,
+            progress: 0.0,
+            committed: false,
+            motion,
+            attacker_skill,
         }
     }
 }
@@ -179,19 +202,23 @@ fn cross_section_for(damage_type: DamageType) -> f32 {
 
 /// Advance an AttackState by one tick. Returns the state transition.
 pub fn tick_attack(state: &mut AttackState, weapon: &WeaponProperties) -> AttackTick {
-    state.progress += 1;
+    state.progress += 1.0;
+    let profile = martial::attack_motion_profile(state.motion);
+    let skill_scale = (1.12 - state.attacker_skill.clamp(0.0, 1.0) * 0.45).clamp(0.6, 1.12);
+    let effective_windup =
+        (weapon.windup_ticks as f32 * profile.windup_scale * skill_scale).max(1.0);
 
     // Check commitment threshold
-    let commit_tick = (weapon.windup_ticks as f32 * weapon.commitment_fraction) as u16;
+    let commit_tick = (effective_windup * weapon.commitment_fraction).max(1.0);
     if !state.committed && state.progress >= commit_tick {
         state.committed = true;
-        if state.progress >= weapon.windup_ticks {
+        if state.progress >= effective_windup {
             return AttackTick::Ready;
         }
         return AttackTick::Committed;
     }
 
-    if state.progress >= weapon.windup_ticks {
+    if state.progress >= effective_windup {
         AttackTick::Ready
     } else {
         AttackTick::InProgress
@@ -222,6 +249,7 @@ pub fn resolve_melee(
     attacker_radius: f32,
     target_pos: Vec3,
     target_radius: f32,
+    attack_state: &AttackState,
     stagger_penalties: Option<&StaggerResult>,
     tick: u64,
 ) -> Option<Impact> {
@@ -234,16 +262,19 @@ pub fn resolve_melee(
     }
 
     // Compute swing speed from weapon weight
+    let profile = martial::attack_motion_profile(attack_state.motion);
+    let skill = attack_state.attacker_skill.clamp(0.0, 1.0);
     let mut swing_speed = BASE_SWING_SPEED / (weapon.weight / WEIGHT_REF);
+    swing_speed *= profile.force_scale * (0.75 + skill * 0.45);
 
     // Apply stagger penalties if committed-staggered
-    let mut dispersion_mult = 1.0_f32;
+    let mut dispersion_mult = profile.precision_scale * (1.15 - skill * 0.65).clamp(0.45, 1.15);
     if let Some(StaggerResult::Degraded {
         accuracy_penalty,
         force_penalty,
     }) = stagger_penalties
     {
-        dispersion_mult = *accuracy_penalty;
+        dispersion_mult *= *accuracy_penalty;
         swing_speed *= force_penalty;
     }
 
@@ -261,6 +292,7 @@ pub fn resolve_melee(
         sharpness: weapon.sharpness,
         cross_section: cross_section_for(weapon.damage_type) * dispersion_mult,
         damage_type: weapon.damage_type,
+        attack_motion: attack_state.motion,
         attack_direction,
         attacker_id: attacker_key,
         height_diff,
@@ -355,7 +387,7 @@ mod tests {
     fn attack_state_initial() {
         let (target, weapon_key, _) = make_keys();
         let state = AttackState::new(target, weapon_key);
-        assert_eq!(state.progress, 0);
+        assert_eq!(state.progress, 0.0);
         assert!(!state.committed);
     }
 
@@ -414,39 +446,73 @@ mod tests {
 
     #[test]
     fn melee_sword_produces_slash_impact() {
-        let (attacker, _, _) = make_keys();
+        let (attacker, target, weapon_key) = make_keys();
         let sword = iron_sword();
         let attacker_pos = Vec3::new(0.0, 0.0, 0.0);
         let target_pos = Vec3::new(1.0, 0.0, 0.0); // within reach (1.5m)
 
-        let impact = resolve_melee(&sword, attacker, attacker_pos, 0.0, target_pos, 0.0, None, 100);
+        let state = AttackState::for_melee(target, weapon_key, AttackMotion::Forehand, 0.5);
+        let impact = resolve_melee(
+            &sword,
+            attacker,
+            attacker_pos,
+            0.0,
+            target_pos,
+            0.0,
+            &state,
+            None,
+            100,
+        );
         assert!(impact.is_some(), "should resolve within reach");
         let impact = impact.unwrap();
         assert_eq!(impact.damage_type, DamageType::Slash);
         assert!(impact.kinetic_energy > 0.0);
         assert_eq!(impact.attacker_id, attacker);
+        assert_eq!(impact.attack_motion, AttackMotion::Forehand);
     }
 
     #[test]
     fn melee_whiff_out_of_reach() {
-        let (attacker, _, _) = make_keys();
+        let (attacker, target, weapon_key) = make_keys();
         let sword = iron_sword();
         let attacker_pos = Vec3::new(0.0, 0.0, 0.0);
         let target_pos = Vec3::new(5.0, 0.0, 0.0); // far beyond reach
 
-        let impact = resolve_melee(&sword, attacker, attacker_pos, 0.0, target_pos, 0.0, None, 100);
+        let state = AttackState::for_melee(target, weapon_key, AttackMotion::Forehand, 0.5);
+        let impact = resolve_melee(
+            &sword,
+            attacker,
+            attacker_pos,
+            0.0,
+            target_pos,
+            0.0,
+            &state,
+            None,
+            100,
+        );
         assert!(impact.is_none(), "should whiff when out of reach");
     }
 
     #[test]
     fn melee_whiff_at_exact_boundary() {
-        let (attacker, _, _) = make_keys();
+        let (attacker, target, weapon_key) = make_keys();
         let sword = iron_sword();
         let attacker_pos = Vec3::new(0.0, 0.0, 0.0);
         // Just beyond reach
         let target_pos = Vec3::new(sword.reach + 0.01, 0.0, 0.0);
 
-        let impact = resolve_melee(&sword, attacker, attacker_pos, 0.0, target_pos, 0.0, None, 100);
+        let state = AttackState::for_melee(target, weapon_key, AttackMotion::Forehand, 0.5);
+        let impact = resolve_melee(
+            &sword,
+            attacker,
+            attacker_pos,
+            0.0,
+            target_pos,
+            0.0,
+            &state,
+            None,
+            100,
+        );
         assert!(impact.is_none(), "should whiff just beyond reach");
     }
 
@@ -482,10 +548,11 @@ mod tests {
 
     #[test]
     fn stagger_degraded_impact_weaker() {
-        let (attacker, _, _) = make_keys();
+        let (attacker, target, weapon_key) = make_keys();
         let sword = iron_sword();
         let attacker_pos = Vec3::new(0.0, 0.0, 0.0);
         let target_pos = Vec3::new(1.0, 0.0, 0.0);
+        let state = AttackState::for_melee(target, weapon_key, AttackMotion::Forehand, 0.5);
 
         let normal = resolve_melee(
             &sword,
@@ -494,6 +561,7 @@ mod tests {
             0.0,
             target_pos,
             0.0,
+            &state,
             None,
             100,
         )
@@ -510,6 +578,7 @@ mod tests {
             0.0,
             target_pos,
             0.0,
+            &state,
             Some(&stagger),
             100,
         )
@@ -580,10 +649,11 @@ mod tests {
 
     #[test]
     fn melee_height_diff_positive_when_attacker_higher() {
-        let (attacker, _, _) = make_keys();
+        let (attacker, target, weapon_key) = make_keys();
         let sword = iron_sword();
         let attacker_pos = Vec3::new(0.0, 0.0, 5.0); // elevated
         let target_pos = Vec3::new(1.0, 0.0, 0.0);
+        let state = AttackState::for_melee(target, weapon_key, AttackMotion::Overhead, 0.5);
 
         let impact = resolve_melee(
             &sword,
@@ -592,6 +662,7 @@ mod tests {
             0.0,
             target_pos,
             0.0,
+            &state,
             None,
             100,
         )
@@ -600,5 +671,22 @@ mod tests {
             impact.height_diff > 0.0,
             "attacker higher should give positive height_diff"
         );
+    }
+
+    #[test]
+    fn high_skill_reaches_ready_faster() {
+        let (target, weapon_key, _) = make_keys();
+        let sword = iron_sword();
+        let mut novice = AttackState::for_melee(target, weapon_key, AttackMotion::Forehand, 0.1);
+        let mut elite = AttackState::for_melee(target, weapon_key, AttackMotion::Forehand, 0.9);
+
+        let novice_ready = (1..=8)
+            .find(|_| tick_attack(&mut novice, &sword) == AttackTick::Ready)
+            .unwrap();
+        let elite_ready = (1..=8)
+            .find(|_| tick_attack(&mut elite, &sword) == AttackTick::Ready)
+            .unwrap();
+
+        assert!(elite_ready <= novice_ready);
     }
 }
