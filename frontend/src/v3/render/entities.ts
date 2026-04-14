@@ -5,7 +5,11 @@
 import { Graphics } from "pixi.js";
 import type { Vec3 } from "../entityMap";
 import type { SpectatorEntityInfo } from "../../v3types";
-import { playerColorNum, HEX_SIZE, hexCenter, pixelToHex } from "./grid";
+import { playerColorNum, HEX_SIZE, WORLD_TO_CANVAS_SCALE, hexCenter, pixelToHex } from "./grid";
+
+// Scale factor: converts world units → canvas pixels.
+// All entity dimensions below are in world units; multiply by S for canvas.
+const S = WORLD_TO_CANVAS_SCALE;
 
 // --- LOD tier ---
 
@@ -102,16 +106,16 @@ export function drawEntitiesClose(
     const wounds = buildWoundMap(e.info.wounds);
 
     // --- Ground shadow (subtle facing cue) ---
-    const shadowOff = 1.0;
+    const shadowOff = 1.0 * S;
     g.ellipse(
       e.pos.x + shadowOff, e.pos.y + shadowOff,
-      5.5, 3.5,
+      5.5 * S, 3.5 * S,
     );
     g.fill({ color: 0x000000, alpha: 0.2 });
 
     // --- Legs (two short lines behind torso, angled outward) ---
     const legColor = woundTint(darken(baseColor, 0.25), wounds.Legs);
-    const legLen = 4.0;
+    const legLen = 4.0 * S;
     const legSpread = 0.4; // radians from facing-backward
     const backAngle = facing + Math.PI;
     for (const side of [-1, 1]) {
@@ -120,13 +124,13 @@ export function drawEntitiesClose(
       const ly = e.pos.y + Math.sin(lAngle) * legLen;
       g.moveTo(e.pos.x, e.pos.y);
       g.lineTo(lx, ly);
-      g.stroke({ color: legColor, width: 1.2, cap: "round" });
+      g.stroke({ color: legColor, width: 1.2 * S, cap: "round" });
     }
 
     // --- Torso (elongated oval rotated to facing) ---
     const torsoColor = woundTint(baseColor, wounds.Torso);
-    const torsoLen = 4.0;  // half-length along facing
-    const torsoWid = 2.8;  // half-width perpendicular
+    const torsoLen = 4.0 * S;  // half-length along facing (world units)
+    const torsoWid = 2.8 * S;  // half-width perpendicular (world units)
     // Approximate rotated ellipse with a pill shape (two arcs + lines).
     // PixiJS Graphics doesn't support rotated ellipses, so draw as a polygon.
     const torsoPoints: number[] = [];
@@ -143,57 +147,57 @@ export function drawEntitiesClose(
     }
     g.poly(torsoPoints);
     g.fill({ color: torsoColor });
-    g.stroke({ color: darken(torsoColor, 0.35), width: 0.6 });
+    g.stroke({ color: darken(torsoColor, 0.35), width: 0.6 * S });
 
     // --- Shoulders + Arms (cross-lines perpendicular to facing) ---
-    const shoulderOffset = 1.0; // slightly forward of center
+    const shoulderOffset = 1.0 * S; // slightly forward of center
     const sx = e.pos.x + cos * shoulderOffset;
     const sy = e.pos.y + sin * shoulderOffset;
-    const armLen = 3.8;
+    const armLen = 3.8 * S;
     // Left arm.
     const laColor = woundTint(darken(baseColor, 0.15), wounds.LeftArm);
     g.moveTo(sx, sy);
     g.lineTo(sx + perpCos * armLen, sy + perpSin * armLen);
-    g.stroke({ color: laColor, width: 1.4, cap: "round" });
+    g.stroke({ color: laColor, width: 1.4 * S, cap: "round" });
     // Right arm.
     const raColor = woundTint(darken(baseColor, 0.15), wounds.RightArm);
     g.moveTo(sx, sy);
     g.lineTo(sx - perpCos * armLen, sy - perpSin * armLen);
-    g.stroke({ color: raColor, width: 1.4, cap: "round" });
+    g.stroke({ color: raColor, width: 1.4 * S, cap: "round" });
 
     // --- Head (circle offset toward facing) ---
-    const headDist = 3.8;
-    const headR = 2.2;
+    const headDist = 3.8 * S;
+    const headR = 2.2 * S;
     const hx = e.pos.x + cos * headDist;
     const hy = e.pos.y + sin * headDist;
     const headColor = woundTint(darken(baseColor, -0.1), wounds.Head);
     g.circle(hx, hy, headR);
     g.fill({ color: headColor });
-    g.stroke({ color: darken(baseColor, 0.4), width: 0.6 });
+    g.stroke({ color: darken(baseColor, 0.4), width: 0.6 * S });
 
     // Facing visor (small chevron on head).
-    const visorLen = 1.4;
+    const visorLen = 1.4 * S;
     const visorSpread = 0.5;
     const v1x = hx + Math.cos(facing - visorSpread) * visorLen;
     const v1y = hy + Math.sin(facing - visorSpread) * visorLen;
-    const v2x = hx + cos * (visorLen + 0.6);
-    const v2y = hy + sin * (visorLen + 0.6);
+    const v2x = hx + cos * (visorLen + 0.6 * S);
+    const v2y = hy + sin * (visorLen + 0.6 * S);
     const v3x = hx + Math.cos(facing + visorSpread) * visorLen;
     const v3y = hy + Math.sin(facing + visorSpread) * visorLen;
     g.moveTo(v1x, v1y);
     g.lineTo(v2x, v2y);
     g.lineTo(v3x, v3y);
-    g.stroke({ color: 0xdddddd, alpha: 0.8, width: 0.7, cap: "round", join: "round" });
+    g.stroke({ color: 0xdddddd, alpha: 0.8, width: 0.7 * S, cap: "round", join: "round" });
 
     // --- Weapon (distinct from facing, uses attack state) ---
     drawWeapon(g, e, sx, sy, perpCos, perpSin);
 
     // --- Status bars (blood + stamina, above entity) ---
-    const barY = e.pos.y - 8;
+    const barY = e.pos.y - 8 * S;
     const blood = e.info.blood;
     if (blood != null && blood < 1.0 && blood > 0) {
-      const barW = 10;
-      const barH = 1.8;
+      const barW = 10 * S;
+      const barH = 1.8 * S;
       const bx = e.pos.x - barW / 2;
       g.rect(bx, barY, barW, barH);
       g.fill({ color: 0x1a1a1a, alpha: 0.8 });
@@ -202,10 +206,10 @@ export function drawEntitiesClose(
     }
     const stamina = e.info.stamina;
     if (stamina != null && stamina < 1.0) {
-      const barW = 10;
-      const barH = 1.3;
+      const barW = 10 * S;
+      const barH = 1.3 * S;
       const bx = e.pos.x - barW / 2;
-      const sy2 = barY + 2.2;
+      const sy2 = barY + 2.2 * S;
       g.rect(bx, sy2, barW, barH);
       g.fill({ color: 0x1a1a1a, alpha: 0.7 });
       g.rect(bx, sy2, barW * stamina, barH);
@@ -230,8 +234,8 @@ function drawWeapon(
   const weaponType = (e.info.weapon_type ?? "").toLowerCase();
 
   // Weapon grip point: offset to the right arm side.
-  const gripX = shoulderX - perpCos * 3.2;
-  const gripY = shoulderY - perpSin * 3.2;
+  const gripX = shoulderX - perpCos * 3.2 * S;
+  const gripY = shoulderY - perpSin * 3.2 * S;
 
   // Determine weapon angle.
   let angle: number;
@@ -242,9 +246,9 @@ function drawWeapon(
     angle = e.facing + 0.3;
   }
 
-  // Weapon visual properties by phase.
-  let bladeLen = 7.0;
-  let bladeWidth = 1.0;
+  // Weapon visual properties by phase (world units, converted to canvas below).
+  let bladeLen = 7.0 * S;
+  let bladeWidth = 1.0 * S;
   let bladeColor = 0xaaaaaa; // steel gray
   let bladeAlpha = 0.7;
   let glowColor = 0;
@@ -252,36 +256,34 @@ function drawWeapon(
 
   switch (phase) {
     case "windup":
-      bladeWidth = 1.2;
+      bladeWidth = 1.2 * S;
       bladeAlpha = 0.85;
       bladeColor = 0xbbbbbb;
-      // Subtle yellow glow building up.
       glowColor = 0xffdd44;
       glowAlpha = 0.15 + progress * 0.2;
       break;
     case "committed":
-      bladeWidth = 1.6;
+      bladeWidth = 1.6 * S;
       bladeAlpha = 1.0;
       bladeColor = 0xeeeeee;
-      // Bright slash glow.
       glowColor = 0xffaa22;
       glowAlpha = 0.4;
-      bladeLen = 8.0;
+      bladeLen = 8.0 * S;
       break;
     case "recovery":
-      bladeWidth = 1.0;
+      bladeWidth = 1.0 * S;
       bladeAlpha = 0.5;
       bladeColor = 0x999999;
       break;
     default: // idle
-      bladeWidth = 0.9;
+      bladeWidth = 0.9 * S;
       bladeAlpha = 0.55;
       break;
   }
 
   // Pierce weapons are thinner and longer.
   if (weaponType.includes("pierce")) {
-    bladeLen += 1.5;
+    bladeLen += 1.5 * S;
     bladeWidth *= 0.7;
   }
 
@@ -292,7 +294,7 @@ function drawWeapon(
   if (glowAlpha > 0) {
     g.moveTo(gripX, gripY);
     g.lineTo(tipX, tipY);
-    g.stroke({ color: glowColor, alpha: glowAlpha, width: bladeWidth + 2.0, cap: "round" });
+    g.stroke({ color: glowColor, alpha: glowAlpha, width: bladeWidth + 2.0 * S, cap: "round" });
   }
 
   // Blade line.
@@ -302,7 +304,7 @@ function drawWeapon(
 
   // Crossguard for slash weapons (short perpendicular line at grip).
   if (weaponType.includes("slash")) {
-    const guardLen = 1.8;
+    const guardLen = 1.8 * S;
     const guardPerp = angle + Math.PI / 2;
     g.moveTo(
       gripX + Math.cos(guardPerp) * guardLen,
@@ -312,7 +314,7 @@ function drawWeapon(
       gripX - Math.cos(guardPerp) * guardLen,
       gripY - Math.sin(guardPerp) * guardLen,
     );
-    g.stroke({ color: 0x886644, alpha: bladeAlpha, width: 1.0, cap: "round" });
+    g.stroke({ color: 0x886644, alpha: bladeAlpha, width: 1.0 * S, cap: "round" });
   }
 
   // Attack motion arc indicator (committed phase only — shows swing path).
@@ -341,7 +343,7 @@ function drawWeapon(
       g.stroke({
         color: 0xffcc44,
         alpha: 0.25 * (1 - i / arcSegs),
-        width: 1.5,
+        width: 1.5 * S,
         cap: "round",
       });
     }
